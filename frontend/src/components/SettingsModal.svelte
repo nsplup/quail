@@ -1,0 +1,170 @@
+<script lang="ts">
+  import { fade, fly } from "svelte/transition";
+  import { cubicOut } from "svelte/easing";
+  import Icon from "./Icon.svelte";
+  import NumberInput from "./NumberInput.svelte";
+  import TextInput from "./TextInput.svelte";
+  import { t, locale, setLang } from "../lib/i18n.svelte";
+  import { THEMES, THEME_CARD_DESC, EDITOR_FONT_FALLBACK, PREVIEW_FONT_FALLBACK } from "../lib/themes";
+  import {
+    theme$ as theme,
+    indent$ as indent,
+    countMode$ as countMode,
+    fontEditor$ as fontEditor,
+    fontPreview$ as fontPreview,
+    fontSizeEd$ as fontSizeEd,
+    fontSizePv$ as fontSizePv,
+    selectionProxy$ as selectionProxy,
+    settingsOpen$ as settingsOpen,
+  } from "../lib/stores";
+  import type { ThemeId, Lang, IndentId, CountMode } from "../lib/types";
+
+
+
+  /* ---------- 主题：一维卡片（明暗两组，组内按主题名排序） ---------- */
+  const themeList = [...THEMES].sort((a, b) => {
+    if (a.dark !== b.dark) return a.dark ? 1 : -1;
+    return a.name.localeCompare(b.name);
+  });
+  const desc = $derived($locale === "zh" ? THEME_CARD_DESC.zh : THEME_CARD_DESC.en);
+
+  const langs: { id: Lang; label: string }[] = [
+    { id: "zh", label: "中文" },
+    { id: "en", label: "English" },
+  ];
+
+  const indents: { id: IndentId; key: string }[] = [
+    { id: "tab", key: "settings.indentTab" },
+    { id: "space2", key: "settings.indentSpace2" },
+    { id: "space4", key: "settings.indentSpace4" },
+  ];
+
+  const counts: { id: CountMode; key: string }[] = [
+    { id: "auto", key: "settings.countAuto" },
+    { id: "chars", key: "settings.countChars" },
+    { id: "words", key: "settings.countWords" },
+  ];
+</script>
+
+{#if $settingsOpen}
+  <div
+    class="fixed inset-0 z-50 grid place-items-center bg-black/45"
+    transition:fade={{ duration: 180 }}
+    role="dialog"
+    aria-modal="true"
+    aria-label={$t("settings.title")}
+    tabindex="-1"
+    onclick={(e) => e.target === e.currentTarget && settingsOpen.set(false)}
+  >
+    <div
+      class="w-[440px] max-w-[calc(100vw-48px)] rounded-2xl border border-line bg-soft py-5 shadow-2xl"
+      transition:fly={{ y: 14, duration: 240, easing: cubicOut }}
+    >
+      <header class="mb-4 flex items-center justify-between px-5">
+        <h2 class="text-sm font-semibold text-fg">{$t("settings.title")}</h2>
+        <button class="icon-btn" title={$t("common.close")} aria-label={$t("common.close")} onclick={() => settingsOpen.set(false)}>
+          <Icon name="close" />
+        </button>
+      </header>
+
+      <section class="max-h-[70vh] overflow-y-auto">
+        <div class="flex flex-col gap-4 p-5 pt-0">
+        <!-- 外观：一维主题卡片（每主题一张，卡片样式即主题本身） -->
+        <div>
+          <div class="mb-2 text-xs text-muted">{$t("settings.appearance")}</div>
+          <div class="grid grid-cols-2 gap-2">
+            {#each themeList as tv (tv.id)}
+              {@const vars = tv.vars}
+              <button
+                class="theme-card !block !p-0 overflow-hidden text-left"
+                class:active={$theme === tv.id}
+                style:background={vars["--pv-bg"]}
+                style:color={vars["--pv-fg"]}
+                style:border-color={$theme === tv.id ? vars["--ui-accent"] : vars["--ui-border"]}
+                style:--card-strong={vars["--pv-fg-strong"]}
+                style:--card-muted={vars["--pv-muted"]}
+                style:--card-link={vars["--pv-link"]}
+                onclick={() => theme.set(tv.id)}
+              >
+                <span class="block px-3 pt-2.5 text-xs font-semibold" style:color={vars["--card-strong"]}>
+                  {tv.name}
+                </span>
+                <span class="theme-desc block px-3 pb-2.5 pt-1 text-[11px] leading-snug">
+                  {@html desc}
+                </span>
+              </button>
+            {/each}
+          </div>
+        </div>
+
+        <!-- 字体与字号：编辑区/预览区交替排布 -->
+        <div>
+          <div class="mb-2 text-xs text-muted">{$t("settings.fontEditor")}</div>
+          <TextInput value={$fontEditor} placeholder={EDITOR_FONT_FALLBACK} onchange={(v) => fontEditor.set(v)} />
+          <div class="mb-2 mt-3 flex items-center justify-between">
+            <span class="text-xs text-muted">{$t("settings.fontSizeEditor")}</span>
+            <NumberInput value={$fontSizeEd} min={11} max={26} step={0.5} onchange={(v) => fontSizeEd.set(v)} />
+          </div>
+          <div class="mb-2 mt-3 text-xs text-muted">{$t("settings.fontPreview")}</div>
+          <TextInput value={$fontPreview} placeholder={PREVIEW_FONT_FALLBACK} onchange={(v) => fontPreview.set(v)} />
+          <div class="mb-2 mt-3 flex items-center justify-between">
+            <span class="text-xs text-muted">{$t("settings.fontSizePreview")}</span>
+            <NumberInput value={$fontSizePv} min={11} max={26} step={0.5} onchange={(v) => fontSizePv.set(v)} />
+          </div>
+        </div>
+
+        <!-- 通用 -->
+        <div>
+          <div class="mb-2 text-xs text-muted">{$t("settings.general")}</div>
+          <div class="mb-2 text-[11px] text-muted">{$t("settings.selectionProxy")}</div>
+          <div class="mb-3 flex gap-2">
+            <button class="pill" class:active={$selectionProxy} onclick={() => selectionProxy.set(true)}>
+              {$t("settings.proxyOn")}
+            </button>
+            <button class="pill" class:active={!$selectionProxy} onclick={() => selectionProxy.set(false)}>
+              {$t("settings.proxyOff")}
+            </button>
+          </div>
+          <div class="mb-2 text-[11px] text-muted">{$t("settings.countMode")}</div>
+          <div class="mb-3 flex gap-2">
+            {#each counts as c (c.id)}
+              <button
+                class="pill"
+                class:active={$countMode === c.id}
+                onclick={() => countMode.set(c.id)}
+              >
+                {$t(c.key)}
+              </button>
+            {/each}
+          </div>
+          <div class="mb-2 text-[11px] text-muted">{$t("settings.language")}</div>
+          <div class="mb-3 flex gap-2">
+            {#each langs as l (l.id)}
+              <button
+                class="pill"
+                class:active={$locale === l.id}
+                onclick={() => setLang(l.id)}
+              >
+                {l.label}
+              </button>
+            {/each}
+          </div>
+          <div class="mb-2 text-[11px] text-muted">{$t("settings.indentUnit")}</div>
+          <div class="flex gap-2">
+            {#each indents as it (it.id)}
+              <button
+                class="pill"
+                class:active={$indent === it.id}
+                onclick={() => indent.set(it.id)}
+              >
+                {$t(it.key)}
+              </button>
+            {/each}
+          </div>
+          <div class="mt-1.5 text-[11px] text-muted">{$t("settings.indentHint")}</div>
+        </div>
+        </div>
+      </section>
+    </div>
+  </div>
+{/if}

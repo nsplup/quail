@@ -1,0 +1,259 @@
+/* ============ 预览栏 Markdown 排版 ============ */
+/* 窗格基线：内容区任意窄都不得溢出容器（滚动条保持在窗口内） */
+.pane {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.pane-preview {
+  background: var(--pv-bg);
+  color: var(--pv-fg);
+  /* basis 0：宽度严格 = 容器 − 编辑器 − 分隔线，
+     「均分」精确 50/50，拖拽分隔线即时跟手（旧值 auto 会被内容固有宽吞掉空间） */
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.preview-scroll {
+  outline: none;
+  width: 100%;
+  min-width: 0;
+  /* 尾部 45vh 缓冲，与编辑器呼应（真实布局下也保证最后一屏可完全展示） */
+  padding-bottom: 45vh;
+}
+
+/* 预览内容顶部间隔（真实 DOM 元素充当 padding-top，首块不贴顶） */
+.pv-top-pad {
+  height: 24px;
+}
+
+/* 块级外间距。注：预览为全量真实布局（无估计高度），
+   滚动条拖动/点击的落点与同步插值永远精确；增量渲染保证编辑时只重渲染变化块 */
+.md-item {
+  padding-bottom: 14px;
+  min-width: 0;
+}
+
+.md-block {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 0 44px;
+  font-family: var(--pv-font-family, sans-serif);
+  font-size: var(--pv-font-size, 15.5px);
+  line-height: 1.78;
+  word-wrap: break-word;
+}
+
+.md-block > :first-child { margin-top: 0 !important; }
+.md-block > :last-child { margin-bottom: 0 !important; }
+
+.md-block h1,
+.md-block h2,
+.md-block h3,
+.md-block h4,
+.md-block h5,
+.md-block h6 {
+  margin: 1.4em 0 0.6em;
+  font-weight: 650;
+  line-height: 1.35;
+  color: var(--pv-fg-strong);
+}
+
+.md-block h1 {
+  font-size: 1.9em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--pv-border);
+}
+
+.md-block h2 {
+  font-size: 1.45em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--pv-border);
+}
+
+.md-block h3 { font-size: 1.22em; }
+.md-block h4 { font-size: 1.08em; }
+.md-block h5 { font-size: 0.98em; }
+.md-block h6 { font-size: 0.9em; color: var(--pv-muted); }
+
+.md-block p {
+  margin: 0.9em 0;
+}
+
+.md-block a {
+  color: var(--pv-link);
+  text-decoration: none;
+}
+
+.md-block a:hover {
+  text-decoration: underline;
+}
+
+.md-block strong {
+  color: var(--pv-fg-strong);
+  font-weight: 680;
+}
+
+.md-block del {
+  color: var(--pv-muted);
+}
+
+.md-block code {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 0.875em;
+  background: var(--pv-inline-code-bg);
+  padding: 0.2em 0.42em;
+  border-radius: 6px;
+}
+
+.md-block pre {
+  margin: 1em 0;
+  padding: 14px 16px;
+  overflow-x: auto;
+  background: var(--pv-code-bg);
+  border: 1px solid var(--pv-border);
+  border-radius: 10px;
+  line-height: 1.6;
+}
+
+.md-block pre code {
+  background: transparent;
+  padding: 0;
+  font-size: 0.875em;
+}
+
+.md-block blockquote {
+  margin: 1em 0;
+  padding: 0.55em 1.1em;
+  border-left: 4px solid var(--pv-quote-border);
+  border-radius: 0 8px 8px 0;
+  background: var(--pv-quote-bg);
+  color: var(--pv-muted);
+}
+
+.md-block blockquote > :first-child { margin-top: 0; }
+.md-block blockquote > :last-child { margin-bottom: 0; }
+
+.md-block ul,
+.md-block ol {
+  margin: 0.8em 0;
+  padding-left: 1.5em;
+}
+
+/* Tailwind Preflight 在 base 层重置了 list-style，需显式恢复 */
+.md-block ul {
+  list-style: disc outside;
+}
+
+.md-block ol {
+  list-style: decimal outside;
+}
+
+.md-block ul ul {
+  list-style: circle outside;
+}
+
+.md-block ul ul ul {
+  list-style: square outside;
+}
+
+.md-block li {
+  margin: 0.32em 0;
+}
+
+.md-block li > ul,
+.md-block li > ol {
+  margin: 0.32em 0;
+}
+
+.md-block li.task-list-item {
+  list-style: none;
+  /* 勾选框位置：整体回退到列表缩进左缘 */
+  margin-left: -1.5em;
+}
+
+.contains-task-list .contains-task-list {
+  padding-left: 3em;
+}
+
+.md-block li.task-list-item input[type="checkbox"] {
+  /* 加大勾选框（默认 13px）：更易点按、与行高更协调 */
+  width: 16px;
+  height: 16px;
+  margin-right: 0.55em;
+  accent-color: var(--pv-accent);
+  vertical-align: middle;
+}
+
+.md-block table {
+  margin: 1em 0;
+  border-collapse: collapse;
+  display: block;
+  overflow-x: auto;
+  max-width: 100%;
+  font-size: 0.94em;
+}
+
+.md-block th,
+.md-block td {
+  border: 1px solid var(--pv-border);
+  padding: 7px 14px;
+}
+
+.md-block th {
+  background: var(--pv-table-header);
+  font-weight: 650;
+  color: var(--pv-fg-strong);
+}
+
+.md-block tr:nth-child(2n) {
+  background: var(--pv-row-alt);
+}
+
+.md-block hr {
+  margin: 1.6em 0;
+  border: none;
+  border-top: 2px solid var(--pv-border);
+}
+
+.md-block img {
+  max-width: 100%;
+  border-radius: 10px;
+  background: var(--pv-code-bg);
+}
+
+.md-block details {
+  margin: 1em 0;
+  padding: 10px 14px;
+  border: 1px solid var(--pv-border);
+  border-radius: 10px;
+  background: var(--pv-code-bg);
+}
+
+.md-block summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--pv-fg-strong);
+}
+
+.md-block sup a,
+.md-block .footnotes {
+  color: var(--pv-muted);
+  font-size: 0.85em;
+}
+
+.md-block .footnotes {
+  margin-top: 2em;
+  border-top: 1px solid var(--pv-border);
+  padding-top: 0.8em;
+}
+
+.md-block .footnotes li {
+  margin: 0.4em 0;
+}
+
+.md-block .render-error {
+  color: var(--ed-danger);
+  font-size: 0.9em;
+}

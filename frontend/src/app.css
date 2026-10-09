@@ -1,0 +1,552 @@
+/* ============================================================
+   全局样式：Tailwind CSS v4
+   - 主题色板仍由 themes.css 的 .theme-* 类提供 CSS 变量（--ui-* / --ed-* / --pv-*），
+     这里通过 @theme inline 把它们映射为 Tailwind 颜色 token，
+     组件里即可使用 bg-soft / text-muted / border-line 等工具类。
+   - 仅保留少量无法用工具类表达的样式（伪元素、伪类、滚动条、内容排版）。
+   ============================================================ */
+@import "tailwindcss";
+
+@theme inline {
+  --color-app: var(--ui-bg);
+  --color-soft: var(--ui-bg-soft);
+  --color-inset: var(--ui-inset);
+  --color-fg: var(--ui-fg);
+  --color-muted: var(--ui-muted);
+  --color-line: var(--ui-border);
+  --color-accent: var(--ui-accent);
+  --color-hover: var(--ui-hover);
+  --color-active: var(--ui-active-bg);
+
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+}
+
+@layer base {
+  html,
+  body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    font-size: 14px;
+    background: var(--ui-bg);
+    color: var(--ui-fg);
+  }
+
+  #app {
+    height: 100vh;
+  }
+
+  button {
+    font-family: inherit;
+  }
+
+  input {
+    font-family: inherit;
+  }
+}
+
+@layer components {
+  /* ---------- 可拖拽分隔线：1px 视觉线（与底栏描边同权重），伪元素扩大热区 ---------- */
+  .divider {
+    position: relative;
+    flex: 0 0 1px;
+    background: var(--ui-border);
+    cursor: col-resize;
+    z-index: 10;
+    transition: background 0.15s;
+  }
+
+  .divider::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -4px;
+    right: -4px;
+  }
+
+  /* 悬停手柄：圆角矩形 + 竖排三个圆点。
+     描边与未激活分隔线一致（1px border），圆点为激活色（accent），
+     内部填充与底栏/大纲栏同色（bg-soft）。仅 hover/drag 显现，无阴影。 */
+  .divider::before {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 9px;
+    height: 34px;
+    border-radius: 5px;
+    transform: translate(-50%, -50%);
+    background-color: var(--ui-bg-soft);
+    border: 1px solid var(--ui-border);
+    background-image: radial-gradient(circle, var(--ui-accent) 1.4px, transparent 1.6px);
+    background-size: 100% 10px;
+    background-repeat: repeat-y;
+    background-position: center 2px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s;
+  }
+
+  /* 悬停/拖拽：分隔线本体恢复高亮，抓手同步浮现（样式保持不变） */
+  .divider:hover,
+  .divider.dragging {
+    background: var(--ui-accent);
+    box-shadow: 0 0 0 1px var(--ui-accent);
+  }
+
+  .divider:hover::before,
+  .divider.dragging::before {
+    opacity: 1;
+  }
+
+  /* ---------- 双栏模式下隐藏编辑区滚动条（仅样式，不可交互；单栏模式保留） ---------- */
+  .main[data-mode="split"] .cm-scroller {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  .main[data-mode="split"] .cm-scroller::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+    display: none;
+  }
+
+  /* ---------- 设置弹窗 ---------- */
+  .theme-card {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 10px;
+    border: 1px solid var(--ui-border);
+    border-radius: 12px;
+    background: var(--ui-inset);
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+  }
+
+  .theme-card:hover {
+    border-color: var(--ui-accent);
+  }
+
+  /* 卡片正文里的加粗与链接样式（颜色来自该主题自身配色） */
+  .theme-card .theme-desc b {
+    color: var(--card-strong, var(--ui-fg-strong));
+    font-weight: 600;
+  }
+
+  .theme-card .theme-desc .tlink {
+    color: var(--card-link, var(--ui-accent));
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    cursor: pointer;
+  }
+
+  .theme-card.active {
+    border-color: var(--ui-accent);
+    background: var(--ui-active-bg);
+  }
+
+  .theme-dots {
+    display: flex;
+    gap: 4px;
+  }
+
+  .theme-dots i {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+  }
+
+  .theme-name {
+    font-size: 11px;
+    color: var(--ui-muted);
+  }
+
+  .theme-card.active .theme-name {
+    color: var(--ui-accent);
+  }
+
+  .pill {
+    padding: 5px 14px;
+    border: 1px solid var(--ui-border);
+    border-radius: 999px;
+    background: var(--ui-inset);
+    color: var(--ui-muted);
+    font-size: 12px;
+    cursor: pointer;
+    transition: border-color 0.15s, color 0.15s, background 0.15s;
+  }
+
+  .pill:hover {
+    color: var(--ui-fg);
+    border-color: var(--ui-accent);
+  }
+
+  .pill.active {
+    color: var(--ui-accent);
+    border-color: var(--ui-accent);
+    background: var(--ui-active-bg);
+  }
+
+  /* ---------- 滚动条：非滚动状态隐藏 ---------- */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: var(--ui-border);
+    border-radius: 5px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--ui-muted);
+    background-clip: content-box;
+  }
+
+  .scroll-autohide::-webkit-scrollbar-thumb {
+    background: transparent;
+    background-clip: content-box;
+  }
+
+  .scroll-autohide.is-scrolling::-webkit-scrollbar-thumb {
+    background: var(--ui-border);
+    background-clip: content-box;
+  }
+
+  .scroll-autohide.is-scrolling::-webkit-scrollbar-thumb:hover {
+    background: var(--ui-muted);
+    background-clip: content-box;
+  }
+
+  @supports (scrollbar-width: thin) {
+    * {
+      scrollbar-width: thin;
+      scrollbar-color: var(--ui-border) transparent;
+    }
+  }
+
+  /* ---------- 底栏按钮 / 模式 tab ---------- */
+  .icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--ui-muted);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+  }
+
+  .icon-btn:hover {
+    background: var(--ui-hover);
+    color: var(--ui-fg);
+  }
+
+  .icon-btn.active {
+    color: var(--ui-accent);
+    background: var(--ui-active-bg);
+  }
+
+  .tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 12px;
+    border: none;
+    border-radius: 7px;
+    background: transparent;
+    font-size: 12px;
+    color: var(--ui-muted);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: color 0.2s;
+  }
+
+  .tab:hover {
+    color: var(--ui-fg);
+  }
+
+  .tab.active {
+    color: var(--ui-accent);
+  }
+
+  /* ---------- 大纲项 ---------- */
+  .outline-item {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    width: 100%;
+    padding-top: 5px;
+    padding-right: 10px;
+    padding-bottom: 5px;
+    border: none;
+    background: transparent;
+    color: var(--ui-muted);
+    font-size: 12.5px;
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+  }
+
+  .outline-item:hover {
+    background: var(--ui-hover);
+    color: var(--ui-fg);
+  }
+
+  .outline-item.active {
+    background: var(--ui-active-bg);
+    color: var(--ui-accent);
+  }
+
+  .outline-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .outline-dot {
+    flex: none;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--ui-border);
+  }
+
+  .outline-item.active .outline-dot {
+    background: var(--ui-accent);
+  }
+
+  .outline-dot.d1 {
+    background: var(--ui-accent);
+    opacity: 0.85;
+  }
+
+  .outline-dot.d2 {
+    width: 5px;
+    height: 5px;
+  }
+
+  .outline-dot.d3 {
+    width: 4px;
+    height: 4px;
+  }
+
+  /* ---------- 模式显隐：面板始终挂载，仅 CSS 切换（不销毁、不重测量风暴） ---------- */
+  .main[data-mode="source"] .pane-preview,
+  .main[data-mode="preview"] .pane-editor {
+    display: none;
+  }
+
+  .boot-loading {
+    display: grid;
+    place-items: center;
+    width: 100%;
+    height: 100%;
+    color: var(--ui-muted);
+  }
+}
+
+/* ============================================================
+   CM6 自定义查找/替换面板（DOM 由 searchPanel.ts 创建，样式集中于此）
+   —— 扁平化：无阴影，与分栏布局一致的边框语言
+   ============================================================ */
+.cm-panels {
+  background: var(--ui-bg-soft) !important;
+  border-bottom: 1px solid var(--ui-border) !important;
+}
+
+.cm-search-panel {
+  /* 四列网格（共享于两行）：第 1 列输入框 1fr；
+     第 2/3 列取两行同列的最大内容宽 → 上下天然对齐；
+     第 4 列固定 30px = 关闭按钮宽（第二行放等宽占位）→ 两行输入框齐宽 */
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto 30px;
+  gap: 6px;
+  padding: 8px 14px;
+  background: var(--ui-bg-soft);
+  /* 底部描边只由 .cm-panels 画一条，与分栏分隔线同粗细（1px） */
+  border-bottom: none;
+  z-index: 10;
+}
+
+/* 行容器不参与布局，子元素直接落入面板网格 */
+.cm-search-panel .sp-row {
+  display: contents;
+}
+
+/* 第二行第 4 列：与关闭按钮等宽的透明占位 */
+.cm-search-panel .sp-tail {
+  width: 30px;
+}
+
+.cm-search-panel .sp-input {
+  height: 28px;
+  flex: 1 1 auto;
+  min-width: 60px;
+  padding: 0 10px;
+  border: 1px solid var(--ui-border);
+  border-radius: 8px;
+  background: var(--ui-inset);
+  color: var(--ui-fg);
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.cm-search-panel .sp-input:focus {
+  border-color: var(--ui-accent);
+}
+
+.cm-search-panel .sp-input::placeholder {
+  color: var(--ui-muted);
+}
+
+.cm-search-panel .sp-count {
+  flex: 0 0 auto;
+  min-width: 52px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ui-muted);
+  white-space: nowrap;
+}
+
+/* ---- 组按钮（segmented）：两两分组，组内共享边框、按钮间以 1px 细线分隔 ---- */
+.cm-search-panel .sp-group {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: stretch;
+  border: 1px solid var(--ui-border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--ui-inset);
+}
+
+.cm-search-panel .sp-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ui-muted);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+/* 独立按钮（关闭）保持描边样式 */
+.cm-search-panel .sp-close {
+  border: 1px solid var(--ui-border);
+  border-radius: 8px;
+  height: 26px;
+  align-self: center;
+}
+
+.cm-search-panel .sp-group .sp-btn + .sp-btn {
+  border-left: 1px solid var(--ui-border);
+}
+
+.cm-search-panel .sp-btn:hover {
+  color: var(--ui-fg);
+  background: var(--ui-hover);
+}
+
+.cm-search-panel .sp-btn.on {
+  color: var(--ui-accent);
+  background: var(--ui-active-bg);
+}
+
+.cm-search-panel .sp-btn svg {
+  display: block;
+}
+
+/* ---------- md-image（原生自定义元素，预览图片三态） ---------- */
+
+md-image {
+  display: inline-block;
+  position: relative;
+  max-width: 100%;
+  min-height: 22px;
+  vertical-align: middle;
+}
+
+md-image .md-img {
+  display: block;
+  max-width: 100%;
+  border-radius: 8px;
+  opacity: 0;
+  transition: opacity 0.18s ease;
+}
+
+md-image[data-status="loaded"] .md-img {
+  opacity: 1;
+}
+
+/* 加载中：占位呼吸 */
+md-image[data-status="loading"] {
+  min-width: 64px;
+  border-radius: 8px;
+  background: var(--ui-hover, rgba(127, 127, 127, 0.12));
+  animation: mdimg-pulse 1.2s ease-in-out infinite;
+}
+
+/* 加载失败：受限（403）或网络错误 */
+md-image[data-status="error"] {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 64px;
+  padding: 6px 10px;
+  border: 1px dashed var(--ui-border);
+  border-radius: 8px;
+  color: var(--ui-warn);
+  font-size: 12px;
+  animation: none;
+}
+
+md-image[data-status="error"]::before {
+  content: "⚠";
+}
+
+md-image[data-status="error"][data-error="restricted"]::after {
+  content: "访问受限";
+}
+
+md-image[data-status="error"]:not([data-error="restricted"])::after {
+  content: "图片加载失败";
+}
+
+md-image[data-status="error"] .md-img {
+  display: none;
+}
+
+@keyframes mdimg-pulse {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 0.8; }
+}

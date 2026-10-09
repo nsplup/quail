@@ -1,0 +1,142 @@
+/**
+ * i18n 消息定义（集中模块）。
+ *
+ * - zhMessages / enMessages：界面消息（svelte-i18n 消费，分组嵌套）；
+ * - cmPhrases：CM6 EditorState.phrases 的中文映射（键为英文原文，phrase() 找不到时回落原文，
+ *   因此英文界面无需映射）。查找面板的全部文案均由此经 view.state.phrase() 读取。
+ */
+export const zhMessages = {
+  common: {
+    close: "关闭",
+    saved: "已保存",
+    dirty: "未保存",
+    open: "打开",
+    saveAs: "另存为",
+  },
+  confirm: {
+    ok: "确定",
+    quit: "确定退出 quail 吗？",
+    quitDirty: "当前文档有未保存的修改，退出将丢失。确定退出吗？",
+    conflict: "文件已被其他程序修改。以当前编辑内容覆盖磁盘上的版本吗？",
+  },
+  mode: {
+    source: "源码",
+    split: "双栏",
+    preview: "预览",
+  },
+  outline: {
+    title: "大纲",
+    filter: "筛选",
+    empty: "暂无标题",
+  },
+  settings: {
+    title: "设置",
+    appearance: "外观",
+    general: "通用",
+    previewTheme: "预览主题",
+    language: "界面语言",
+    countMode: "字数统计方式",
+    countWords: "英文单词",
+    countChars: "汉字",
+    countAuto: "跟随语言",
+    countAutoHint: "根据界面语言自动选择单词 / 汉字统计",
+    selectionProxy: "选区代理",
+    proxyOn: "启用",
+    proxyOff: "停用",
+    fontEditor: "编辑区字体",
+    fontPreview: "预览区字体",
+    fontSizeEditor: "编辑区字号",
+    fontSizePreview: "预览区字号",
+    fontPlaceholder: "ui-monospace, monospace",
+    indentUnit: "缩进方式",
+    indentTab: "制表符",
+    indentSpace2: "2 空格",
+    indentSpace4: "4 空格",
+    indentHint: "Tab 无选区时插入缩进，有选区时整体缩进（Shift+Tab 反向）",
+  },
+  stats: {
+    words: "词",
+    chars: "字",
+  },
+  toast: {
+    saved: "已保存（本地暂存，后端待接入）",
+    saveFailed: "保存失败",
+    fileReloaded: "文件已在磁盘上更新，已重新加载",
+    fileChangedDirty: "文件已被外部修改（本地有未保存修改，未自动加载）",
+    fileDeleted: "文件已被外部删除",
+  },
+} as const;
+
+export const enMessages = {
+  common: {
+    close: "Close",
+    saved: "Saved",
+    dirty: "Unsaved",
+    open: "Open",
+    saveAs: "Save As",
+  },
+  confirm: {
+    ok: "OK",
+    quit: "Quit quail?",
+    quitDirty: "You have unsaved changes. Quit and discard them?",
+    conflict: "The file has been modified by another program. Overwrite it with your current edits?",
+  },
+  mode: {
+    source: "Source",
+    split: "Split",
+    preview: "Preview",
+  },
+  outline: {
+    title: "Outline",
+    filter: "Filter",
+    empty: "No headings",
+  },
+  settings: {
+    title: "Settings",
+    appearance: "Appearance",
+    general: "General",
+    previewTheme: "Preview theme",
+    language: "Language",
+    countMode: "Word count mode",
+    countWords: "English words",
+    countChars: "CJK characters",
+    countAuto: "Follow language",
+    countAutoHint: "Pick words / chars automatically by UI language",
+    selectionProxy: "Selection proxy",
+    proxyOn: "On",
+    proxyOff: "Off",
+    fontEditor: "Editor font",
+    fontPreview: "Preview font",
+    fontSizeEditor: "Editor font size",
+    fontSizePreview: "Preview font size",
+    fontPlaceholder: "ui-monospace, monospace",
+    indentUnit: "Indentation",
+    indentTab: "Tabs",
+    indentSpace2: "2 spaces",
+    indentSpace4: "4 spaces",
+    indentHint: "Tab inserts indent with no selection, indents selected lines otherwise (Shift+Tab to outdent)",
+  },
+  stats: {
+    words: "words",
+    chars: "chars",
+  },
+  toast: {
+    saved: "Saved (local stub, backend pending)",
+    saveFailed: "Save failed",
+  },
+} as const;
+
+/** CM6 phrases：查找面板文案的中文映射（英文原文 → 中文） */
+export const cmPhrases: Record<string, string> = {
+  "Find": "查找",
+  "Replace": "替换",
+  "Replace all": "全部替换",
+  "Previous (Shift+Enter)": "上一个 (Shift+Enter)",
+  "Next (Enter)": "下一个 (Enter)",
+  "Close (Esc)": "关闭 (Esc)",
+  "Match case": "区分大小写",
+  "Regular expression": "正则表达式",
+  "No results": "无结果",
+  "Bad regex": "正则无效",
+  "999+": "999+",
+};
