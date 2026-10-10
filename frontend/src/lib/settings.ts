@@ -32,6 +32,9 @@ let snapshot: Snapshot = {};
 let wailsMode = false;
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 let snapshotDirty = false;
+/** 快照就绪门闸：store 工厂在模块加载期（早于快照加载）创建并立即回写兜底值，
+ *  未就绪前禁止回写，避免兜底默认值抢先覆盖磁盘配置 */
+let ready = false;
 
 /** 同步读（store 工厂在模块加载期调用；wails 快照未加载时返回 fallback） */
 export function kvGet(key: string): string | null {
@@ -56,6 +59,7 @@ export function kvSet(key: string, value: string): void {
     } catch { /* ignore */ }
     return;
   }
+  if (!ready) return; // 快照未加载，丢弃 store 初始化期的兜底回写
   const field = KEY_MAP[key] ?? key.slice(LS_PREFIX.length);
   snapshot[field] = value === "1" && typeof snapshot[field] === "boolean" ? true : coerce(field, value);
   snapshotDirty = true;
@@ -98,14 +102,21 @@ export async function initSettings(): Promise<void> {
   if (cfg) {
     if (!exists) {
       // 一次性迁移：后端配置文件不存在 → 以旧 localStorage 值初始化并固化
+      // （注意：持久化的是合并旧值之后的快照，而非后端返回的原始默认配置）
       snapshot = { ...(cfg as unknown as Snapshot) };
       migrateFromLocalStorage(snapshot);
       snapshotDirty = true;
-      await persistConfig(cfg).catch(() => undefined);
+      await persistConfig(snapshot as never).catch(() => undefined);
     } else {
       snapshot = { ...(cfg as unknown as Snapshot) };
     }
   }
+
+  // 快照就绪：放开回写门闸，并把磁盘配置主动重放进各 store。
+  // store 工厂创建于模块加载期（早于此处），kvGet 当时拿到的是空快照，
+  // 各 store 均为兜底默认值——不在此处重放，启动后将永远读不到已保存的设置。
+  ready = true;
+  replay?.(snapshot);
 
   // 外部修改配置文件 → 刷新快照并重放到 store
   await onBackendEvent("config:changed", (data: { config?: Snapshot } | undefined) => {

@@ -7,12 +7,10 @@
  * 切换预览主题时编辑器配色同步变化，无需重新 configure。
  */
 import { EditorState, Compartment, type Text } from "@codemirror/state";
-import { readClipboard } from "../bridge";
 import { cmPhrases } from "../i18n-messages";
 import {
   EditorView,
   keymap,
-  dropCursor,
   crosshairCursor,
   highlightSpecialChars,
 } from "@codemirror/view";
@@ -106,7 +104,7 @@ const editorTheme = EditorView.theme({
   ".cm-line": {
     padding: "0 18px",
   },
-  ".cm-cursor, .cm-dropCursor": {
+  ".cm-cursor": {
     borderLeftColor: "var(--ed-accent)",
     borderLeftWidth: "2px",
   },
@@ -177,7 +175,6 @@ export function createEditorApi(
       extensions: [
         highlightSpecialChars(),
         historyCompartment.of(history({ newGroupDelay: HISTORY_NEW_GROUP_DELAY })),
-        dropCursor(),
         crosshairCursor(),
         bracketMatching(),
         highlightSelectionMatches(),
@@ -188,19 +185,6 @@ export function createEditorApi(
          选区/光标扩展（矩形选区扩展已移除，此为兜底） */
       EditorView.dragMovesSelection.of(() => true),
         EditorView.lineWrapping,
-        // webkitgtk 偶发 paste 事件 clipboardData 为空（剪贴板异步竞态）：
-        // 数据为空时走后端 ReadText 兜底插入，数据正常时交还 CM6 默认处理
-        EditorView.domEventHandlers({
-          paste(event, view) {
-            const data = event.clipboardData?.getData("text/plain");
-            if (data) return false;
-            event.preventDefault();
-            void readClipboard().then((text) => {
-              if (text) view.dispatch(view.state.replaceSelection(text));
-            });
-            return true;
-          },
-        }),
         markdown(),
         indentCompartment.of(indentUnit.of(initialIndent)),
         phrasesCompartment.of(phrasesFor(initialLang)),

@@ -292,8 +292,10 @@ export async function bootApp(): Promise<void> {
   let doc = "";
   let state: QuailDocState | null = null;
   try {
-    await initSettings();
+    // 先注册重放回调再加载配置：initSettings 装载完磁盘快照后会立即
+    // 重放一次，各 store 才能在启动时拿到真实设置（而非兜底默认值）
     onConfigReplay(applyBackendConfig);
+    await initSettings();
     subscribeFileEvents();
     // 启动文档由后端直接提交（命令行路径或空文档），前端不弹对话框
     state = await startupDoc();

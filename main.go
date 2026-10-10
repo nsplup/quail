@@ -3,57 +3,103 @@
 // 组装：
 //   - AssetServer Middleware：ImgProxy（/__imgproxy/* 路径），其余请求走默认静态资源链；
 //   - Services：AppService / FileService / ConfigService（导出方法自动绑定到前端）；
-//   - 主窗口以 Hidden 启动，前端首帧渲染完成后调用 AppService.Ready 显示。
+//   - 主窗口以 Hidden 启动，前端首帧渲染完成后调用 AppService.Ready 显示；
+//   - 窗口尺寸记忆（$XDG_STATE_HOME/quail）由窗口事件驱动（window_state.go）；
+//   - 文件拖拽打开走 Wails File Drop 官方通道（EnableFileDrop + 窗口事件），
+//     前端 data-file-drop-target 标注放置区。
 //
 // 事件名与 payload 模型集中在 events.go，枚举由 bindings 生成器自动产出 TS。
 package main
 
 import (
-	"embed"
-	"log"
+        "embed"
+        "log"
 
-	"github.com/wailsapp/wails/v3/pkg/application"
+        "github.com/wailsapp/wails/v3/pkg/application"
+        "github.com/wailsapp/wails/v3/pkg/events"
 )
 
 //go:embed all:frontend/dist
 var assets embed.FS
 
-// 包级服务实例：FileService 与 ConfigService 互相协作（最近文件、配置广播）。
+// appName 应用名：同时用于窗口标题、状态目录（$XDG_STATE_HOME/quail）等。
+const appName = "quail"
+
+// 包级服务实例：FileService 与 ConfigService 互相协作（配置广播）。
 var (
-	appSvc       = NewAppService()
-	fileSvc      = NewFileService()
-	clipboardSvc = NewClipboardService()
+        appSvc    = NewAppService()
+        fileSvc   = NewFileService()
+        configSvc = NewConfigService()
 )
 
 func main() {
-	app := application.New(application.Options{
-		Name: "quail",
-		Assets: application.AssetOptions{
-			Handler: application.AssetFileServerFS(assets),
-			Middleware: ImgProxyMiddleware(fileSvc),
-		},
-		Services: []application.Service{
-			application.NewService(appSvc),
-			application.NewService(fileSvc),
-			application.NewService(configSvc),
-			application.NewService(clipboardSvc),
-		},
-	})
+        app := application.New(application.Options{
+                Name: appName,
+                Assets: application.AssetOptions{
+                        Handler: application.AssetFileServerFS(assets),
+                        Middleware: ImgProxyMiddleware(fileSvc),
+                },
+                Services: []application.Service{
+                        application.NewService(appSvc),
+                        application.NewService(fileSvc),
+                        application.NewService(configSvc),
+                },
+        })
 
-	app.Window.NewWithOptions(application.WebviewWindowOptions{
-		Name:    "main",
-		Title:   "quail",
-		Width:     1280,
-		Height:    800,
-		MinWidth:  720,
-		MinHeight: 480,
-		// 初始隐藏：前端首帧渲染完成调用 AppService.Ready 后再 Show，
-		// 消除启动白屏/闪烁。
-		Hidden: true,
-		URL:    "/",
-	})
+        winState := newWindowStateStore()
+        winOpts := application.WebviewWindowOptions{
+                Name:    "main",
+                Title:   appName,
+                Width:     1280,
+                Height:    800,
+                MinWidth:  720,
+                MinHeight: 480,
+                // 初始隐藏：前端首帧渲染完成调用 AppService.Ready 后再 Show，
+                // 消除启动白屏/闪烁。
+                Hidden: true,
+                URL:    "/",
+                // Wails File Drop：外部文件拖入窗口 → WindowFilesDropped 事件
+                // （官方通道，见下方监听与 docs/features/drag-and-drop）。
+                // Wails 会拦截外部文件拖拽（不会导航 webview），
+                // 内部 HTML5 拖拽照常透传。
+                EnableFileDrop: true,
+        }
+        // 恢复上次窗口尺寸（记录低于最小尺寸视为无效，回退出厂默认）
+        if st := winState.Load(); st.Width >= winOpts.MinWidth && st.Height >= winOpts.MinHeight {
+                winOpts.Width, winOpts.Height = st.Width, st.Height
+        }
+        win := app.Window.NewWithOptions(winOpts)
 
-	if err := app.Run(); err != nil {
-		log.Fatal(err)
-	}
+        // 窗口尺寸记忆：resize 事件 300ms 防抖持久化到 $XDG_STATE_HOME/quail；
+        // 关闭时同步落盘兜底（防抖窗口内退出不丢最终尺寸）。
+        win.OnWindowEvent(events.Common.WindowDidResize, func(ev *application.WindowEvent) {
+                if w, h := win.Size(); w > 0 && h > 0 {
+                        winState.Schedule(WindowState{Width: w, Height: h})
+                }
+        })
+        win.OnWindowEvent(events.Common.WindowClosing, func(ev *application.WindowEvent) {
+                if w, h := win.Size(); w > 0 && h > 0 {
+                        winState.Flush(WindowState{Width: w, Height: h})
+                }
+        })
+
+        // 拖拽打开（Wails File Drop 官方通道）：前端在应用根元素标
+        // data-file-drop-target（全窗口为放置区），放置后此事件携带全部
+        // 文件绝对路径与目标元素信息 → 转发前端走标准打开流程装载
+        // （后端不直接 Open：文档装载、脏状态与编辑器替换是前端职责）。
+        win.OnWindowEvent(events.Common.WindowFilesDropped, func(ev *application.WindowEvent) {
+                files := ev.Context().DroppedFiles()
+                if len(files) == 0 {
+                        return
+                }
+                payload := FileDroppedEventData{Files: files}
+                if details := ev.Context().DropTargetDetails(); details != nil {
+                        payload.Target = details.ElementID
+                }
+                emit(EventFileDropped, payload)
+        })
+
+        if err := app.Run(); err != nil {
+                log.Fatal(err)
+        }
 }

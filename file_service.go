@@ -47,10 +47,10 @@ type SaveResult struct {
 
 // docStatus 内部持有态（Content 不进内存副本，仅路径与指纹）。
 type docStatus struct {
-        path       string
-        encoding   string
-        lastKnown  string // 最后一次与磁盘核对一致的 sha256（hex）
-        suppress   bool   // 自身写入抑制标记（Save → watch 回环）
+        path      string
+        encoding  string
+        lastKnown string      // 最后一次与磁盘核对一致的 sha256（hex）
+        guard     *writeGuard // 自身写入抑制登记簿（Save → watch 回环，写入令牌 + 内容哈希）
 }
 
 // FileService 三个导出服务之一。
@@ -79,23 +79,23 @@ func (f *FileService) ServiceShutdown() {
 // StartupDoc 启动文档：取命令行传入的第一个文件路径并打开；
 // 无有效路径 → 返回空文档（untitled），不弹任何对话框。
 func (f *FileService) StartupDoc() (*DocState, error) {
-	for _, arg := range os.Args[1:] {
-		if arg == "" || strings.HasPrefix(arg, "-") {
-			continue
-		}
-		if st, err := os.Stat(arg); err == nil && !st.IsDir() {
-			return f.Open(arg)
-		}
-	}
-	return &DocState{
-		Path:     "",
-		Dir:      "",
-		Name:     "untitled",
-		Content:  "",
-		Encoding: "utf-8",
-		Size:     0,
-		ModTime:  0,
-	}, nil
+        for _, arg := range os.Args[1:] {
+                if arg == "" || strings.HasPrefix(arg, "-") {
+                        continue
+                }
+                if st, err := os.Stat(arg); err == nil && !st.IsDir() {
+                        return f.Open(arg)
+                }
+        }
+        return &DocState{
+                Path:     "",
+                Dir:      "",
+                Name:     "untitled",
+                Content:  "",
+                Encoding: "utf-8",
+                Size:     0,
+                ModTime:  0,
+        }, nil
 }
 
 // CurrentPath 当前打开文档路径；未打开返回空串。
@@ -134,10 +134,9 @@ func (f *FileService) Open(path string) (*DocState, error) {
                 path:      abs,
                 encoding:  enc,
                 lastKnown: sha256Hex(raw),
+                guard:     newWriteGuard(),
         }
         _ = f.startWatchLocked(filepath.Dir(abs), filepath.Base(abs)) // 监听失败不阻塞打开，仅降级
-        // 记入最近文件
-        configSvc.AddRecentFile(abs)
 
         st := &DocState{
                 Path:     abs,
@@ -156,15 +155,13 @@ func (f *FileService) Open(path string) (*DocState, error) {
 // force=true 表示用户已在前端确认"以我的版本覆盖"，跳过冲突检查。
 // 注意 file:changed 到达后 lastKnown 已同步为磁盘内容，残余的磁盘漂移只能
 // 来自监听抑制窗口/监听降级场景——冲突检查是最后一道防线，不能省。
-// 写入前设置抑制标记，避免自身 rename 触发 file:changed 回环。
+// 写入前登记写入令牌 + 内容哈希，watch 回环以磁盘内容哈希核对令牌抑制广播。
 func (f *FileService) Save(content string, force bool) (*SaveResult, error) {
         f.mu.Lock()
         defer f.mu.Unlock()
         if f.doc == nil {
                 return nil, errors.New("没有打开的文档")
         }
-        f.doc.suppress = true // 抑制自身 rename 触发的 file:changed 回环
-        defer clearSuppressLater(f)
         if force {
                 return f.writeThrough(content)
         }
@@ -181,6 +178,7 @@ func (f *FileService) writeThrough(content string) (*SaveResult, error) {
         if info, err := os.Stat(f.doc.path); err == nil {
                 mode = info.Mode().Perm()
         }
+        f.doc.guard.begin(newWriteToken(), sha256Hex(raw))
         if err := writeFileAtomic(f.doc.path, raw, mode); err != nil {
                 return nil, err
         }
@@ -196,60 +194,49 @@ func (f *FileService) SaveAs(path, content string) (*SaveResult, error) {
         }
         // 另存不受外部冲突检测约束（新位置没有"上次已知"）
         // 另存统一以 UTF-8 落盘（新位置无历史编码包袱）。
-        if err := writeFileAtomic(abs, []byte(content), 0o644); err != nil {
-                return nil, err
-        }
+        raw := []byte(content)
         f.mu.Lock()
         defer f.mu.Unlock()
         f.stopWatchLocked()
-        f.doc = &docStatus{path: abs, encoding: "utf-8", lastKnown: sha256Hex([]byte(content))}
-        f.doc.suppress = true // 另存的 rename 同样会触发事件，需抑制
+        doc := &docStatus{path: abs, encoding: "utf-8", lastKnown: sha256Hex(raw), guard: newWriteGuard()}
+        // 另存的 rename 同样会触发事件：登记写入令牌后再落盘
+        doc.guard.begin(newWriteToken(), sha256Hex(raw))
+        if err := writeFileAtomic(abs, raw, 0o644); err != nil {
+                return nil, err
+        }
+        f.doc = doc
         _ = f.startWatchLocked(filepath.Dir(abs), filepath.Base(abs)) // 监听失败降级
-        defer clearSuppressLater(f)
-        configSvc.AddRecentFile(abs)
         return &SaveResult{Ok: true, Path: abs}, nil
-}
-
-// clearSuppressLater 延迟清除抑制标记：覆盖 rename → fsnotify 事件 →
-// 300ms 防抖的完整窗口。持锁状态下调用，协程内自行取锁。
-func clearSuppressLater(f *FileService) {
-        time.AfterFunc(600*time.Millisecond, func() {
-                f.mu.Lock()
-                if f.doc != nil {
-                        f.doc.suppress = false
-                }
-                f.mu.Unlock()
-        })
 }
 
 // PickOpen 弹出系统"打开文件"对话框，返回所选路径（取消返回空串）。
 func (f *FileService) PickOpen() (string, error) {
-	app := application.Get()
-	if app == nil {
-		return "", nil
-	}
-	return app.Dialog.OpenFile().
-		SetTitle("打开 Markdown 文档").
-		AddFilter("Markdown", "*.md;*.markdown").
-		AddFilter("Text", "*.txt").
-		AddFilter("All Files", "*.*").
-		PromptForSingleSelection()
+        app := application.Get()
+        if app == nil {
+                return "", nil
+        }
+        return app.Dialog.OpenFile().
+                SetTitle("打开 Markdown 文档").
+                AddFilter("Markdown", "*.md;*.markdown").
+                AddFilter("Text", "*.txt").
+                AddFilter("All Files", "*.*").
+                PromptForSingleSelection()
 }
 
 // PickSave 弹出系统"保存文件"对话框，返回目标路径（取消返回空串）。
 func (f *FileService) PickSave(defaultName string) (string, error) {
-	app := application.Get()
-	if app == nil {
-		return "", nil
-	}
-	if defaultName == "" {
-		defaultName = "untitled.md"
-	}
-	return app.Dialog.SaveFile().
-		SetMessage("另存为").
-		SetFilename(defaultName).
-		AddFilter("Markdown", "*.md;*.markdown").
-		PromptForSingleSelection()
+        app := application.Get()
+        if app == nil {
+                return "", nil
+        }
+        if defaultName == "" {
+                defaultName = "untitled.md"
+        }
+        return app.Dialog.SaveFile().
+                SetMessage("另存为").
+                SetFilename(defaultName).
+                AddFilter("Markdown", "*.md;*.markdown").
+                PromptForSingleSelection()
 }
 
 // CloseDoc 关闭当前文档（停止监听、清空持有态）。
@@ -284,14 +271,13 @@ func (f *FileService) startWatchLocked(dir, base string) error {
                 fire := func() {
                         f.mu.Lock()
                         doc := f.doc
-                        sup := doc != nil && doc.suppress
                         path := ""
                         if doc != nil {
                                 path = doc.path
                         }
                         f.mu.Unlock()
-                        if doc == nil || sup {
-                                return // 已关闭或自身写入回环
+                        if doc == nil {
+                                return
                         }
                         if deleted {
                                 doc.lastKnown = "" // 文件没了，清指纹
@@ -301,6 +287,10 @@ func (f *FileService) startWatchLocked(dir, base string) error {
                         raw, err := os.ReadFile(path)
                         if err != nil {
                                 emit(EventFileDeleted, FileEventData{Path: path})
+                                return
+                        }
+                        // 磁盘内容哈希命中登记写入 → 自身写入回环，抑制广播
+                        if doc.guard.claim(sha256Hex(raw)) {
                                 return
                         }
                         content, _, err := decodeToUTF8(raw)
@@ -381,6 +371,7 @@ func (f *FileService) atomicWrite(path, content, enc string) (*SaveResult, error
         if info, serr := os.Stat(path); serr == nil {
                 mode = info.Mode().Perm() // 保留原文件权限
         }
+        f.doc.guard.begin(newWriteToken(), sha256Hex(raw)) // 登记写入令牌，抑制自身 rename 回环
         if err := writeFileAtomic(path, raw, mode); err != nil {
                 return nil, err
         }

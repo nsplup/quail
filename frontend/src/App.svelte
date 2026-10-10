@@ -15,9 +15,11 @@
     onBackendEvent,
     reportDirty,
     openViaDialog,
+    openDocument,
     saveAsViaDialog,
     setTitle,
   } from "./lib/bridge";
+  import type { QuailDocState } from "./lib/bridge";
   import { confirmDialog } from "./lib/confirm";
   import {
     mode$ as mode,
@@ -103,6 +105,18 @@
         await confirmQuit();
       }
     });
+    // 拖拽打开（Wails File Drop 官方通道）：根元素已标 data-file-drop-target，
+    // 后端 WindowFilesDropped 转发文件绝对路径 → 取第一个走标准打开流程装载
+    void onBackendEvent("file:dropped", async (d: { files?: string[] }) => {
+      const path = d?.files?.find((p) => !!p);
+      if (!path) return;
+      try {
+        const state = await openDocument(path);
+        if (state) loadOpened(state);
+      } catch {
+        toast.set({ id: Date.now(), msg: get(t)("toast.openFailed") });
+      }
+    });
     await bootApp();
   });
 
@@ -157,11 +171,14 @@
   /** 打开文档（Wails 原生文件对话框 → FileService.Open） */
   async function openFile(): Promise<void> {
     const state = await openViaDialog();
-    if (state) {
-      docState.set(state);
-      doc.set(state.content);
-      get(editorApi)?.setDoc(state.content);
-    }
+    if (state) loadOpened(state);
+  }
+
+  /** 装载已打开的文档状态（对话框打开与拖拽打开共用） */
+  function loadOpened(state: QuailDocState): void {
+    docState.set(state);
+    doc.set(state.content);
+    get(editorApi)?.setDoc(state.content);
   }
 
   /** 另存为（Wails 原生保存对话框 → FileService.SaveAs） */
@@ -331,7 +348,13 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-<div class="app flex h-full flex-col bg-app text-fg">
+<!-- 全窗口放置区（Wails File Drop）：data-file-drop-target 由 Wails 运行时识别，
+     文件悬停时自动添加 file-drop-target-active 类（样式见 app.css） -->
+<div
+  id="app-root"
+  class="app flex h-full flex-col bg-app text-fg"
+  data-file-drop-target
+>
   {#if $ready}
     <main
       class="main relative flex min-h-0 flex-1 overflow-hidden"

@@ -19,6 +19,9 @@ const (
         EventFileChanged EventType = "file:changed"
         // EventFileDeleted 当前文档被外部删除/移走；payload: FileEventData（无 Content）。
         EventFileDeleted EventType = "file:deleted"
+        // EventFileDropped 文件拖放到窗口（Wails File Drop 通道）；payload:
+        // FileDroppedEventData（绝对路径列表 + 放置目标元素 id）。
+        EventFileDropped EventType = "file:dropped"
         // EventConfigChanged 配置文件被外部修改或保存；payload: ConfigEventData。
         EventConfigChanged EventType = "config:changed"
         // EventCloseRequest RequestClose 触发的关闭请求；前端弹 confirm，
@@ -31,6 +34,15 @@ type FileEventData struct {
         Path string `json:"path"`
         // Content 新内容（UTF-8）。deleted 事件为空。
         Content string `json:"content,omitempty"`
+}
+
+// FileDroppedEventData file:dropped 的载荷（Wails File Drop 通道）。
+type FileDroppedEventData struct {
+        // Files 放置文件的绝对路径列表。
+        Files []string `json:"files"`
+        // Target 放置目标元素 id（data-file-drop-target 属性所在元素），
+        // 目标不可用时为空。
+        Target string `json:"target,omitempty"`
 }
 
 // ConfigEventData config:changed 的载荷。

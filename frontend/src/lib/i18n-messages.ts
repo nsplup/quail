@@ -58,6 +58,7 @@ export const zhMessages = {
   toast: {
     saved: "已保存（本地暂存，后端待接入）",
     saveFailed: "保存失败",
+    openFailed: "打开失败",
     fileReloaded: "文件已在磁盘上更新，已重新加载",
     fileChangedDirty: "文件已被外部修改（本地有未保存修改，未自动加载）",
     fileDeleted: "文件已被外部删除",
@@ -124,6 +125,7 @@ export const enMessages = {
   toast: {
     saved: "Saved (local stub, backend pending)",
     saveFailed: "Save failed",
+    openFailed: "Failed to open file",
   },
   preview: {
     imageLoading: "Loading image…",

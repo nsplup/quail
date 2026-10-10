@@ -23,7 +23,6 @@ import {
   StartupDoc,
 } from "../../bindings/quail/fileservice";
 import { Get as ConfigGet, ConfigExists, Save as ConfigSave } from "../../bindings/quail/configservice";
-import { SetText as ClipboardSetText, ReadText as ClipboardReadText } from "../../bindings/quail/clipboardservice";
 import { Events, Browser } from "@wailsio/runtime";
 
 export interface QuailDocState {
@@ -52,7 +51,6 @@ export interface QuailConfig {
   fontPreview: string;
   fontSizeEditor: number;
   fontSizePreview: number;
-  recentFiles: string[];
 }
 
 /* ---------------- AppService ---------------- */
@@ -93,6 +91,11 @@ export async function startupDoc(): Promise<QuailDocState | null> {
 export async function openViaDialog(): Promise<QuailDocState | null> {
   const path = await PickOpen();
   if (!path) return null;
+  return (await Open(path)) as unknown as QuailDocState;
+}
+
+/** 打开指定路径文档（拖拽打开：App 层 HTML5 DnD 解析路径 → 装载） */
+export async function openDocument(path: string): Promise<QuailDocState | null> {
   return (await Open(path)) as unknown as QuailDocState;
 }
 
@@ -140,21 +143,9 @@ export async function persistConfig(cfg: QuailConfig): Promise<void> {
   await ConfigSave(cfg);
 }
 
-/* ---------------- ClipboardService ---------------- */
-
-/** 原生剪贴板写入（webkitgtk 下 navigator.clipboard 受手势限制） */
-export async function setClipboard(text: string): Promise<boolean> {
-  return await ClipboardSetText(text);
-}
-
-/** 原生剪贴板读取（前端 paste 事件数据为空时的兜底） */
-export async function readClipboard(): Promise<string> {
-  return (await ClipboardReadText()) ?? "";
-}
-
 /* ---------------- 事件 ---------------- */
 
-export type FileEventName = "file:changed" | "file:deleted";
+export type FileEventName = "file:changed" | "file:deleted" | "file:dropped";
 export type ConfigEventName = "config:changed";
 export type CloseEventName = "close:request";
 
