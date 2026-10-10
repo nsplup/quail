@@ -2,8 +2,9 @@ package main
 
 // FileService：文档打开 / 保存 / 另存 / 目录监听。
 //
-// - Open 读取文件（编码统一转 UTF-8），持有文档状态（路径、mtime、sha256）
-//   并启动 fsnotify 目录监听，过滤出当前文档的变动事件（300ms 防抖合并）；
+// - Open 读取文件（编码统一转 UTF-8；输入过滤：只接受文本文件，二进制文件
+//   静默丢弃），持有文档状态（路径、mtime、sha256）并启动 fsnotify 目录
+//   监听，过滤出当前文档的变动事件（300ms 防抖合并）；
 // - Save 原子写（同目录临时文件 + rename + 保留权限），写入前用 sha256 对比
 //   检测外部修改冲突，冲突返回 SaveResult{Conflict:true}，不覆盖磁盘；
 // - SaveAs 原子写新路径并把监听迁移过去；
@@ -109,6 +110,9 @@ func (f *FileService) CurrentPath() string {
 }
 
 // Open 打开文档：读取、转码 UTF-8、持有状态、启动监听。
+// 输入过滤：只接受文本文件（含 BOM/UTF-8/GBK 等各国文本编码）；二进制
+// 文件静默丢弃——返回 (nil, nil) 不报错，前端对空结果本就不装载不提示，
+// 打开对话框、命令行启动文档与拖拽打开三条路径共用本方法，一并生效。
 func (f *FileService) Open(path string) (*DocState, error) {
         abs, err := filepath.Abs(path)
         if err != nil {
@@ -117,6 +121,9 @@ func (f *FileService) Open(path string) (*DocState, error) {
         raw, err := os.ReadFile(abs)
         if err != nil {
                 return nil, err
+        }
+        if !isTextFile(raw) {
+                return nil, nil // 非文本文件：静默丢弃
         }
         content, enc, err := decodeToUTF8(raw)
         if err != nil {
@@ -219,7 +226,6 @@ func (f *FileService) PickOpen() (string, error) {
                 SetTitle("打开 Markdown 文档").
                 AddFilter("Markdown", "*.md;*.markdown").
                 AddFilter("Text", "*.txt").
-                AddFilter("All Files", "*.*").
                 PromptForSingleSelection()
 }
 

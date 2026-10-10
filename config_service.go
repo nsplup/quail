@@ -126,6 +126,60 @@ func (c *ConfigService) Save(cfg Config) error {
         return writeFileAtomic(filepath.Join(c.dir, settingsFile), raw, 0o644)
 }
 
+// SaveFields 增量保存：仅合并前端提交的脏字段，其余字段以磁盘最新值为准。
+//
+// 多窗口/多实例场景下，各窗口前端各持一份配置快照；若整包回写，陈旧快照会
+// 覆盖其他窗口刚落盘的字段，随后 config:changed 广播把旧值重放进正在编辑的
+// 窗口，表现为设置"偶尔跳回原值"。因此这里：
+//   - 落盘前重读磁盘（loadLocked）作为合并基准，最大限度收窄并发竞态窗口；
+//   - 只覆盖提交的字段（忽略未知键），不携带快照里的陈旧字段；
+//   - 落盘成功后直接广播 config:changed（同进程所有窗口即时同步；本次写入
+//     已登记抑制令牌，watch 回环不会再触发第二次广播；跨进程实例仍由各自的
+//     fsnotify watch 感知）。
+func (c *ConfigService) SaveFields(fields map[string]any) error {
+        c.mu.Lock()
+        merged := c.loadLocked() // 磁盘为事实源（c.cfg 可能落后于 watch 防抖）
+        if len(fields) > 0 {
+                base, err := json.Marshal(merged)
+                if err != nil {
+                        c.mu.Unlock()
+                        return err
+                }
+                var m map[string]any
+                if err := json.Unmarshal(base, &m); err != nil {
+                        c.mu.Unlock()
+                        return err
+                }
+                for k, v := range fields {
+                        if _, ok := m[k]; ok { // 只接受已知字段，防注入未知键
+                                m[k] = v
+                        }
+                }
+                raw, err := json.Marshal(m)
+                if err != nil {
+                        c.mu.Unlock()
+                        return err
+                }
+                if err := json.Unmarshal(raw, &merged); err != nil {
+                        c.mu.Unlock()
+                        return err
+                }
+        }
+        c.cfg = merged
+        out, err := json.MarshalIndent(merged, "", "  ")
+        if err != nil {
+                c.mu.Unlock()
+                return err
+        }
+        c.guard.begin(newWriteToken(), sha256Hex(out))
+        err = writeFileAtomic(filepath.Join(c.dir, settingsFile), out, 0o644)
+        c.mu.Unlock()
+        if err == nil {
+                emit(EventConfigChanged, ConfigEventData{Config: merged})
+        }
+        return err
+}
+
 // path 配置文件路径（ServiceStartup 之后有效）。
 func (c *ConfigService) path() string {
         if c.dir == "" {

@@ -22,7 +22,7 @@ import {
   CloseDoc,
   StartupDoc,
 } from "../../bindings/quail/fileservice";
-import { Get as ConfigGet, ConfigExists, Save as ConfigSave } from "../../bindings/quail/configservice";
+import { Get as ConfigGet, ConfigExists, Save as ConfigSave, SaveFields as ConfigSaveFields } from "../../bindings/quail/configservice";
 import { Events, Browser } from "@wailsio/runtime";
 
 export interface QuailDocState {
@@ -138,9 +138,14 @@ export async function configExists(): Promise<boolean> {
   return await ConfigExists();
 }
 
-/** 保存配置（整包） */
+/** 保存配置（整包；仅旧 localStorage 一次性迁移使用） */
 export async function persistConfig(cfg: QuailConfig): Promise<void> {
   await ConfigSave(cfg);
+}
+
+/** 增量保存配置：仅提交脏字段，后端与磁盘最新配置按字段合并（多窗口互不覆盖） */
+export async function persistConfigFields(fields: Record<string, unknown>): Promise<void> {
+  await ConfigSaveFields(fields);
 }
 
 /* ---------------- 事件 ---------------- */

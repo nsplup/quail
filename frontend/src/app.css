@@ -702,16 +702,14 @@ md-image[data-inline][data-status="error"] {
   to { transform: rotate(360deg); }
 }
 
-/* ---------------- 拖拽打开：全窗口放置区提示（Wails File Drop） ----------------
+/* ---------------- 拖拽打开：全窗口放置区遮罩（Wails File Drop） ----------------
    文件悬停时 Wails 运行时给 data-file-drop-target 元素添加
-   file-drop-target-active 类；用 ::after 蒙层示意当前可放置，
-   pointer-events:none 不拦截拖拽事件。 */
+   file-drop-target-active 类；仅保留覆盖全窗口的透明遮罩
+   （无任何视觉样式），pointer-events:none 不拦截拖拽事件。 */
 #app-root.file-drop-target-active::after {
   content: "";
   position: fixed;
   inset: 0;
   z-index: 9999;
   pointer-events: none;
-  border: 2px dashed var(--ui-border);
-  background: color-mix(in srgb, var(--ed-accent) 8%, transparent);
 }
