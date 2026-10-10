@@ -1,11 +1,13 @@
 /**
  * 全局状态中心：所有跨组件共享状态统一由 svelte store 持有。
  * - 持久化设置：persisted* 工厂在 store 创建时读入 localStorage，订阅期自动回写；
- * - AST 管线：doc$ 变化 → 防抖 → 增量解析 → root$/blocks$；派生大纲与字数统计；
+ * - AST 管线：doc$ 变化 → rAF 合并 + 自适应 minInterval + 120ms maxWait → 增量解析
+ *   → root$/hast$/blocks$（HAST 未变段复用节点引用）；派生大纲与字数统计；
  * - 组件私有交互细节（拖拽、程序滚动时间窗等）仍留在组件内，不在此处。
  */
 import { writable, derived, get, type Writable } from "svelte/store";
 import type { Root } from "mdast";
+import type { Root as HastRoot } from "hast";
 import type {
   Mode,
   ThemeId,
@@ -27,7 +29,7 @@ import {
 } from "./markdown";
 import { t, locale, setLang } from "./i18n.svelte";
 import { kvGet, kvSet, onConfigReplay, initSettings } from "./settings";
-import { onBackendEvent, isWails, ready as bridgeReady, openDocument, type QuailDocState } from "./bridge";
+import { onBackendEvent, ready as bridgeReady, startupDoc, type QuailDocState } from "./bridge";
 
 /* ---------------- 持久化工厂 ---------------- */
 
@@ -105,9 +107,6 @@ export const fontPreview$ = persistedText("md.fontPreview", "");
 export const fontSizeEd$ = persistedNumber("md.fontSizeEd", 15);
 export const fontSizePv$ = persistedNumber("md.fontSizePv", 15.5);
 
-/** 选区代理插件开关（默认启用） */
-export const selectionProxy$ = persistedBool("md.selectionProxy", true);
-
 /* ---------------- UI 状态 ---------------- */
 
 export const settingsOpen$ = writable(false);
@@ -128,6 +127,8 @@ export const ready$ = writable(false);
 
 /** 解析结果（整体替换、只读消费；store 值无深度代理，性能等同 $state.raw） */
 export const root$ = writable<Root | null>(null);
+/** HAST 根：渲染层数据源（MarkdownRenderer 组件树直渲染，不经 HTML 字符串） */
+export const hast$ = writable<HastRoot | null>(null);
 export const blocks$ = writable<PreviewBlock[]>([]);
 /** 解析时刻的源码快照：字数统计用它，避免每个按键重跑 */
 export const parsedDoc$ = writable("");
@@ -138,40 +139,112 @@ export const editorApi$ = writable<EditorApi | null>(null);
 export const dirty$ = writable(false);
 export const previewApi$ = writable<PreviewApi | null>(null);
 
-const parseState: IncrementalParseState = { src: "", root: null, blocks: [] };
-let incCount = 0;
-let parseTimer: ReturnType<typeof setTimeout> | undefined;
-let idleFullTimer: ReturnType<typeof setTimeout> | undefined;
+const parseState: IncrementalParseState = { src: "", root: null, hast: null, blocks: [] };
+
+/* ---------------- 解析调度：rAF 合并 + 自适应 minInterval + maxWait ----------------
+ * 相比固定 500ms 防抖：输入流畅时下一帧即解析（预览延迟 500ms → ~16ms），
+ * 高频全量替换时自适应拉长 minInterval 节流；maxWait 兜底防“永远没空档”。 */
+const MIN_INTERVAL_BASE = 16;
+const ADAPT_STEP = 32;
+const MAX_INTERVAL = 256;
+const MAX_WAIT = 120;
+const HEAL_DELAY = 10000;
+
+let minInterval = MIN_INTERVAL_BASE;
+let lastRun = 0;
+let pendingSrc: string | null = null;
+let pending = false;
+let adaptHits = 0;
+let flushRaf: number | undefined;
+let flushTimer: ReturnType<typeof setTimeout> | undefined;
+let healTimer: ReturnType<typeof setTimeout> | undefined;
 
 /** 全量/增量重建 AST（保留自愈校验制：块行界连续覆盖全文时跳过全量重算） */
 export function rebuildAst(src: string, forceFull: boolean): void {
   const res = buildBlocksIncremental(parseState, src, forceFull);
   parseState.src = src;
   parseState.root = res.root;
+  parseState.hast = res.hast;
   parseState.blocks = res.blocks;
+  parseState.incrementalCount = res.incrementalCount; // 全量阈值归属 markdown.ts
   root$.set(res.root);
+  // 增量路径的 hast 已复用 head/tail 段节点引用 → 渲染层按引用跳过未变子树
+  hast$.set(res.hast);
   blocks$.set(res.blocks);
   parsedDoc$.set(src);
 }
 
-let booted = false;
+/** 10s idle 自愈：文档静止后校验块行界无缝覆盖，失败则全量重算（兜底防御） */
+function scheduleHealCheck(): void {
+  clearTimeout(healTimer);
+  healTimer = setTimeout(() => {
+    healTimer = undefined;
+    if (parseState.src !== get(doc$)) return; // 已有新编辑在途，让位
+    if (!blocksCoverDoc(parseState.blocks, parseState.src)) {
+      rebuildAst(get(doc$), true);
+    }
+  }, HEAL_DELAY);
+}
 
-// doc$ 变化 → 500ms 防抖 → 增量解析（ready 后生效；idle 10s 自愈校验）
+function runRebuild(src: string): void {
+  rebuildAst(src, false); // forceFull 恒 false：全量阈值只归 markdown.ts 的 incrementalCount
+  scheduleHealCheck();
+}
+
+/** 高频触发（在途时又来新 src）计数：连续 ≥3 次 → 拉长 minInterval */
+function noteAdapt(): void {
+  adaptHits++;
+  if (adaptHits >= 3) {
+    minInterval = Math.min(MAX_INTERVAL, minInterval + ADAPT_STEP);
+  }
+}
+
+/** 调度一次解析：rAF 快路径（无背压）+ minInterval 节流 + MAX_WAIT 强制兜底 */
+function scheduleRebuild(src: string): void {
+  pendingSrc = src;
+  if (pending) {
+    noteAdapt();
+    return;
+  }
+  pending = true;
+  adaptHits = 0;
+  const since = performance.now() - lastRun;
+  const delay = Math.max(0, minInterval - since);
+  if (delay < MIN_INTERVAL_BASE) {
+    // 快路径：下一帧解析；MAX_WAIT 双保险（rAF 被后台节流时仍按时解析）
+    flushRaf = requestAnimationFrame(flushNow);
+    flushTimer = setTimeout(flushNow, MAX_WAIT);
+  } else {
+    // 背压：minInterval 内刚跑过 → 最多再等 MAX_WAIT
+    flushTimer = setTimeout(flushNow, Math.min(delay, MAX_WAIT));
+  }
+}
+
+/** 消费 pendingSrc 并解析（rAF/timer 竞争，单线程下先到先清） */
+function flushNow(): void {
+  flushRaf = undefined;
+  clearTimeout(flushTimer);
+  flushTimer = undefined;
+  pending = false;
+  const s = pendingSrc;
+  pendingSrc = null;
+  if (s === null) return;
+  lastRun = performance.now();
+  runRebuild(s);
+  // 本轮无高频触发 → 向基准回落
+  if (adaptHits === 0) {
+    minInterval = Math.max(MIN_INTERVAL_BASE, minInterval - ADAPT_STEP);
+  }
+}
+
+// doc$ 变化 → 记 pendingSrc → rAF 合并（ready 后生效；全量阈值/idle 自愈见上）
 doc$.subscribe((src) => {
   if (!get(ready$)) return;
-  clearTimeout(parseTimer);
-  parseTimer = setTimeout(() => {
-    incCount++;
-    rebuildAst(src, incCount % 200 === 0);
-    clearTimeout(idleFullTimer);
-    idleFullTimer = setTimeout(() => {
-      if (parseState.src !== get(doc$)) return;
-      if (!blocksCoverDoc(parseState.blocks, parseState.src)) {
-        rebuildAst(get(doc$), true);
-      }
-    }, 10000);
-  }, 500);
+  scheduleRebuild(src);
 });
+
+let booted = false;
+
 
 /** 派生：大纲（mdast 标题 + 行号映射到 HAST 块） */
 export const outline$ = derived([root$, blocks$], ([root, blocks]) =>
@@ -212,33 +285,35 @@ export function indexOfLine(line: number): number {
 /** 启动：装载文档 + 全量解析（App onMount 调用一次）。
  * Wails 环境：先加载后端配置（含 localStorage 一次性迁移）、订阅文档事件，
  * 然后打开文档；无打开文档时回退本地草稿/示例。 */
-export async function bootApp(loadDoc: () => Promise<string | null>): Promise<void> {
+export async function bootApp(): Promise<void> {
   if (booted) return;
   booted = true;
 
-  let doc: string;
+  let doc = "";
   let state: QuailDocState | null = null;
-  if (isWails()) {
+  try {
     await initSettings();
     onConfigReplay(applyBackendConfig);
     subscribeFileEvents();
-    state = await openDocument().catch(() => null);
+    // 启动文档由后端直接提交（命令行路径或空文档），前端不弹对话框
+    state = await startupDoc();
+  } catch (e) {
+    console.warn("[boot] startupDoc failed, fallback to empty doc", e);
   }
   if (state) {
     doc = state.content;
-  } else {
-    let saved: string | null = null;
-    try {
-      saved = await loadDoc();
-    } catch { /* 后端未接入时静默降级 */ }
-    doc = saved ?? (await import("./sampleDoc")).buildSampleDoc();
+    docState$.set(state);
   }
   doc$.set(doc);
   rebuildAst(doc, true);
   ready$.set(true);
-  if (isWails()) {
-    void bridgeReady(); // 首帧就绪 → 后端显示窗口
-  }
+  // ready 前的 doc$.set 不进入调度管线（订阅早退），ready 后补跑一次确保贯通
+  scheduleRebuild(get(doc$));
+  // 初始化流程末尾统一调度 Ready（下一轮宏任务）：
+  // 不等待编辑区/预览区渲染结束，窗口显示与首帧绘制并行推进。
+  setTimeout(() => {
+    void bridgeReady();
+  }, 0);
 }
 
 /** 打开的文档状态（路径、编码等，供保存/标题/底部栏展示） */
@@ -285,8 +360,6 @@ export function applyBackendConfig(snap: Record<string, unknown>): void {
   if (fse != null && Number.isFinite(Number(fse))) fontSizeEd$.set(Number(fse));
   const fsp = snap["fontSizePreview"];
   if (fsp != null && Number.isFinite(Number(fsp))) fontSizePv$.set(Number(fsp));
-  const sp = snap["selectionProxy"];
-  if (sp != null) selectionProxy$.set(Boolean(sp));
   const loc = str("locale");
   if (loc === "zh" || loc === "en") setLang(loc);
 }

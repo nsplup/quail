@@ -17,6 +17,7 @@ import (
         "fmt"
         "os"
         "path/filepath"
+        "strings"
         "sync"
         "time"
 
@@ -73,6 +74,28 @@ func (f *FileService) ServiceStartup(context.Context, application.ServiceOptions
 // ServiceShutdown 停止监听。
 func (f *FileService) ServiceShutdown() {
         f.stopWatch()
+}
+
+// StartupDoc 启动文档：取命令行传入的第一个文件路径并打开；
+// 无有效路径 → 返回空文档（untitled），不弹任何对话框。
+func (f *FileService) StartupDoc() (*DocState, error) {
+	for _, arg := range os.Args[1:] {
+		if arg == "" || strings.HasPrefix(arg, "-") {
+			continue
+		}
+		if st, err := os.Stat(arg); err == nil && !st.IsDir() {
+			return f.Open(arg)
+		}
+	}
+	return &DocState{
+		Path:     "",
+		Dir:      "",
+		Name:     "untitled",
+		Content:  "",
+		Encoding: "utf-8",
+		Size:     0,
+		ModTime:  0,
+	}, nil
 }
 
 // CurrentPath 当前打开文档路径；未打开返回空串。
@@ -223,7 +246,7 @@ func (f *FileService) PickSave(defaultName string) (string, error) {
 		defaultName = "untitled.md"
 	}
 	return app.Dialog.SaveFile().
-		SetTitle("另存为").
+		SetMessage("另存为").
 		SetFilename(defaultName).
 		AddFilter("Markdown", "*.md;*.markdown").
 		PromptForSingleSelection()

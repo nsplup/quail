@@ -20,8 +20,9 @@ var assets embed.FS
 
 // 包级服务实例：FileService 与 ConfigService 互相协作（最近文件、配置广播）。
 var (
-	appSvc  = NewAppService()
-	fileSvc = NewFileService()
+	appSvc       = NewAppService()
+	fileSvc      = NewFileService()
+	clipboardSvc = NewClipboardService()
 )
 
 func main() {
@@ -35,10 +36,11 @@ func main() {
 			application.NewService(appSvc),
 			application.NewService(fileSvc),
 			application.NewService(configSvc),
+			application.NewService(clipboardSvc),
 		},
 	})
 
-	app.NewWebviewWindowWithOptions(application.WebviewWindowOptions{
+	app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Name:    "main",
 		Title:   "quail",
 		Width:     1280,

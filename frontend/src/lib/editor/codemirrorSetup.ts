@@ -7,12 +7,12 @@
  * 切换预览主题时编辑器配色同步变化，无需重新 configure。
  */
 import { EditorState, Compartment, type Text } from "@codemirror/state";
+import { readClipboard } from "../bridge";
 import { cmPhrases } from "../i18n-messages";
 import {
   EditorView,
   keymap,
   dropCursor,
-  rectangularSelection,
   crosshairCursor,
   highlightSpecialChars,
 } from "@codemirror/view";
@@ -31,7 +31,6 @@ import { syntaxHighlighting, HighlightStyle, bracketMatching, indentUnit } from 
 import { tags } from "@lezer/highlight";
 import type { Command } from "@codemirror/view";
 import { createModernSearchPanel, searchPanelModF } from "./searchPanel";
-import { selectionSyncExtension } from "./selectionBridge";
 import { dirty$ } from "../stores";
 
 export interface EditorHandlers {
@@ -47,6 +46,8 @@ export interface EditorApi {
   destroy(): void;
   /** 滚动到源码某行（用于 预览→编辑器 / 大纲 同步） */
   scrollToLine(line: number): void;
+  /** 当前视口顶行（内容/块偏移变化后的滚动重对齐用） */
+  getTopLine(): number;
   /** 滚动到「小数行号」位置（块内插值同步，支持 1.5 这类行号） */
   scrollToFractionalLine(fline: number): void;
   /** 滚动到文档最底部（预览到底时的同步目标） */
@@ -64,8 +65,6 @@ export interface EditorApi {
   requestMeasure(): void;
   /** 记录干净文档引用（初始化/保存成功后调用） */
   markClean(): void;
-  /** 选区代理插件开关 */
-  setSelectionProxy(on: boolean): void;
 }
 
 /* Tab 键行为：
@@ -152,7 +151,6 @@ export function createEditorApi(
   parent: HTMLElement,
   initialDoc: string,
   handlers: EditorHandlers,
-  initialSelectionProxy: boolean,
   initialIndent: string,
   initialLang = "en"
 ): EditorApi {
@@ -161,9 +159,11 @@ export function createEditorApi(
 
   /* 缩进单位用 Compartment 动态重配置（设置切换 制表符/空格 时生效） */
   const indentCompartment = new Compartment();
+  /* 历史独立 Compartment：打开文档时卸载再重装 = 清空撤销历史 */
+  const historyCompartment = new Compartment();
+  /* 输入停顿多久后合并为新的撤销组（CM6 默认 500ms，收紧为 200ms） */
+  const HISTORY_NEW_GROUP_DELAY = 200;
   const phrasesCompartment = new Compartment();
-  /* 选区代理插件：设置开关（默认启用），Compartment 动态启停 */
-  const proxyCompartment = new Compartment();
   /* 干净文档引用：初始化或保存后记录 state.doc，用 Text.eq 判定脏状态 */
   let cleanDoc: Text | null = null;
   const phrasesFor = (lang: string) =>
@@ -176,18 +176,34 @@ export function createEditorApi(
       doc: initialDoc,
       extensions: [
         highlightSpecialChars(),
-        history(),
+        historyCompartment.of(history({ newGroupDelay: HISTORY_NEW_GROUP_DELAY })),
         dropCursor(),
-        rectangularSelection(),
         crosshairCursor(),
         bracketMatching(),
         highlightSelectionMatches(),
-        EditorState.allowMultipleSelections.of(true),
+        /* 禁用多光标：false 时状态层把任何新选区 asSingle() 折叠，
+         Ctrl/Cmd+Click、矩形拖拽、Ctrl-Alt-↑/↓ 等所有入口一并失效 */
+      EditorState.allowMultipleSelections.of(false),
+      /* 拖拽永远视为“移动”而非“添加”：Alt/Ctrl+左键拖拽不再产生
+         选区/光标扩展（矩形选区扩展已移除，此为兜底） */
+      EditorView.dragMovesSelection.of(() => true),
         EditorView.lineWrapping,
+        // webkitgtk 偶发 paste 事件 clipboardData 为空（剪贴板异步竞态）：
+        // 数据为空时走后端 ReadText 兜底插入，数据正常时交还 CM6 默认处理
+        EditorView.domEventHandlers({
+          paste(event, view) {
+            const data = event.clipboardData?.getData("text/plain");
+            if (data) return false;
+            event.preventDefault();
+            void readClipboard().then((text) => {
+              if (text) view.dispatch(view.state.replaceSelection(text));
+            });
+            return true;
+          },
+        }),
         markdown(),
         indentCompartment.of(indentUnit.of(initialIndent)),
         phrasesCompartment.of(phrasesFor(initialLang)),
-        proxyCompartment.of(initialSelectionProxy ? selectionSyncExtension() : []),
         editorTheme,
         syntaxHighlighting(mdHighlight),
         search({
@@ -213,7 +229,6 @@ export function createEditorApi(
             if (cleanDoc) dirty$.set(!cleanDoc.eq(u.state.doc));
           }
         }),
-        // 选区更新 → 提交给 webview 宿主的选区 api（见 selectionBridge.ts）
       ],
     }),
   });
@@ -281,6 +296,14 @@ export function createEditorApi(
     getDoc() {
       return view.state.doc.toString();
     },
+    getTopLine() {
+      try {
+        const block = view.lineBlockAtHeight(view.scrollDOM.scrollTop + 4);
+        return view.state.doc.lineAt(block.from).number;
+      } catch {
+        return 1;
+      }
+    },
     /** 整体替换文档（外部 file:changed 事件）：替换 + 记为新基线 */
     setDoc(text: string) {
       view.dispatch({
@@ -288,6 +311,14 @@ export function createEditorApi(
       });
       cleanDoc = view.state.doc;
       dirty$.set(false);
+      /* 限定撤销历史只包含打开后的记录：卸载再重装 history（重装即全新
+         空历史），同时抹掉上面全量替换自身产生的那条撤销记录 */
+      view.dispatch({ effects: historyCompartment.reconfigure([]) });
+      view.dispatch({
+        effects: historyCompartment.reconfigure(
+          history({ newGroupDelay: HISTORY_NEW_GROUP_DELAY })
+        ),
+      });
     },
     measure() {
       view.requestMeasure();
@@ -305,11 +336,6 @@ export function createEditorApi(
     markClean() {
       cleanDoc = view.state.doc;
       dirty$.set(false);
-    },
-    setSelectionProxy(on: boolean) {
-      view.dispatch({
-        effects: proxyCompartment.reconfigure(on ? selectionSyncExtension() : []),
-      });
     },
     setPhrases(lang: string) {
       view.dispatch({

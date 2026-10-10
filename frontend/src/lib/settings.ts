@@ -8,7 +8,7 @@
  * - 后端 config:changed 事件（外部改配置文件）→ 快照刷新 + 重放到各 store。
  */
 
-import { isWails, loadConfig, persistConfig, configExists, onBackendEvent } from "./bridge";
+import { loadConfig, persistConfig, configExists, onBackendEvent } from "./bridge";
 
 /** 后端 Config JSON 字段 ↔ 前端 localStorage 键 的映射 */
 const KEY_MAP: Record<string, string> = {
@@ -21,7 +21,6 @@ const KEY_MAP: Record<string, string> = {
   "md.fontPreview": "fontPreview",
   "md.fontSizeEd": "fontSizeEditor",
   "md.fontSizePv": "fontSizePreview",
-  "md.selectionProxy": "selectionProxy",
 };
 
 const LS_PREFIX = "md.";
@@ -65,7 +64,6 @@ export function kvSet(key: string, value: string): void {
 
 /** localStorage 存的是 "1"/"0" 的布尔字段 */
 function coerce(field: string, raw: string): unknown {
-  if (field === "selectionProxy") return raw === "1";
   const n = Number(raw);
   if ((field === "fontSizeEditor" || field === "fontSizePreview") && Number.isFinite(n)) return n;
   return raw;
@@ -94,7 +92,6 @@ export function onConfigReplay(cb: (snap: Snapshot) => void): void {
 
 /** boot 阶段调用一次（bootApp 内 await） */
 export async function initSettings(): Promise<void> {
-  if (!isWails()) return;
   wailsMode = true;
 
   const [cfg, exists] = await Promise.all([loadConfig(), configExists()]);

@@ -1,7 +1,5 @@
 <script lang="ts">
-  import { fly } from "svelte/transition";
-  import { cubicOut } from "svelte/easing";
-  import { toast$ as toast } from "../lib/stores";
+    import { toast$ as toast } from "../lib/stores";
 
   $effect(() => {
     if (!$toast) return;
@@ -17,7 +15,6 @@
     <div
       class="toast rounded-full border border-line bg-soft px-4 py-2 text-xs text-fg"
       role="status"
-      transition:fly={{ y: 10, duration: 260, easing: cubicOut }}
     >
       {$toast.msg}
     </div>

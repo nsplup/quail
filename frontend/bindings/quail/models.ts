@@ -33,7 +33,6 @@ export interface Config {
     "fontPreview": string;
     "fontSizeEditor": number;
     "fontSizePreview": number;
-    "selectionProxy": boolean;
     "recentFiles": string[] | null;
 }
 

@@ -4,7 +4,6 @@
 
   let {
     initialDoc,
-    initialSelectionProxy,
     initialIndent,
     onready,
     onchange,
@@ -14,8 +13,6 @@
     lang,
   }: {
     initialDoc: string;
-    /** 选区代理插件初始开关（设置里可随时切换） */
-    initialSelectionProxy: boolean;
     /** 初始缩进单位："\t" / "  " / "    "（设置里可随时切换） */
     initialIndent: string;
     onready: (api: EditorApi) => void;
@@ -40,7 +37,6 @@
         onsave: () => onsave(),
         ontopline: (line) => ontopline(line),
       },
-      initialSelectionProxy,
       initialIndent,
       lang ?? "en"
     );

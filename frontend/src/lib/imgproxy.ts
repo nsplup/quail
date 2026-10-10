@@ -9,14 +9,9 @@
  * 仍生成代理 URL 交由后端返回 403，前端 md-image 错误态展示。
  */
 
-export function isWailsEnv(): boolean {
-  return typeof window !== "undefined" && "__wails" in window;
-}
-
 export function rewriteImageSrc(src: string): string {
   if (!src) return src;
   if (src.startsWith("data:") || src.startsWith("/__imgproxy/")) return src;
-  if (!isWailsEnv()) return src;
 
   if (/^https?:\/\//i.test(src)) {
     return `/__imgproxy/remote?url=${encodeURIComponent(src)}`;

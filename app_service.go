@@ -20,6 +20,11 @@ type AppService struct {
 	dirty atomic.Bool
 }
 
+// NewAppService 构造函数。
+func NewAppService() *AppService {
+	return &AppService{}
+}
+
 // ServiceStartup 生命周期钩子。
 func (a *AppService) ServiceStartup(context.Context, application.ServiceOptions) error {
 	return nil
@@ -33,6 +38,17 @@ func (a *AppService) Ready() {
 	}
 	if win, ok := app.Window.GetByName("main"); ok {
 		win.Show()
+	}
+}
+
+// SetTitle 同步窗口标题（与文档名联动；未命名文档由前端传 "untitled"）。
+func (a *AppService) SetTitle(title string) {
+	app := application.Get()
+	if app == nil {
+		return
+	}
+	if win, ok := app.Window.GetByName("main"); ok {
+		win.SetTitle(title)
 	}
 }
 

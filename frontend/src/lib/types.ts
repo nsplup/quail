@@ -35,15 +35,11 @@ export interface PreviewApi {
   refresh(): void;
 }
 
-/** 由 AST 顶层节点切分出的预览块 */
+/** 由 AST 顶层节点切分出的预览块（行界映射单元；渲染由 Svelte 组件树完成） */
 export interface PreviewBlock {
-  /** 跨解析稳定的块标识（内容哈希 + 同类序号），驱动 keyed DOM 复用 */
-  id: string;
   index: number;
   /** mdast 顶层节点类型：heading / paragraph / code / table ... */
   type: string;
-  /** 由该子树渲染出的 HTML 片段 */
-  html: string;
   /** 在源码中的起始行（1-based，含） */
   startLine: number;
   /** 在源码中的结束行（1-based，含） */

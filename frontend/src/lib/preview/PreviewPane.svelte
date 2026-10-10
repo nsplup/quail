@@ -5,19 +5,21 @@
    * 拖动滚动条到底部/顶部不会因「估计高度与真实高度的差距累积」而回弹，
    * 滚动同步插值（offset/size）也基于真实布局。
    * 屏外块由浏览器跳过渲染/绘制，长文档滚动性能由 content-visibility 保障；
-   * 增量渲染保留：data 按 block.id keyed，未变更块的 html 引用不变，
-   * Svelte 跳过 innerHTML 写入 → 只有真正变化的块被重渲染。
+   * 增量渲染：hast 由 MarkdownRenderer 组件树直渲染（不经 {@html}），
+   * 增量解析复用未变化段的节点引用 → Svelte 跳过对应子树，只更新变化段。
    */
   import { onMount } from "svelte";
-  import { attachScrollbarAutohide } from "../scrollAuto";
-  import type { PreviewApi, PreviewBlock } from "../types";
+  import type { Root as HastRoot } from "hast";
+  import { openExternal } from "../bridge";
+  import MarkdownRenderer from "../markdown/MarkdownRenderer.svelte";
+  import type { PreviewApi } from "../types";
 
   let {
-    blocks,
+    hast,
     onready,
     onvisible,
   }: {
-    blocks: PreviewBlock[];
+    hast: HastRoot | null;
     onready: (api: PreviewApi) => void;
     /** 可视区首块变化（用于 预览→编辑器 同步滚动 与 大纲高亮）；atBottom=滚动到底 */
     onvisible: (index: number, atBottom: boolean) => void;
@@ -102,14 +104,21 @@
     return () => clearTimeout(t);
   });
 
-  /* 滚动条自动隐藏 */
-  $effect(() => {
-    if (!paneEl) return;
-    const el = paneEl.querySelector<HTMLElement>(".preview-scroll");
-    if (!el) return;
-    el.classList.add("scroll-autohide");
-    return attachScrollbarAutohide(el);
-  });
+  /* 预览区链接点击统一拦截 → 后端转发系统浏览器打开；
+     与 md-image 相同的模式：资源/动作一律交给 Go 侧处理 */
+  async function handlePreviewClick(e: MouseEvent): Promise<void> {
+    const target = e.target as HTMLElement | null;
+    const anchor = target?.closest?.("a");
+    if (!anchor) return;
+    const href = anchor.getAttribute("href") ?? "";
+    if (!href || href.startsWith("#")) return; // 文档内锚点：无对应实现，保持默认
+    e.preventDefault();
+    try {
+      await openExternal(href);
+    } catch {
+      /* 后端转发失败：已阻止默认导航，避免 webview 内跳转 */
+    }
+  }
 
   function handleScroll(): void {
     if (raf) return;
@@ -129,20 +138,12 @@
 
 <div class="pane pane-preview" bind:this={paneEl}>
   <div
-    class="preview-scroll h-full overflow-y-auto"
+    class="preview-scroll h-full overflow-y-scroll"
     onscroll={handleScroll}
+    onclick={handlePreviewClick}
     role="log"
     aria-label="preview"
   >
-    <!-- 顶部间隔元素：充当预览内容的 padding-top（首块不贴顶） -->
-    <div class="pv-top-pad" aria-hidden="true"></div>
-    {#each blocks as block, index (block.id)}
-      <div class="md-item" data-btype={block.type} data-index={index}>
-        <article class="md-block">
-          <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-          {@html block.html}
-        </article>
-      </div>
-    {/each}
+    <MarkdownRenderer {hast} />
   </div>
 </div>

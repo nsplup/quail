@@ -1,7 +1,5 @@
 <script lang="ts">
-  import { fade, fly } from "svelte/transition";
-  import { cubicOut } from "svelte/easing";
-  import Icon from "./Icon.svelte";
+    import Icon from "./Icon.svelte";
   import NumberInput from "./NumberInput.svelte";
   import TextInput from "./TextInput.svelte";
   import { t, locale, setLang } from "../lib/i18n.svelte";
@@ -14,7 +12,6 @@
     fontPreview$ as fontPreview,
     fontSizeEd$ as fontSizeEd,
     fontSizePv$ as fontSizePv,
-    selectionProxy$ as selectionProxy,
     settingsOpen$ as settingsOpen,
   } from "../lib/stores";
   import type { ThemeId, Lang, IndentId, CountMode } from "../lib/types";
@@ -48,8 +45,8 @@
 
 {#if $settingsOpen}
   <div
-    class="fixed inset-0 z-50 grid place-items-center bg-black/45"
-    transition:fade={{ duration: 180 }}
+    class="fixed inset-0 z-50 grid place-items-center"
+    style="background-color: rgba(0, 0, 0, 0.45);"
     role="dialog"
     aria-modal="true"
     aria-label={$t("settings.title")}
@@ -57,8 +54,7 @@
     onclick={(e) => e.target === e.currentTarget && settingsOpen.set(false)}
   >
     <div
-      class="w-[440px] max-w-[calc(100vw-48px)] rounded-2xl border border-line bg-soft py-5 shadow-2xl"
-      transition:fly={{ y: 14, duration: 240, easing: cubicOut }}
+      class="w-[440px] max-w-[calc(100vw-48px)] overflow-hidden rounded-2xl border border-line bg-soft py-5 shadow-2xl"
     >
       <header class="mb-4 flex items-center justify-between px-5">
         <h2 class="text-sm font-semibold text-fg">{$t("settings.title")}</h2>
@@ -67,7 +63,9 @@
         </button>
       </header>
 
-      <section class="max-h-[70vh] overflow-y-auto">
+      <!-- 滚动条常驻占位（scroll 而非 auto）：首帧即按 classic 布局，
+           避开 webkitgtk overlay/classic 切换导致的抖动 -->
+      <section class="settings-scroll max-h-[70vh] overflow-y-auto">
         <div class="flex flex-col gap-4 p-5 pt-0">
         <!-- 外观：一维主题卡片（每主题一张，卡片样式即主题本身） -->
         <div>
@@ -116,15 +114,6 @@
         <!-- 通用 -->
         <div>
           <div class="mb-2 text-xs text-muted">{$t("settings.general")}</div>
-          <div class="mb-2 text-[11px] text-muted">{$t("settings.selectionProxy")}</div>
-          <div class="mb-3 flex gap-2">
-            <button class="pill" class:active={$selectionProxy} onclick={() => selectionProxy.set(true)}>
-              {$t("settings.proxyOn")}
-            </button>
-            <button class="pill" class:active={!$selectionProxy} onclick={() => selectionProxy.set(false)}>
-              {$t("settings.proxyOff")}
-            </button>
-          </div>
           <div class="mb-2 text-[11px] text-muted">{$t("settings.countMode")}</div>
           <div class="mb-3 flex gap-2">
             {#each counts as c (c.id)}
@@ -168,3 +157,11 @@
     </div>
   </div>
 {/if}
+
+<style>
+  /* 滚动条常驻：scroll（而非 auto）让槽位从首帧起就固定占位，
+     webkitgtk 不再在 overlay/classic 间切换，抖动消失 */
+  .settings-scroll {
+    overflow-y: scroll;
+  }
+</style>

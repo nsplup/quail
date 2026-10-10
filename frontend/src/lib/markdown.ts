@@ -1,19 +1,28 @@
 /**
- * Markdown 源码 → mdast AST → 预览块 HTML。
+ * Markdown 源码 → mdast → HAST（数据）+ 预览块行界（映射）。
  *
  * 约定（与产品需求一致）：
  * - AST 只从源码单向构建，绝不反向写回源码；
  * - 保存时永远使用 Markdown 源码本身；
  * - 同步滚动、大纲、预览渲染全部依赖这份 AST 的位置信息。
+ *
+ * 渲染管线（Svelte 组件树直渲染，不经 HTML 字符串 / {@html}）：
+ *   parseMarkdown → mdastToHastRaw（注入行号锚 + rehype-raw 融合）→ HAST Root
+ *   → stores.hast$ → MarkdownRenderer/MarkdownNode 递归组件 → DOM。
+ * 块行界由锚 comment 驱动（blocksFromHast），供滚动同步 / 大纲 / 增量解析使用。
  */
 import { unified } from "unified";
 import remarkParse from "remark-parse";
 import remarkGfm from "remark-gfm";
 import { toHast } from "mdast-util-to-hast";
-import { toHtml } from "hast-util-to-html";
 import { raw as rehypeRaw } from "hast-util-raw";
-import type { Root as HastRoot, ElementContent as HastContent } from "hast";
-import type { Root, RootContent, Content, PhrasingContent, Image } from "mdast";
+import type {
+  Root as HastRoot,
+  ElementContent as HastContent,
+  Element as HastElement,
+  RootContent,
+} from "hast";
+import type { Root, RootContent as MdastContent, PhrasingContent, Image } from "mdast";
 import type { PreviewBlock, OutlineItem } from "./types";
 import { rewriteImageSrc } from "./imgproxy";
 
@@ -29,21 +38,34 @@ export function parseMarkdown(src: string): Root {
  * raw HTML（如 <details>）在 HAST 层被自动融合成完整 element 树，
  * 内部 markdown 是其 children——无需任何手写 details 扫描/合并逻辑。
  */
-/** 顶层行号锚点 comment 前缀（块分块用，渲染前剥除） */
+/** 顶层行号锚点 comment 前缀（块分块 / 渲染段切分用；渲染组件跳过该 comment） */
 const MDL = "mdl:";
 
 interface RawResult {
   hast: HastRoot;
-  /** 树中存在 raw HTML（rehype-raw 执行过融合） */
+  /** 树中任意深度存在 raw HTML（rehype-raw 执行过融合） */
   hasRaw: boolean;
+}
+
+/** 任意深度是否存在 raw 节点（raw HTML 可能嵌在列表/引用内，顶层检测会漏） */
+function treeHasRaw(node: HastContent): boolean {
+  if (node.type === "raw") return true;
+  const kids = (node as { children?: HastContent[] }).children;
+  return Array.isArray(kids) ? kids.some(treeHasRaw) : false;
+}
+
+function isMdlAnchor(node: HastContent): boolean {
+  return (
+    node.type === "comment" &&
+    (node as { value: string }).value.startsWith(MDL)
+  );
 }
 
 function mdastToHastRaw(root: Root): RawResult {
   const hast = toHast(root as never, {
     allowDangerousHtml: true,
-    // <img> → <md-image>（原生自定义元素，见 md-image.ts）：
-    // data-src 经 ImgProxy 重写（本地白名单 / 远程缓存），
-    // 浏览器解析 {@html} 时自动实例化，零框架运行时。
+    // <img> → <md-image>（渲染层 MarkdownImage 组件的容器标签）：
+    // data-src 经 ImgProxy 重写（本地白名单 / 远程缓存）
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     handlers: {
       // 签名：handler(state, node, parent) —— 第一个参数是 state 上下文
@@ -59,7 +81,7 @@ function mdastToHastRaw(root: Root): RawResult {
         }) as unknown as HastContent) as never,
     } as never,
   }) as HastRoot;
-  const hasRaw = (hast.children as HastContent[]).some((n) => n.type === "raw");
+  const hasRaw = (hast.children as HastContent[]).some(treeHasRaw);
   // 在每个顶层节点前注入 mdast 行号锚：rehype-raw 的整树重解析会丢弃 position，
   // 但 HTML 注释会被 parse5 原样保留，从而在融合后的树上恢复行号。
   const anchored = { type: "root", children: [] as HastContent[] } as unknown as HastRoot;
@@ -72,7 +94,96 @@ function mdastToHastRaw(root: Root): RawResult {
     }
     anchored.children.push(n);
   }
-  return { hast: rehypeRaw(anchored as never) as HastRoot, hasRaw };
+  // 无 raw HTML 时跳过 parse5 全树重解析（大文档主要成本），锚天然保留
+  const result = hasRaw ? (rehypeRaw(anchored as never) as HastRoot) : anchored;
+  // 剥除 HAST position：渲染层只消费结构/文本，不读行号（行号在锚 comment 与
+  // mdast root 上）；统一剥除后增量（局部转换、position 为 chunk 行号）与全量
+  // （全文行号）的 HAST 结构完全一致，渲染层引用对比/快照测试不受干扰。
+  for (const n of result.children as HastContent[]) stripHastPosition(n);
+  annotateImageContext(result);
+  return { hast: result, hasRaw };
+}
+
+/** 递归剥除 HAST 节点 position（in-place；含 children 深层） */
+function stripHastPosition(node: HastContent): void {
+  const n = node as { position?: unknown };
+  delete n.position;
+  const kids = (node as { children?: HastContent[] }).children;
+  if (Array.isArray(kids)) for (const k of kids) stripHastPosition(k);
+}
+
+/* ---------------- 图片上下文标注（块级 vs 行内） ---------------- */
+
+/** 是否 md-image 元素（编译期 image handler 的产物） */
+const isMdImageEl = (n: HastContent): boolean =>
+  n.type === "element" && (n as { tagName?: string }).tagName === "md-image";
+
+/** 是否空白 text 节点 */
+const isBlankText = (n: HastContent): boolean =>
+  n.type === "text" && !((n as { value?: string }).value ?? "").trim();
+
+/**
+ * 独立图片段判定：p 的 children 全部为 md-image / 空白 text /
+ * 「内部同样只含 md-image+空白的 <a>」，且**恰好一张图**。
+ * - [![img](src)](url) 链接包裹独自成块也算块级图片；
+ * - 一行多图不算块级：块级占位 width:100% 会让多图垂直堆叠，
+ *   行内模式（原尺寸）才符合并排的视觉预期 → 归入行内。
+ */
+export function isImageOnlyParagraph(p: HastElement): boolean {
+  let imageCount = 0;
+  for (const c of p.children) {
+    if (isBlankText(c)) continue;
+    if (isMdImageEl(c)) {
+      imageCount++;
+      continue;
+    }
+    if (c.type === "element" && (c as HastElement).tagName === "a") {
+      let inner = 0;
+      for (const g of (c as HastElement).children) {
+        if (isBlankText(g)) continue;
+        if (!isMdImageEl(g)) return false;
+        inner++;
+      }
+      if (inner !== 1) return false;
+      imageCount++;
+      continue;
+    }
+    return false;
+  }
+  return imageCount === 1;
+}
+
+/**
+ * 给每个 md-image 标注渲染上下文：块级（独立成段，含 <a> 包裹）不标注，
+ * 行内（与文字混排 / 标题 / 表格等一切其他场景）标 data-inline="1"。
+ * 渲染层与 CSS 按该标注分派两种占位/尺寸实现。
+ */
+function annotateImageContext(root: HastRoot): void {
+  const visit = (el: HastElement, parent: HastElement | null, grand: HastElement | null): void => {
+    if (isMdImageEl(el)) {
+      // 块级判定以「最近的段落祖先」为准：<a> 包裹时上溯一层
+      const p = parent && parent.tagName === "a" ? grand : parent;
+      const blockLevel = p !== null && p.tagName === "p" && isImageOnlyParagraph(p);
+      if (!blockLevel) (el.properties ??= {})["data-inline"] = "1";
+      return;
+    }
+    for (const c of el.children) {
+      if (c.type === "element") visit(c as HastElement, el, parent);
+    }
+  };
+  for (const c of root.children as HastContent[]) {
+    if (c.type === "element") visit(c as HastElement, null, null);
+  }
+}
+
+/** mdast 根 → HAST 根（含行号锚；raw HTML 已融合） */
+export function rootToHast(root: Root): HastRoot {
+  return mdastToHastRaw(root).hast;
+}
+
+/** Markdown 源码 → HAST 根（管线唯一入口：parse → toHast → raw 融合） */
+export function compileMarkdown(src: string): HastRoot {
+  return rootToHast(parseMarkdown(src));
 }
 
 /** hast 元素/文本节点类型名（预览块 type 仅供展示/调试） */
@@ -81,128 +192,103 @@ function hastType(node: HastContent): string {
   return node.type;
 }
 
-/** 递归剥除锚点 comment（输出 HTML 必须干净） */
-function stripAnchors(node: HastContent): void {
-  const kids = (node as { children?: HastContent[] }).children;
-  if (kids) {
-    const kept = kids.filter(
-      (c) => !(c.type === "comment" && (c as { value: string }).value.startsWith(MDL))
-    );
-    (node as { children: HastContent[] }).children = kept;
-    kept.forEach(stripAnchors);
-  }
+/**
+ * HAST 根 → 渲染段列表（MarkdownRenderer 顶层切分）。
+ * 每个锚 comment 开启新段，段收集锚后的全部内容节点——
+ * 段数与 blocksFromHast 的块数一一对应（滚动同步依赖该不变量）。
+ */
+export interface HastSegment {
+  /** 段首节点类型（md-item 的 data-btype） */
+  type: string;
+  nodes: HastContent[];
 }
 
-/** 单个 HAST 顶层节点 → HTML（rehype-stringify 核心 hast-util-to-html） */
-function renderHastNode(node: HastContent): string {
-  try {
-    return toHtml(node as never);
-  } catch {
-    const pos = (node as { position?: { start?: { line?: number } } }).position;
-    return `<p class="render-error">[render error @ line ${pos?.start?.line ?? "?"}]</p>`;
-  }
-}
-
-const htmlMemo = new Map<string, string>();
-const MEMO_MAX = 4096;
-
-function memoHtml(key: string, node: HastContent): string {
-  const cached = htmlMemo.get(key);
-  if (cached !== undefined) return cached;
-  const html = renderHastNode(node);
-  if (htmlMemo.size >= MEMO_MAX) {
-    // 简单防膨胀：清掉最早的一半
-    let drop = htmlMemo.size >> 1;
-    for (const k of htmlMemo.keys()) {
-      htmlMemo.delete(k);
-      if (--drop <= 0) break;
+export function splitSegments(hast: HastRoot): HastSegment[] {
+  const segs: HastSegment[] = [];
+  let cur: HastSegment | null = null;
+  for (const n of hast.children as HastContent[]) {
+    if (isMdlAnchor(n)) {
+      cur = null; // 新锚：下一段由其后的首个内容节点开启
+      continue;
+    }
+    if (n.type === "text" && !(n as { value?: string }).value?.trim()) continue;
+    if (!cur) {
+      cur = { type: hastType(n), nodes: [n] };
+      segs.push(cur);
+    } else {
+      cur.nodes.push(n);
     }
   }
-  htmlMemo.set(key, html);
-  return html;
+  return segs;
 }
 
-/** FNV-1a 32bit：内容键只用做 Map 键与 id，不参与安全场景 */
-function hashStr(s: string): string {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i);
-    h = Math.imul(h, 0x01000193);
-  }
-  return (h >>> 0).toString(36) + "_" + s.length.toString(36);
-}
-
-/** AST 顶层节点 → 虚拟滚动用的预览块列表（需要源码以计算内容键） */
 /**
  * HAST 顶层节点 → 预览块（行号来自顶层锚点 comment；区间无缝覆盖全部源行，
  * 满足增量解析对块边界的连续性要求）。
+ * 块只承载行界/类型映射，不再生成 HTML（渲染交给 Svelte 组件树）。
  */
 function blocksFromHast(
-  raw: RawResult,
-  srcForHash: string,
+  hast: HastRoot,
+  totalLines: number,
   baseLine = 0
-): { blocks: PreviewBlock[]; fused: boolean } {
-  const seen = new Map<string, number>();
-  const top = raw.hast.children as HastContent[];
+): { blocks: PreviewBlock[]; unmapped: boolean } {
+  const top = hast.children as HastContent[];
   // 锚跟随其后的首个内容节点；行号区间 = 本锚 start .. 下一锚 start - 1（无缝覆盖）
   const blocks: PreviewBlock[] = [];
+  /* 上一 emitted 块的（chunk 内）endLine：块起点若与它有间隙（锚前空行等），
+     起点向前扩到 lastEnd+1。增量路径的局部 chunk 首块由此认领锚前的空行——
+     全量路径这些行由上一块的 emit(a-1) 吸收，局部 chunk 没有上一块，必须自补 */
+  let lastEnd = 0;
   let pending: { start: number; end: number } | null = null;
-  let pendingHtml: { node: HastContent; clean: HastContent } | null = null;
-  let fused = false;
+  let pendingNode: HastContent | null = null;
+  /* true = 存在未挂上锚点的节点 → 块边界不可靠，调用方应保守全量 */
+  let unmapped = false;
 
   const emit = (endLine: number): void => {
-    if (!pending || !pendingHtml) return;
-    const { node, clean } = pendingHtml;
-    const html = toHtml(clean as never);
-    const contentKey = hastType(clean) + "\u0000" + hashStr(html);
-    const nth = seen.get(contentKey) ?? 0;
-    seen.set(contentKey, nth + 1);
+    if (!pending || !pendingNode) return;
     blocks.push({
-      id: `${contentKey}#${nth}`,
       index: blocks.length,
-      type: hastType(clean),
-      html: memoHtml(contentKey, clean),
-      startLine: pending.start + baseLine,
+      type: hastType(pendingNode),
+      startLine: Math.min(pending.start, lastEnd + 1) + baseLine,
       endLine: endLine + baseLine,
     });
-    void node;
+    lastEnd = endLine;
     pending = null;
-    pendingHtml = null;
+    pendingNode = null;
   };
 
   for (const n of top) {
-    if (n.type === "comment") {
-      const v = (n as { value: string }).value;
-      if (v.startsWith(MDL)) {
-        // 新锚：结算上一块（区间到本锚 start - 1），挂新锚
-        const [a, b] = v.slice(MDL.length).split(":").map(Number);
-        if (!Number.isFinite(a) || !Number.isFinite(b)) continue;
-        if (pending) emit(a - 1);
-        pending = { start: a, end: b };
-        pendingHtml = null;
-        continue;
-      }
-    }
-    if (n.type === "text" && !(n as { value?: string }).value?.trim()) continue;
-    if (pendingHtml) continue; // 同一锚下的多余节点（罕见）：保守跳过
-    if (!pending) {
-      fused = true; // 无锚可挂（不应发生）
+    if (isMdlAnchor(n)) {
+      // 新锚：结算上一块（区间到本锚 start - 1），挂新锚
+      const [a, b] = (n as { value: string }).value.slice(MDL.length).split(":").map(Number);
+      if (!Number.isFinite(a) || !Number.isFinite(b)) continue;
+      if (pending) emit(a - 1);
+      pending = { start: a, end: b };
+      pendingNode = null;
       continue;
     }
-    const clean = structuredClone(n);
-    stripAnchors(clean);
-    pendingHtml = { node: n, clean };
+    if (n.type === "text" && !(n as { value?: string }).value?.trim()) continue;
+    if (pendingNode) continue; // 同一锚下的多余节点（罕见）：保守跳过
+    if (!pending) {
+      unmapped = true; // 无锚可挂（不应发生）：块边界不可靠
+      continue;
+    }
+    pendingNode = n;
   }
   if (pending) emit(pending.end);
-  void srcForHash;
-  return { blocks, fused };
+  /* 尾部未映射行（文档末尾空行等）：并入最后一块，保证行界无缝覆盖到 chunk 末行。
+     与 lastEnd（首部认领）成对：锚区间之外的行不允许悬空 */
+  if (blocks.length && lastEnd < totalLines) {
+    blocks[blocks.length - 1].endLine += totalLines - lastEnd;
+  }
+  return { blocks, unmapped };
 }
 
 export function buildBlocks(root: Root, src: string): PreviewBlock[] {
-  return blocksFromHast(mdastToHastRaw(root), src).blocks;
+  return blocksFromHast(rootToHast(root), src.split("\n").length).blocks;
 }
 
-function textOf(node: PhrasingContent | RootContent | null | undefined): string {
+function textOf(node: PhrasingContent | MdastContent | null | undefined): string {
   if (!node) return "";
   const n = node as unknown as Record<string, unknown>;
   if (n.type === "text" || n.type === "inlineCode" || n.type === "html") {
@@ -257,27 +343,64 @@ export function blockIndexForLine(blocks: PreviewBlock[], line: number): number 
  * 1. 行级公共前缀/后缀 diff 定位变化行区间；
  * 2. 映射到旧的顶层块区间 [i0, i1]，并按容器延续规则（列表/引用/表格/围栏）
  *    向外扩展，代码围栏未闭合时扩展到开启行/文末；
- * 3. 只对该区间的源码做局部 parse，拼接出新 blocks 与新 root（行号平移修正）；
- * 4. 块 id 基于内容键 + 出现序号，未编辑块 id 与 html 引用均不变 →
- *    预览端 keyed/VList 渲染只触碰真正变化的块（增量渲染）。
+ * 3. 只对该区间的源码做局部 parse，拼接出新 blocks / root（行号平移修正）与 HAST；
+ * 4. HAST 拼接复用 head/tail 段的节点引用（仅锚 comment 重建平移）——
+ *    渲染层 MarkdownNode 以节点引用为 props，引用不变 → Svelte 跳过该子树，
+ *    只有真正变化的块被重渲染（增量渲染）。
  * 兜底：每 25 次增量或调用方 idle 时强制全量解析，防止启发式误差累积。
  */
 
 export interface IncrementalParseState {
   src: string;
   root: Root | null;
+  /** 上一轮 HAST 根（增量拼接复用 head/tail 节点引用） */
+  hast: HastRoot | null;
   blocks: PreviewBlock[];
+  /** 连续增量次数：达到阈值（SELF_HEAL_EVERY）强制全量防启发式误差累积；
+   *  可选字段，旧调用方不传也能跑（按 0 处理） */
+  incrementalCount?: number;
 }
 
 export interface IncrementalParseResult {
   root: Root;
+  /** HAST 根（全量 = rootToHast；增量 = head/tail 引用复用 + 局部转换拼接） */
+  hast: HastRoot;
   blocks: PreviewBlock[];
   full: boolean;
+  /** 连续增量次数（调用方应存回 IncrementalParseState.incrementalCount；全量后归零） */
+  incrementalCount: number;
 }
+
+/** 连续增量 N 次后强制全量（自愈式全量阈值，唯一的阈值归属点） */
+const SELF_HEAL_EVERY = 25;
 
 /** 可能与前一顶层块延续成同一容器的行首特征 */
 const CONT_RE = /^\s*(?:[-*+]|\d{1,9}[.)]|>|(?:```+|~~~+))\s*/;
 const FENCE_RE = /^\s{0,3}(```+|~~~+)/;
+
+/** 第一个 endLine >= line 的块下标（blocks 按 startLine 升序；找不到 = length） */
+function firstBlockEndingAtOrAfter(blocks: PreviewBlock[], line: number): number {
+  let lo = 0;
+  let hi = blocks.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (blocks[mid].endLine < line) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+/** 最后一个 startLine <= line 的块下标（找不到 = -1） */
+function lastBlockStartingAtOrBefore(blocks: PreviewBlock[], line: number): number {
+  let lo = -1;
+  let hi = blocks.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (blocks[mid].startLine <= line) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo;
+}
 
 /** lines[0..end) 的未闭合围栏 → 返回开启行（1-based）或 -1 */
 function openFenceLine(lines: string[], end: number): number {
@@ -304,18 +427,19 @@ function parseRange(
   fromLine: number,
   toLine: number,
   baseLine: number
-): { children: RootContent[]; blocks: PreviewBlock[] | null } {
+): { children: MdastContent[]; hast: HastRoot; blocks: PreviewBlock[] | null } {
   const chunk = lines.slice(fromLine - 1, toLine).join("\n");
   const root = processor.parse(chunk) as unknown as Root;
   const parsed = mdastToHastRaw(root);
   // 局部 chunk 含 raw HTML（rehype-raw 融合）时块边界可能跨越区间外 → 保守全量
-  const { blocks, fused } = parsed.hasRaw
-    ? { blocks: null as PreviewBlock[] | null, fused: false }
-    : blocksFromHast(parsed, chunk, baseLine);
-  // occurrence 去重由调用方统一处理；无法可靠映射 → 调用方保守全量
+  const { blocks, unmapped } = parsed.hasRaw
+    ? { blocks: null as PreviewBlock[] | null, unmapped: false }
+    : blocksFromHast(parsed.hast, toLine - fromLine + 1, baseLine);
+  // 无法可靠映射 → 调用方保守全量
   return {
     children: root.children,
-    blocks: fused || !blocks ? null : blocks.map((b) => ({ ...b, id: b.id.split("#")[0] })),
+    hast: parsed.hast,
+    blocks: unmapped || !blocks ? null : blocks,
   };
 }
 
@@ -326,10 +450,18 @@ export function buildBlocksIncremental(
 ): IncrementalParseResult {
   const runFull = (): IncrementalParseResult => {
     const root = parseMarkdown(nextSrc);
-    return { root, blocks: buildBlocks(root, nextSrc), full: true };
+    const hast = rootToHast(root);
+    return { root, hast, blocks: buildBlocks(root, nextSrc), full: true, incrementalCount: 0 };
   };
 
-  if (forceFull || !prev.root || !prev.src || prev.blocks.length === 0) {
+  const incCount = prev.incrementalCount ?? 0;
+  if (
+    forceFull ||
+    incCount >= SELF_HEAL_EVERY ||
+    !prev.root ||
+    !prev.src ||
+    prev.blocks.length === 0
+  ) {
     return runFull();
   }
   const prevBlocks = prev.blocks;
@@ -355,11 +487,9 @@ export function buildBlocksIncremental(
   const delta = nextLines.length - prevLines.length;
   if (prevChgEnd < prevChgStart && delta === 0) return runFull(); // 内容相同（不应发生）
 
-  // 变化区间 → 相交旧块区间 [i0, i1]（可为空：i0 = i1 + 1）
-  let i0 = prevBlocks.findIndex((b) => b.endLine >= prevChgStart);
-  if (i0 === -1) i0 = prevBlocks.length;
-  let i1 = prevBlocks.length - 1;
-  while (i1 >= 0 && prevBlocks[i1].startLine > prevChgEnd) i1--;
+  // 变化区间 → 相交旧块区间 [i0, i1]（可为空：i0 = i1 + 1）；块行界升序 → 二分
+  let i0 = firstBlockEndingAtOrAfter(prevBlocks, prevChgStart);
+  let i1 = lastBlockStartingAtOrBefore(prevBlocks, prevChgEnd);
 
   // ---- 重解析区间（新文档行号）：锚定在未受影响块的边界上 ----
   // 起点：i0-1 块的末行 + 1（该行 < prevChgStart ≤ p+1，行号不变）
@@ -370,12 +500,19 @@ export function buildBlocksIncremental(
       ? nextLines.length
       : prevBlocks[i1 + 1].startLine + delta - 1;
 
-  // 容器延续扩展：列表/引用/表格/围栏跨越块边界时，受影响范围向外扩
+  // 容器延续扩展：列表/引用/表格/围栏跨越块边界时，受影响范围向外扩；
+  // 段落延续扩展：chunk 边界两侧相邻行均非空（无空行分隔）时同样外扩——
+  // 否则纯插入行会被局部 parse 成独立段落，与全量 parse 的 lazy continuation
+  // 语义（无空行的相邻行归属同一段落）不一致。
   const headContinues = (): boolean => {
     const firstChanged = nextLines[nextStart - 1] ?? "";
     const prevTail =
       i0 > 0 ? prevLines[Math.min(prevBlocks[i0 - 1].endLine, prevLines.length) - 1] : "";
-    return CONT_RE.test(firstChanged) || CONT_RE.test(prevTail);
+    return (
+      CONT_RE.test(firstChanged) ||
+      CONT_RE.test(prevTail) ||
+      (firstChanged.trim() !== "" && prevTail.trim() !== "")
+    );
   };
   const tailContinues = (): boolean => {
     const lastChanged = nextLines[nextEnd - 1] ?? "";
@@ -383,7 +520,11 @@ export function buildBlocksIncremental(
       i1 + 1 < prevBlocks.length && prevBlocks[i1 + 1].startLine + delta - 1 < nextLines.length
         ? nextLines[prevBlocks[i1 + 1].startLine + delta - 1]
         : "";
-    return CONT_RE.test(lastChanged) || CONT_RE.test(nextHead);
+    return (
+      CONT_RE.test(lastChanged) ||
+      CONT_RE.test(nextHead) ||
+      (lastChanged.trim() !== "" && nextHead.trim() !== "")
+    );
   };
 
   let guard = 0;
@@ -405,8 +546,7 @@ export function buildBlocksIncremental(
     const mapped = fenceBefore <= p ? fenceBefore : -1;
     if (mapped > 0) {
       nextStart = Math.min(nextStart, mapped);
-      i0 = prevBlocks.findIndex((b) => b.endLine >= nextStart);
-      if (i0 === -1) i0 = prevBlocks.length;
+      i0 = firstBlockEndingAtOrAfter(prevBlocks, nextStart);
     } else {
       return runFull(); // 围栏开启行落在变化区间内，无法安全定位
     }
@@ -436,42 +576,114 @@ export function buildBlocksIncremental(
     b.startLine += delta;
     b.endLine += delta;
   }
-
-  // id 去重（内容相同块按出现序消解）
-  const seen = new Map<string, number>();
-  for (const b of blocks) {
-    const nth = seen.get(b.id) ?? 0;
-    seen.set(b.id, nth + 1);
-    if (nth > 0) b.id = `${b.id}~${nth}`;
+  if (local.blocks.length === 0) {
+    /* 局部区间无锚（纯空行/空 chunk）：不产块，但区间 [nextStart..nextEnd] 的行
+       必须有人认领——并入相邻复用块，否则 head/tail 间出现行界空洞。
+       注意必须在 tail 平移之后执行（否则赋值会被随后的 += delta 二次修改） */
+    if (headBlocks.length > 0) {
+      headBlocks[headBlocks.length - 1].endLine = nextEnd;
+    } else if (tailBlocks.length > 0) {
+      tailBlocks[0].startLine = nextStart;
+    }
   }
 
-  // 拼接 root.children，并同步修正行号（大纲依赖 position.start.line）
-  const children = [
+  /* ---- HAST 拼接（head/tail 段节点引用复用 → 渲染层增量更新）----
+     前提：prev.hast 顶层为「锚 comment + 内容节点」结构且锚数 === 块数；
+     锚 comment 重建（行号平移），内容节点引用原样保留。
+     锚定位只依赖锚出现序（不依赖每锚一节点：段内多节点随段整体复用）。 */
+  const prevHast = prev.hast;
+  const anchorCount = (children: HastContent[]): number => {
+    let n = 0;
+    for (const c of children) if (isMdlAnchor(c)) n++;
+    return n;
+  };
+  const nthAnchorIndex = (children: HastContent[], nth: number): number => {
+    let n = 0;
+    for (let k = 0; k < children.length; k++) {
+      if (isMdlAnchor(children[k])) {
+        if (n === nth) return k;
+        n++;
+      }
+    }
+    return -1;
+  };
+  if (!prevHast || anchorCount(prevHast.children as HastContent[]) !== prevBlocks.length) {
+    return runFull(); // 结构漂移：保守全量重建引用
+  }
+  if (anchorCount(local.hast.children as HastContent[]) !== local.blocks.length) {
+    return runFull();
+  }
+  const shiftAnchor = (c: HastContent, by: number): HastContent => {
+    const [a, b] = (c as { value: string }).value.slice(MDL.length).split(":").map(Number);
+    return { type: "comment", value: `${MDL}${a + by}:${b + by}` } as HastContent;
+  };
+  const headEnd = i0 < prevBlocks.length ? nthAnchorIndex(prevHast.children as HastContent[], i0) : -1;
+  const tailStart =
+    i1 + 1 < prevBlocks.length ? nthAnchorIndex(prevHast.children as HastContent[], i1 + 1) : -1;
+  const headChildren = headEnd >= 0 ? prevHast.children.slice(0, headEnd) : prevHast.children;
+  const tailChildren = tailStart >= 0 ? prevHast.children.slice(tailStart) : [];
+  /* 段间分隔规范化：toHast 会在顶层节点之间输出 "\n" 分隔 text，但其数量随
+     chunk 边界与空行增删而变化，无法在拼接边界精确对齐（多/少一个 "\n" 会让
+     HAST 与全量 parse 不一致）。统一做法：各段剥去首尾空白 text 后重建段间
+     分隔符——与 toHast 的 newline-join 语义一致，段内分隔原样保留。 */
+  const localSeg: HastContent[] = [];
+  for (const c of local.hast.children as HastContent[]) {
+    localSeg.push(isMdlAnchor(c) ? shiftAnchor(c, baseLine) : c);
+  }
+  const hastChildren: HastContent[] = [];
+  const pushSeg = (seg: HastContent[]): void => {
+    while (seg.length) {
+      const f = seg[0];
+      if (f.type === "text" && !(f as { value?: string }).value?.trim()) seg.shift();
+      else break;
+    }
+    while (seg.length) {
+      const l = seg[seg.length - 1];
+      if (l.type === "text" && !(l as { value?: string }).value?.trim()) seg.pop();
+      else break;
+    }
+    if (!seg.length) return;
+    if (hastChildren.length) {
+      hastChildren.push({ type: "text", value: "\n" } as HastContent);
+    }
+    hastChildren.push(...seg);
+  };
+  pushSeg([...(headChildren as HastContent[])]);
+  pushSeg(localSeg);
+  {
+    const tailSeg: HastContent[] = [];
+    for (const c of tailChildren as HastContent[]) {
+      tailSeg.push(isMdlAnchor(c) ? shiftAnchor(c, delta) : c);
+    }
+    pushSeg(tailSeg);
+  }
+  const hast: HastRoot = { type: "root", children: hastChildren } as unknown as HastRoot;
+
+  /* 行号修正走克隆（P0 不变量：绝不原地改共享节点）——prev.root 的子节点
+     可能被上层快照/派生树引用，原地 +delta 会让旧快照行号漂移 */
+  const shiftLine = <N extends MdastContent>(node: N, by: number): N => {
+    if (!node.position) return node;
+    return {
+      ...node,
+      position: {
+        ...node.position,
+        start: { ...node.position.start, line: node.position.start.line + by },
+        end: { ...node.position.end, line: node.position.end.line + by },
+      },
+    } as N;
+  };
+  const children: MdastContent[] = [
     ...prev.root.children.slice(0, i0),
-    ...local.children,
-    ...prev.root.children.slice(i1 + 1),
+    ...local.children.map((n) => shiftLine(n, baseLine)),
+    ...prev.root.children.slice(i1 + 1).map((n) => shiftLine(n, delta)),
   ];
-  for (const node of prev.root.children.slice(i1 + 1)) {
-    if (node.position) {
-      node.position.start.line += delta;
-      node.position.end.line += delta;
-    }
-  }
-  for (const node of local.children) {
-    if (node.position) {
-      node.position.start.line += baseLine;
-      node.position.end.line += baseLine;
-    }
-  }
-
   const root: Root = {
     ...prev.root,
     children,
   };
-  return { root, blocks, full: false };
+  return { root, hast, blocks, full: false, incrementalCount: incCount + 1 };
 }
 
-/** 英文单词匹配 */
 /**
  * 校验块行界是否连续覆盖整个文档（1..行数）：
  * 通过 → 增量解析结果与全量一致，无需周期性全量重算（自愈）。

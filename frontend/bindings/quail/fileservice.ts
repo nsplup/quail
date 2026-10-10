@@ -67,3 +67,10 @@ export function Save(content: string, force: boolean): $CancellablePromise<$mode
 export function SaveAs(path: string, content: string): $CancellablePromise<$models.SaveResult | null> {
     return $Call.ByID(4000858594, path, content);
 }
+
+/**
+ * StartupDoc 启动文档：命令行传入路径则打开，否则空文档（untitled）。
+ */
+export function StartupDoc(): $CancellablePromise<$models.DocState | null> {
+    return $Call.ByID(2039704802);
+}

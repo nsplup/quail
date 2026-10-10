@@ -40,9 +40,6 @@ export const zhMessages = {
     countChars: "汉字",
     countAuto: "跟随语言",
     countAutoHint: "根据界面语言自动选择单词 / 汉字统计",
-    selectionProxy: "选区代理",
-    proxyOn: "启用",
-    proxyOff: "停用",
     fontEditor: "编辑区字体",
     fontPreview: "预览区字体",
     fontSizeEditor: "编辑区字号",
@@ -64,6 +61,13 @@ export const zhMessages = {
     fileReloaded: "文件已在磁盘上更新，已重新加载",
     fileChangedDirty: "文件已被外部修改（本地有未保存修改，未自动加载）",
     fileDeleted: "文件已被外部删除",
+  },
+  preview: {
+    imageLoading: "图片加载中…",
+    imageRestricted: "图片访问受限",
+    imageNotFound: "图片不存在",
+    imageFailed: "图片加载失败",
+    imageReload: "刷新",
   },
 } as const;
 
@@ -102,9 +106,6 @@ export const enMessages = {
     countChars: "CJK characters",
     countAuto: "Follow language",
     countAutoHint: "Pick words / chars automatically by UI language",
-    selectionProxy: "Selection proxy",
-    proxyOn: "On",
-    proxyOff: "Off",
     fontEditor: "Editor font",
     fontPreview: "Preview font",
     fontSizeEditor: "Editor font size",
@@ -123,6 +124,13 @@ export const enMessages = {
   toast: {
     saved: "Saved (local stub, backend pending)",
     saveFailed: "Save failed",
+  },
+  preview: {
+    imageLoading: "Loading image…",
+    imageRestricted: "Image access restricted",
+    imageNotFound: "Image not found",
+    imageFailed: "Failed to load image",
+    imageReload: "Reload",
   },
 } as const;
 

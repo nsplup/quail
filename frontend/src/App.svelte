@@ -1,6 +1,5 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import "./lib/md-image"; // 全局注册 <md-image> 自定义元素
   import CodePane from "./lib/editor/CodePane.svelte";
   import PreviewPane from "./lib/preview/PreviewPane.svelte";
   import BottomBar from "./components/BottomBar.svelte";
@@ -9,9 +8,7 @@
   import { applyThemeVars, buildFontChain, EDITOR_FONT_FALLBACK, PREVIEW_FONT_FALLBACK } from "./lib/themes";
   import Toast from "./components/Toast.svelte";
   import ConfirmDialog from "./components/ConfirmDialog.svelte";
-  import { stubBackend } from "./lib/backend";
   import {
-    isWails,
     saveDocument,
     saveDocumentAs,
     confirmQuit,
@@ -19,6 +16,7 @@
     reportDirty,
     openViaDialog,
     saveAsViaDialog,
+    setTitle,
   } from "./lib/bridge";
   import { confirmDialog } from "./lib/confirm";
   import {
@@ -33,7 +31,7 @@
     doc$ as doc,
     ready$ as ready,
     blocks$ as blocks,
-    selectionProxy$ as selectionProxy,
+    hast$ as hast,
     fontEditor$ as fontEditor,
     fontPreview$ as fontPreview,
     fontSizeEd$ as fontSizeEd,
@@ -73,11 +71,6 @@
     }
   });
 
-  /* 选区代理开关 → 编辑器插件启停 */
-  $effect(() => {
-    $editorApi?.setSelectionProxy($selectionProxy);
-  });
-
   /* 缩进单位变化 → 动态重配置编辑器（Compartment，无需重建） */
   $effect(() => {
     const api = $editorApi;
@@ -102,27 +95,29 @@
   onMount(async () => {
     setLang(currentLang());
     // 关闭请求 → confirm → ConfirmQuit（取消则无操作）
-    if (isWails()) {
-      void onBackendEvent("close:request", async () => {
-        const msg = get(dirty)
-          ? get(t)("confirm.quitDirty")
-          : get(t)("confirm.quit");
-        if (await confirmDialog(msg)) {
-          await confirmQuit();
-        }
-      });
-    }
-    await bootApp(() => stubBackend.loadDocument());
+    void onBackendEvent("close:request", async () => {
+      const msg = get(dirty)
+        ? get(t)("confirm.quitDirty")
+        : get(t)("confirm.quit");
+      if (await confirmDialog(msg)) {
+        await confirmQuit();
+      }
+    });
+    await bootApp();
   });
 
   // 脏状态上报后端（供后续 WindowClosing 拦截钩子使用）
   $effect(() => {
-    if (isWails()) void reportDirty($dirty);
+    void reportDirty($dirty);
+  });
+
+  // 窗口标题与文档名同步
+  $effect(() => {
+    void setTitle($docState?.name ?? "untitled");
   });
 
   // 全局快捷键：Ctrl/Cmd+O 打开、Ctrl/Cmd+Shift+S 另存为
   $effect(() => {
-    if (!isWails()) return;
     const onKey = (e: KeyboardEvent) => {
       const mod = e.ctrlKey || e.metaKey;
       if (!mod) return;
@@ -141,26 +136,19 @@
 
   async function save(force = false): Promise<void> {
     if (!get(dirty) && !force) return; // 非脏状态静默：无修改不写后端、不弹提示
-    if (isWails()) {
-      try {
-        const res = await saveDocument(get(doc), force);
-        if (res.ok) {
-          get(editorApi)?.markClean();
-          toast.set({ id: Date.now(), msg: get(t)("common.saved") });
-        } else if (res.conflict) {
-          // 磁盘已被外部修改：确认后以当前编辑内容覆盖
-          const overwrite = await confirmDialog(get(t)("confirm.conflict"));
-          if (overwrite) await save(true);
-        }
-      } catch {
-        toast.set({ id: Date.now(), msg: get(t)("toast.saveFailed") });
-      }
+    if (!get(docState)?.path) {
+      await saveFileAs(); // 未命名文档：保存即另存为，落盘后标题随文档名更新
       return;
     }
     try {
-      const res = await stubBackend.saveDocument(get(doc));
-      if (res.ok) get(editorApi)?.markClean();
-      toast.set({ id: Date.now(), msg: res.ok ? get(t)("toast.saved") : get(t)("toast.saveFailed") });
+      const res = await saveDocument(get(doc), force);
+      if (res.ok) {
+        get(editorApi)?.markClean();
+      } else if (res.conflict) {
+        // 磁盘已被外部修改：确认后以当前编辑内容覆盖
+        const overwrite = await confirmDialog(get(t)("confirm.conflict"));
+        if (overwrite) await save(true);
+      }
     } catch {
       toast.set({ id: Date.now(), msg: get(t)("toast.saveFailed") });
     }
@@ -168,19 +156,16 @@
 
   /** 打开文档（Wails 原生文件对话框 → FileService.Open） */
   async function openFile(): Promise<void> {
-    if (!isWails()) return;
     const state = await openViaDialog();
     if (state) {
       docState.set(state);
       doc.set(state.content);
       get(editorApi)?.setDoc(state.content);
-      toast.set({ id: Date.now(), msg: state.name });
     }
   }
 
   /** 另存为（Wails 原生保存对话框 → FileService.SaveAs） */
   async function saveFileAs(): Promise<void> {
-    if (!isWails()) return;
     const res = await saveAsViaDialog(get(doc));
     if (res?.ok) {
       docState.set({
@@ -193,7 +178,6 @@
         modTime: 0,
       });
       get(editorApi)?.markClean();
-      toast.set({ id: Date.now(), msg: get(t)("common.saved") });
     }
   }
 
@@ -212,6 +196,24 @@
     editorProgrammaticUntil = performance.now() + 320;
     $editorApi?.scrollToLine(line);
   }
+
+  /* 编辑区内容变化 → blocks 重建（500ms 防抖解析后）→ 块偏移可能整体
+     变化，按编辑器当前顶行重新对齐预览。不回环：此处只写预览滚动位置，
+     预览侧回写被 previewProgrammaticUntil 抑制；且必须等 blocks 就绪，
+     过早执行会按旧块数据算偏移。 */
+  let blocksSeen = false;
+  $effect(() => {
+    const bks = $blocks;
+    if (!blocksSeen) {
+      blocksSeen = true;
+      return;
+    }
+    if (bks.length === 0 || get(mode) === "source") return;
+    const api = $editorApi;
+    if (!api) return;
+    if (performance.now() < editorProgrammaticUntil) return;
+    onEditorTopLine(api.getTopLine());
+  });
 
   function onEditorTopLine(line: number): void {
     if (performance.now() < editorProgrammaticUntil) return;
@@ -349,7 +351,6 @@
       <div class="content flex min-w-0 flex-1 overflow-hidden" bind:this={contentEl}>
         <CodePane
           initialDoc={$doc}
-          initialSelectionProxy={$selectionProxy}
           initialIndent={indentUnit[$indent]}
           lang={currentLang()}
           pct={$mode === "split" ? splitPct : null}
@@ -373,7 +374,7 @@
         {/if}
 
         <PreviewPane
-          blocks={$blocks}
+          hast={$hast}
           onready={(api: PreviewApi) => previewApi.set(api)}
           onvisible={onPreviewVisible}
         />

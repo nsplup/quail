@@ -197,10 +197,10 @@
     background: var(--ui-active-bg);
   }
 
-  /* ---------- 滚动条：非滚动状态隐藏 ---------- */
+  /* ---------- 滚动条：常态显示，仅定义宽度/颜色/圆角 ---------- */
   ::-webkit-scrollbar {
-    width: 10px;
-    height: 10px;
+    width: 6px;
+    height: 6px;
   }
 
   ::-webkit-scrollbar-track {
@@ -209,35 +209,23 @@
 
   ::-webkit-scrollbar-thumb {
     background: var(--ui-border);
-    border-radius: 5px;
-    border: 2px solid transparent;
-    background-clip: content-box;
+    border-radius: 3px;
   }
 
   ::-webkit-scrollbar-thumb:hover {
     background: var(--ui-muted);
-    background-clip: content-box;
   }
 
-  .scroll-autohide::-webkit-scrollbar-thumb {
-    background: transparent;
-    background-clip: content-box;
-  }
-
-  .scroll-autohide.is-scrolling::-webkit-scrollbar-thumb {
-    background: var(--ui-border);
-    background-clip: content-box;
-  }
-
-  .scroll-autohide.is-scrolling::-webkit-scrollbar-thumb:hover {
-    background: var(--ui-muted);
-    background-clip: content-box;
-  }
-
-  @supports (scrollbar-width: thin) {
+  /* webkit 引擎（webkitgtk/Chrome）用 ::-webkit-scrollbar 自定义样式；
+     scrollbar-width/scrollbar-color（Firefox 专属）仅在引擎不支持
+     ::-webkit-scrollbar 时应用——Chrome 121+/WebKitGTK 2.44+ 同时认识两套，
+     一旦 scrollbar-width 非 auto，::-webkit-scrollbar 自定义样式会被禁用。 */
+  @supports not selector(::-webkit-scrollbar) {
+    @supports (scrollbar-width: thin) {
     * {
       scrollbar-width: thin;
       scrollbar-color: var(--ui-border) transparent;
+    }
     }
   }
 
@@ -486,67 +474,230 @@
   display: block;
 }
 
-/* ---------- md-image（原生自定义元素，预览图片三态） ---------- */
+/* ---------- md-image（MarkdownImage 组件容器，预览图片三态） ----------
+ *
+ * 两种形态（由管线 data-inline 标注分派）：
+ * - 块级（无标注，独立成段的图片，含 <a> 包裹独自成块）：
+ *   占位三态（loading / error / restricted）统一 width:100% +
+ *   height:var(--md-image-height, 240px)；loaded 后 img 铺满、高度按图片
+ *   比例自适应，图片下方显示 alt 描述文本（.md-img-cap）；
+ * - 行内（data-inline="1"，与文字混排等一切其他场景）：
+ *   不设宽高，img 使用原本尺寸；占位为行内布局 [SVG 图标][说明文本]，
+ *   高度以行高为准。
+ * 占位图标为组件内联 SVG（.md-img-ic），不再使用 emoji 伪元素。
+ */
 
 md-image {
-  display: inline-block;
-  position: relative;
-  max-width: 100%;
-  min-height: 22px;
+  --md-image-height: 240px; /* 运行时在任意祖先上覆盖即可同步调整占位高度 */
+
+  box-sizing: border-box; /* error 态虚线边框不改变 getBoundingClientRect 尺寸 */
+  position: relative; /* loaded 态左上角刷新按钮的定位基准 */
+
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  /* 不设 gap：占位态（loading/error）的 img 不可见但仍是 flex 子项，
+     容器 gap 会把占位层顶偏导致与纯单子项的 error 态居中不一致；
+     loaded 态 img 与 caption 的间距由 .md-img-cap 的 margin-top 提供 */
+
+  width: 100%;
+  height: var(--md-image-height);
+  overflow: hidden;
+
+  border-radius: 8px;
+  background: var(--ui-hover, rgba(127, 127, 127, 0.12));
+  color: var(--ui-warn);
+  font-size: 12px;
   vertical-align: middle;
 }
 
 md-image .md-img {
   display: block;
-  max-width: 100%;
+  width: 100%;
+  height: auto;
   border-radius: 8px;
-  opacity: 0;
-  transition: opacity 0.18s ease;
+  visibility: hidden; /* 非 loaded 态直接隐藏（无 opacity / 无过渡动画），保留布局空间 */
+}
+
+md-image[data-status="loaded"] {
+  /* success：高度随图片比例自适应（覆盖占位固定高度） */
+  height: auto;
+  background: transparent;
 }
 
 md-image[data-status="loaded"] .md-img {
-  opacity: 1;
+  visibility: visible;
 }
 
-/* 加载中：占位呼吸 */
-md-image[data-status="loading"] {
-  min-width: 64px;
-  border-radius: 8px;
-  background: var(--ui-hover, rgba(127, 127, 127, 0.12));
-  animation: mdimg-pulse 1.2s ease-in-out infinite;
-}
+/* ---------- 占位层：SVG 图标 + 状态文本（真实元素，替代 emoji 伪元素） ---------- */
 
-/* 加载失败：受限（403）或网络错误 */
-md-image[data-status="error"] {
-  display: inline-flex;
+.md-img-ph {
+  display: flex;
+  flex-direction: column; /* 块级：图标上、文本下（与旧版伪元素布局一致） */
   align-items: center;
-  gap: 6px;
-  min-width: 64px;
-  padding: 6px 10px;
+  gap: 8px;
+}
+
+.md-img-ic {
+  width: 28px;
+  height: 28px;
+  flex: none;
+}
+
+.md-img-ph-t {
+  line-height: 1.4;
+  white-space: nowrap;
+  /* 链接内图片：悬停下划线不作用于占位说明文本 */
+  display: inline-block;
+  text-decoration: none;
+}
+
+/* 加载中：描边与失败态占位一致（虚线边框）；图标为加载环旋转动画（无透明度动画） */
+md-image[data-status="loading"] {
   border: 1px dashed var(--ui-border);
-  border-radius: 8px;
-  color: var(--ui-warn);
-  font-size: 12px;
-  animation: none;
 }
 
-md-image[data-status="error"]::before {
-  content: "⚠";
+md-image[data-inline][data-status="loading"] {
+  border: 1px dashed var(--ui-border);
 }
 
-md-image[data-status="error"][data-error="restricted"]::after {
-  content: "访问受限";
+md-image[data-status="loading"] .md-img-ic {
+  animation: mdimg-spin 1s linear infinite;
 }
 
-md-image[data-status="error"]:not([data-error="restricted"])::after {
-  content: "图片加载失败";
+/* 加载失败：受限（401/403）或网络错误，虚线边框区分 */
+md-image[data-status="error"] {
+  border: 1px dashed var(--ui-border);
 }
 
 md-image[data-status="error"] .md-img {
   display: none;
 }
 
-@keyframes mdimg-pulse {
-  0%, 100% { opacity: 0.45; }
-  50% { opacity: 0.8; }
+/* 刷新按钮（占位态：状态文本后的文字链接） */
+.md-img-reload-link {
+  display: inline-block;
+  margin-left: 0.4em;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: var(--ui-accent);
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.md-img-reload-link:hover {
+  text-decoration: underline;
+}
+
+/* 刷新按钮（loaded 态：左上角，悬停显示；不做淡入淡出动画） */
+.md-img-reload-corner {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--ui-border);
+  border-radius: 6px;
+  background: var(--ui-bg, #fff);
+  color: var(--ui-fg);
+  cursor: pointer;
+  opacity: 0; /* 无 transition：悬停即显即隐 */
+  pointer-events: none;
+}
+
+md-image:hover .md-img-reload-corner {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.md-img-reload-corner svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* 块级图片 loaded 态：alt 描述文本（caption） */
+.md-img-cap {
+  margin-top: 8px; /* 原容器 gap 的间距改由 caption 提供（占位态居中一致性，见 md-image 注释） */
+  max-width: 100%;
+  padding: 0 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ui-muted);
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+/* ---------- 行内图片（data-inline="1"） ----------
+ * 不设宽高：img 使用原本尺寸（max-width 防溢出容器）；
+ * 占位行内布局 [SVG 图标][说明文本]，高度以行高为准。
+ */
+
+md-image[data-inline] {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  /* 不设 gap：行内占位态 img 不可见但仍是 flex 子项，gap 会把占位行顶偏；
+     图标与说明文本的间距由 .md-img-ph（row gap: 0.35em）提供 */
+
+  width: auto;
+  height: auto;
+  overflow: visible;
+
+  border-radius: 4px;
+  /* 占位描边与背景色与块级一致（loaded 态恢复透明） */
+  background: var(--ui-hover, rgba(127, 127, 127, 0.12));
+  padding: 0 2px;
+  font-size: inherit;
+  vertical-align: middle;
+}
+
+md-image[data-inline][data-status="loaded"] {
+  background: transparent;
+  padding: 0;
+}
+
+md-image[data-inline] .md-img {
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  border-radius: 4px;
+}
+
+md-image[data-inline] .md-img-ph {
+  flex-direction: row;
+  gap: 0.35em;
+}
+
+md-image[data-inline] .md-img-ic {
+  width: 1.05em;
+  height: 1.05em;
+}
+
+md-image[data-inline] .md-img-ph-t {
+  font-size: 0.9em;
+  line-height: 1.4;
+}
+
+/* 行内 error：描边与块级一致（虚线边框区分失败态） */
+md-image[data-inline][data-status="error"] {
+  border: 1px dashed var(--ui-border);
+}
+
+/* 链接内图片：悬停下划线不影响占位说明文本（atomic inline 本就不受
+   祖先 decoration 传播影响，这里显式声明意图） */
+.md-block a .md-img-ph-t,
+.md-block a:hover .md-img-ph-t {
+  text-decoration: none;
+}
+
+@keyframes mdimg-spin {
+  to { transform: rotate(360deg); }
 }

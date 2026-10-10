@@ -32,7 +32,6 @@ type Config struct {
 	FontPreview    string   `json:"fontPreview"`
 	FontSizeEditor float64  `json:"fontSizeEditor"`
 	FontSizePreview float64 `json:"fontSizePreview"`
-	SelectionProxy bool     `json:"selectionProxy"`
 	RecentFiles    []string `json:"recentFiles"`
 }
 
@@ -48,7 +47,6 @@ func defaultConfig() Config {
 		FontPreview:     "",
 		FontSizeEditor:  14,
 		FontSizePreview: 16,
-		SelectionProxy:  true,
 		RecentFiles:     []string{},
 	}
 }

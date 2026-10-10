@@ -22,9 +22,9 @@
   padding-bottom: 45vh;
 }
 
-/* 预览内容顶部间隔（真实 DOM 元素充当 padding-top，首块不贴顶） */
-.pv-top-pad {
-  height: 24px;
+/* 首块顶部内间距（原 .pv-top-pad 占位元素改为 CSS 规则实现，首块不贴顶） */
+.preview-scroll > .md-item:first-child {
+  padding-top: 24px;
 }
 
 /* 块级外间距。注：预览为全量真实布局（无估计高度），
@@ -99,8 +99,9 @@
 }
 
 .md-block code {
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
-    "Liberation Mono", monospace;
+  /* 与编辑区字体同步（设置「编辑区字体」），缺失时退回等宽栈 */
+  font-family: var(--ed-font-family, ui-monospace), ui-monospace,
+    SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
   font-size: 0.875em;
   background: var(--pv-inline-code-bg);
   padding: 0.2em 0.42em;
