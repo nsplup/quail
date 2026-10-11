@@ -1,32 +1,27 @@
 /**
  * 全局状态中心：所有跨组件共享状态统一由 svelte store 持有。
  * - 持久化设置：persisted* 工厂在 store 创建时读入 localStorage，订阅期自动回写；
- * - AST 管线：doc$ 变化 → rAF 合并 + 自适应 minInterval + 120ms maxWait → 增量解析
- *   → root$/hast$/blocks$（HAST 未变段复用节点引用）；派生大纲与字数统计；
+ * - 解析管线：doc$ 变化 → rAF 合并 + 自适应 minInterval + 120ms maxWait →
+ *   发送到解析 worker（增量/全量由 worker 内部决定）→ 段级补丁回传
+ *   → segments$/blocks$/outline$/counts$（未变段引用复用 → Svelte 跳过子树）；
+ *   解析阶段/渐进渲染进度由 parsePhase$/renderProgress$ 对外报告；
  * - 组件私有交互细节（拖拽、程序滚动时间窗等）仍留在组件内，不在此处。
  */
 import { writable, derived, get, type Writable } from "svelte/store";
-import type { Root } from "mdast";
-import type { Root as HastRoot } from "hast";
 import type {
   Mode,
   ThemeId,
   IndentId,
   CountMode,
   OutlineItem,
+  ParsePhase,
   PreviewApi,
   PreviewBlock,
 } from "./types";
 import type { EditorApi } from "./editor/codemirrorSetup";
-import {
-  buildBlocksIncremental,
-  buildOutline,
-  blockIndexForLine,
-  countEnglishWords,
-  countHanCharacters,
-  blocksCoverDoc,
-  type IncrementalParseState,
-} from "./markdown";
+import { blockIndexForLine } from "./markdown";
+import type { HastSegment } from "./markdown/markdown-core";
+import { createParseClient } from "./worker/parse-client";
 import { t, locale, setLang } from "./i18n.svelte";
 import { kvGet, kvSet, onConfigReplay, initSettings } from "./settings";
 import { onBackendEvent, ready as bridgeReady, startupDoc, type QuailDocState } from "./bridge";
@@ -118,20 +113,35 @@ export const topIndex$ = writable(0);
 /** toast：{id, msg}（id 驱动重置自动关闭计时） */
 export const toast$ = writable<{ id: number; msg: string } | null>(null);
 
-/* ---------------- AST 管线 ---------------- */
+/* ---------------- 解析管线（worker 承载） ---------------- */
 
 /** 编辑器文档（保存走后端，不落 localStorage） */
 export const doc$ = writable("");
 
 export const ready$ = writable(false);
 
-/** 解析结果（整体替换、只读消费；store 值无深度代理，性能等同 $state.raw） */
-export const root$ = writable<Root | null>(null);
-/** HAST 根：渲染层数据源（MarkdownRenderer 组件树直渲染，不经 HTML 字符串） */
-export const hast$ = writable<HastRoot | null>(null);
+/**
+ * 预览段列表（worker splitSegments 的结果；渲染层数据源）。
+ * 增量更新为段级 splice：未变段对象引用保持稳定 →
+ * MarkdownNode 按 props 引用相等跳过子树（图片不重新请求）。
+ */
+export const segments$ = writable<HastSegment[]>([]);
+/** 全量重建纪元：每次 full 解析 +1；渲染层据此重置渐进挂载状态 */
+export const renderEpoch$ = writable(0);
+/** 最近一次增量补丁（渲染层据此把补丁区间立即纳入可见范围） */
+export const patchHint$ = writable<{ segStart: number; segAdded: number } | null>(null);
+/** 全量解析的完整段数（渐进渲染进度分母；增量时与 segments.length 同步） */
+export const renderTotal$ = writable(0);
 export const blocks$ = writable<PreviewBlock[]>([]);
-/** 解析时刻的源码快照：字数统计用它，避免每个按键重跑 */
-export const parsedDoc$ = writable("");
+/** 大纲（worker 由 mdast + blocks 计算后回传） */
+export const outline$ = writable<OutlineItem[]>([]);
+/** 字数统计（worker 按解析时刻源码快照计算后回传，主线程不再扫全文） */
+export const counts$ = writable<{ words: number; hanChars: number }>({ words: 0, hanChars: 0 });
+
+/** 预览解析/渲染阶段：parsing（worker 解析中）→ rendering（渐进挂载中）→ idle */
+export const parsePhase$ = writable<ParsePhase>("idle");
+/** 渐进渲染进度 0..1（visibleCount / total） */
+export const renderProgress$ = writable(1);
 
 /** 编辑器/预览 API 句柄（组件就绪后注入） */
 export const editorApi$ = writable<EditorApi | null>(null);
@@ -139,56 +149,76 @@ export const editorApi$ = writable<EditorApi | null>(null);
 export const dirty$ = writable(false);
 export const previewApi$ = writable<PreviewApi | null>(null);
 
-const parseState: IncrementalParseState = { src: "", root: null, hast: null, blocks: [] };
-
-/* ---------------- 解析调度：rAF 合并 + 自适应 minInterval + maxWait ----------------
+/* ---------------- 解析调度：rAF 合并 + 自适应 minInterval + maxWait + worker 背压 ----------------
  * 相比固定 500ms 防抖：输入流畅时下一帧即解析（预览延迟 500ms → ~16ms），
- * 高频全量替换时自适应拉长 minInterval 节流；maxWait 兜底防“永远没空档”。 */
+ * 高频全量替换时自适应拉长 minInterval 节流；maxWait 兜底防“永远没空档”；
+ * worker 在途时积压最新 src，响应回齐后立即补跑（worker 串行处理，
+ * 乱序发送会让增量补丁相对 worker 内部状态错位，故必须背压）。 */
 const MIN_INTERVAL_BASE = 16;
 const ADAPT_STEP = 32;
 const MAX_INTERVAL = 256;
 const MAX_WAIT = 120;
-const HEAL_DELAY = 10000;
 
 let minInterval = MIN_INTERVAL_BASE;
 let lastRun = 0;
 let pendingSrc: string | null = null;
+let pendingForceFull = false;
 let pending = false;
 let adaptHits = 0;
 let flushRaf: number | undefined;
 let flushTimer: ReturnType<typeof setTimeout> | undefined;
-let healTimer: ReturnType<typeof setTimeout> | undefined;
 
-/** 全量/增量重建 AST（保留自愈校验制：块行界连续覆盖全文时跳过全量重算） */
-export function rebuildAst(src: string, forceFull: boolean): void {
-  const res = buildBlocksIncremental(parseState, src, forceFull);
-  parseState.src = src;
-  parseState.root = res.root;
-  parseState.hast = res.hast;
-  parseState.blocks = res.blocks;
-  parseState.incrementalCount = res.incrementalCount; // 全量阈值归属 markdown.ts
-  root$.set(res.root);
-  // 增量路径的 hast 已复用 head/tail 段节点引用 → 渲染层按引用跳过未变子树
-  hast$.set(res.hast);
-  blocks$.set(res.blocks);
-  parsedDoc$.set(src);
-}
-
-/** 10s idle 自愈：文档静止后校验块行界无缝覆盖，失败则全量重算（兜底防御） */
-function scheduleHealCheck(): void {
-  clearTimeout(healTimer);
-  healTimer = setTimeout(() => {
-    healTimer = undefined;
-    if (parseState.src !== get(doc$)) return; // 已有新编辑在途，让位
-    if (!blocksCoverDoc(parseState.blocks, parseState.src)) {
-      rebuildAst(get(doc$), true);
+/** worker 客户端：生命周期/崩溃重建封装在 parse-client，stores 只关心数据 */
+const parseClient = createParseClient({
+  onBatch: (msg) => {
+    if (msg.segStart === 0) {
+      // 首批：整列表重建 + 纪元递增（渲染层重置渐进挂载）
+      segments$.set(msg.items);
+      renderEpoch$.update((n) => n + 1);
+    } else {
+      segments$.update((arr) => [...arr, ...msg.items]);
     }
-  }, HEAL_DELAY);
-}
+  },
+  onResult: (msg) => {
+    blocks$.set(msg.blocks);
+    outline$.set(msg.outline);
+    counts$.set(msg.counts);
+    if (msg.full) {
+      renderTotal$.set(msg.totalSegments);
+      parsePhase$.set("rendering"); // 是否仍有渐进工作由渲染层 onprogress 回报收敛
+    } else {
+      const { segStart, segCount, items } = msg.segments;
+      segments$.update((arr) => {
+        const next = arr.slice();
+        next.splice(segStart, segCount, ...items);
+        return next;
+      });
+      patchHint$.set({ segStart, segAdded: items.length });
+      renderTotal$.set(msg.totalSegments);
+      parsePhase$.set("rendering");
+    }
+    // 若调度器有积压 src（worker 在途期间的新编辑），立即补跑
+    onWorkerDrained();
+  },
+  onWorkerError: (msg) => {
+    console.warn("[parse] worker error:", msg.message);
+    toast$.set({ id: Date.now(), msg: get(t)("toast.parseFailed") });
+    scheduleRebuild(get(doc$), true); // worker 状态已重建，强制全量
+  },
+  onCrashed: () => {
+    console.warn("[parse] worker crashed; restarting");
+    toast$.set({ id: Date.now(), msg: get(t)("toast.parseFailed") });
+    scheduleRebuild(get(doc$), true);
+  },
+});
 
-function runRebuild(src: string): void {
-  rebuildAst(src, false); // forceFull 恒 false：全量阈值只归 markdown.ts 的 incrementalCount
-  scheduleHealCheck();
+/** worker 响应回齐后的积压补跑（无在途、有积压 → rAF 快路径） */
+function onWorkerDrained(): void {
+  if (parseClient.busy()) return;
+  if (pending && pendingSrc !== null && flushRaf === undefined && flushTimer === undefined) {
+    flushRaf = requestAnimationFrame(flushNow);
+    flushTimer = setTimeout(flushNow, MAX_WAIT);
+  }
 }
 
 /** 高频触发（在途时又来新 src）计数：连续 ≥3 次 → 拉长 minInterval */
@@ -200,8 +230,9 @@ function noteAdapt(): void {
 }
 
 /** 调度一次解析：rAF 快路径（无背压）+ minInterval 节流 + MAX_WAIT 强制兜底 */
-function scheduleRebuild(src: string): void {
+function scheduleRebuild(src: string, forceFull = false): void {
   pendingSrc = src;
+  pendingForceFull = forceFull;
   if (pending) {
     noteAdapt();
     return;
@@ -210,34 +241,38 @@ function scheduleRebuild(src: string): void {
   adaptHits = 0;
   const since = performance.now() - lastRun;
   const delay = Math.max(0, minInterval - since);
-  if (delay < MIN_INTERVAL_BASE) {
+  if (delay < MIN_INTERVAL_BASE && !parseClient.busy()) {
     // 快路径：下一帧解析；MAX_WAIT 双保险（rAF 被后台节流时仍按时解析）
     flushRaf = requestAnimationFrame(flushNow);
     flushTimer = setTimeout(flushNow, MAX_WAIT);
   } else {
-    // 背压：minInterval 内刚跑过 → 最多再等 MAX_WAIT
+    // 背压：minInterval 内刚跑过或 worker 在途 → 最多再等 MAX_WAIT
     flushTimer = setTimeout(flushNow, Math.min(delay, MAX_WAIT));
   }
 }
 
-/** 消费 pendingSrc 并解析（rAF/timer 竞争，单线程下先到先清） */
+/** 消费 pendingSrc 并发送解析请求（rAF/timer 竞争，单线程下先到先清） */
 function flushNow(): void {
   flushRaf = undefined;
   clearTimeout(flushTimer);
   flushTimer = undefined;
+  if (parseClient.busy()) return; // worker 在途：响应回齐后 onWorkerDrained 补跑
   pending = false;
   const s = pendingSrc;
+  const ff = pendingForceFull;
   pendingSrc = null;
+  pendingForceFull = false;
   if (s === null) return;
   lastRun = performance.now();
-  runRebuild(s);
+  parsePhase$.set("parsing");
+  parseClient.request(s, ff);
   // 本轮无高频触发 → 向基准回落
   if (adaptHits === 0) {
     minInterval = Math.max(MIN_INTERVAL_BASE, minInterval - ADAPT_STEP);
   }
 }
 
-// doc$ 变化 → 记 pendingSrc → rAF 合并（ready 后生效；全量阈值/idle 自愈见上）
+// doc$ 变化 → 记 pendingSrc → rAF 合并（ready 后生效；全量阈值/idle 自愈在 worker 内）
 doc$.subscribe((src) => {
   if (!get(ready$)) return;
   scheduleRebuild(src);
@@ -246,24 +281,19 @@ doc$.subscribe((src) => {
 let booted = false;
 
 
-/** 派生：大纲（mdast 标题 + 行号映射到 HAST 块） */
-export const outline$ = derived([root$, blocks$], ([root, blocks]) =>
-  root && blocks ? buildOutline(root, blocks) : []
-);
-
 /** 派生：字数统计生效模式（auto 跟随界面语言） */
 export const effectiveCountMode$ = derived([countMode$, locale], ([m, lang]) =>
   m === "auto" ? (lang === "zh" ? "chars" : "words") : m
 );
 
-/** 派生：字数统计标签（跟随解析快照，避免按键即扫全文） */
+/** 派生：字数统计标签（worker 回传的解析快照统计，主线程不扫全文） */
 export const countLabel$ = derived(
-  [parsedDoc$, effectiveCountMode$, t],
-  ([parsed, mode, tt]) => {
+  [counts$, effectiveCountMode$, t],
+  ([counts, mode, tt]) => {
     if (mode === "chars") {
-      return `${countHanCharacters(parsed).toLocaleString()} ${tt("stats.chars")}`;
+      return `${counts.hanChars.toLocaleString()} ${tt("stats.chars")}`;
     }
-    return `${countEnglishWords(parsed).toLocaleString()} ${tt("stats.words")}`;
+    return `${counts.words.toLocaleString()} ${tt("stats.words")}`;
   }
 );
 
@@ -307,10 +337,10 @@ export async function bootApp(): Promise<void> {
     docState$.set(state);
   }
   doc$.set(doc);
-  rebuildAst(doc, true);
   ready$.set(true);
-  // ready 前的 doc$.set 不进入调度管线（订阅早退），ready 后补跑一次确保贯通
-  scheduleRebuild(get(doc$));
+  // ready 前的 doc$.set 不进入调度管线（订阅早退），ready 后补跑一次确保贯通；
+  // 首次解析强制全量（worker 内部状态为空，语义等同全量重建）
+  scheduleRebuild(get(doc$), true);
   // 初始化流程末尾统一调度 Ready（下一轮宏任务）：
   // 不等待编辑区/预览区渲染结束，窗口显示与首帧绘制并行推进。
   setTimeout(() => {

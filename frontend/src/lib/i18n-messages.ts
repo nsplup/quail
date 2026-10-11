@@ -62,6 +62,7 @@ export const zhMessages = {
     fileReloaded: "文件已在磁盘上更新，已重新加载",
     fileChangedDirty: "文件已被外部修改（本地有未保存修改，未自动加载）",
     fileDeleted: "文件已被外部删除",
+    parseFailed: "预览解析出错，已自动恢复",
   },
   preview: {
     imageLoading: "图片加载中…",
@@ -69,6 +70,8 @@ export const zhMessages = {
     imageNotFound: "图片不存在",
     imageFailed: "图片加载失败",
     imageReload: "刷新",
+    parsing: "解析中…",
+    rendering: "渲染中",
   },
 } as const;
 
@@ -126,6 +129,10 @@ export const enMessages = {
     saved: "Saved (local stub, backend pending)",
     saveFailed: "Save failed",
     openFailed: "Failed to open file",
+    fileReloaded: "File changed on disk; reloaded",
+    fileChangedDirty: "File modified externally (local changes kept, not reloaded)",
+    fileDeleted: "File deleted externally",
+    parseFailed: "Preview parsing failed; recovered automatically",
   },
   preview: {
     imageLoading: "Loading image…",
@@ -133,6 +140,8 @@ export const enMessages = {
     imageNotFound: "Image not found",
     imageFailed: "Failed to load image",
     imageReload: "Reload",
+    parsing: "Parsing…",
+    rendering: "Rendering",
   },
 } as const;
 

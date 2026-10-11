@@ -1,25 +1,38 @@
 <script lang="ts">
   /**
-   * 预览面板：全量 DOM + CSS content-visibility:auto（浏览器原生虚拟化）。
+   * 预览面板：全量 DOM + 真实布局（offsetTop/offsetHeight 直接测量）。
    * 与虚拟列表（virtua）相比的优势：布局高度 100% 精确——
    * 拖动滚动条到底部/顶部不会因「估计高度与真实高度的差距累积」而回弹，
    * 滚动同步插值（offset/size）也基于真实布局。
-   * 屏外块由浏览器跳过渲染/绘制，长文档滚动性能由 content-visibility 保障；
-   * 增量渲染：hast 由 MarkdownRenderer 组件树直渲染（不经 {@html}），
-   * 增量解析复用未变化段的节点引用 → Svelte 跳过对应子树，只更新变化段。
+   * 挂载节奏由 MarkdownRenderer 的渐进渲染控制（rAF 分批推进可见段数）；
+   * 增量渲染：worker 段级补丁 + 未变化段节点引用复用 →
+   * Svelte 跳过对应子树，只更新变化段。
+   * 解析/渐进渲染期间显示半透明遮罩：
+   * - 拦截点击/悬停/右键等指针交互，避免操作到「尚未稳定」的内容；
+   * - 手动转发 wheel 到滚动容器，保持滚动可用（无滚动穿透副作用）；
+   * - 触屏通过 touch-action:none + 手动转发保证滑动可用。
    */
   import { onMount } from "svelte";
-  import type { Root as HastRoot } from "hast";
+  import type { HastSegment } from "../markdown/markdown-core";
+  import { parsePhase$ as parsePhase } from "../stores";
   import { openExternal } from "../bridge";
   import MarkdownRenderer from "../markdown/MarkdownRenderer.svelte";
   import type { PreviewApi } from "../types";
 
   let {
-    hast,
+    segments,
+    epoch,
+    patchHint,
+    total,
+    onprogress,
     onready,
     onvisible,
   }: {
-    hast: HastRoot | null;
+    segments: HastSegment[];
+    epoch: number;
+    patchHint: { segStart: number; segAdded: number } | null;
+    total: number;
+    onprogress: (visible: number, total: number) => void;
     onready: (api: PreviewApi) => void;
     /** 可视区首块变化（用于 预览→编辑器 同步滚动 与 大纲高亮）；atBottom=滚动到底 */
     onvisible: (index: number, atBottom: boolean) => void;
@@ -134,6 +147,43 @@
       }
     });
   }
+
+  /* ---------- 遮罩：接管指针交互，仅放行滚动 ---------- */
+
+  /** 遮罩上吞掉点击类事件，不冒泡到下面的预览内容 */
+  function blockPointer(e: MouseEvent): void {
+    e.preventDefault();
+    e.stopPropagation();
+  }
+
+  /** 遮罩上把 wheel 转发给滚动容器（保滚动、挡穿透） */
+  function forwardWheel(e: WheelEvent): void {
+    const el = scrollEl();
+    if (!el) return;
+    el.scrollTop += e.deltaY;
+    if (e.deltaX) el.scrollLeft += e.deltaX;
+    // 必须 preventDefault，避免滚到边界后触发链式滚动/整页回弹
+    e.preventDefault();
+  }
+
+  /* ---------- 遮罩：触屏滑动转发 ---------- */
+
+  let touchY = 0;
+
+  function onTouchStart(e: TouchEvent): void {
+    if (e.touches.length !== 1) return;
+    touchY = e.touches[0].clientY;
+  }
+
+  function onTouchMove(e: TouchEvent): void {
+    const el = scrollEl();
+    if (!el || e.touches.length !== 1) return;
+    const y = e.touches[0].clientY;
+    const dy = touchY - y; // 手指上滑 → 内容上滚 → scrollTop 增大
+    touchY = y;
+    el.scrollTop += dy;
+    e.preventDefault();
+  }
 </script>
 
 <div class="pane pane-preview" bind:this={paneEl}>
@@ -144,6 +194,40 @@
     role="log"
     aria-label="preview"
   >
-    <MarkdownRenderer {hast} />
+    <MarkdownRenderer {segments} {epoch} {patchHint} {total} {onprogress} />
   </div>
+
+  {#if $parsePhase !== "idle"}
+    <!-- 半透明遮罩：提示解析/渐进渲染进行中。
+         挡住指针交互（点击/悬停/右键/拖选），但通过手动转发保留滚动。 -->
+    <div
+      class="pv-overlay"
+      aria-hidden="true"
+      onclick={blockPointer}
+      ondblclick={blockPointer}
+      oncontextmenu={blockPointer}
+      onwheel={forwardWheel}
+      ontouchstart={onTouchStart}
+      ontouchmove={onTouchMove}
+    ></div>
+  {/if}
 </div>
+
+<style>
+  .pane-preview {
+    position: relative; /* 遮罩定位基准 */
+  }
+
+  .pv-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 20;
+    background: rgba(255, 255, 255, 0.35);
+    /* 关键：恢复指针命中，接管交互；滚动由 JS 手动转发 */
+    pointer-events: auto;
+    cursor: progress; /* 忙状态提示 */
+    /* 触屏：禁用浏览器默认手势，交给 JS 转发 */
+    touch-action: none;
+    transition: opacity 0.12s ease;
+  }
+</style>
