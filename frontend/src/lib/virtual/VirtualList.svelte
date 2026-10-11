@@ -288,7 +288,7 @@
   /* 32ms ≈ 60Hz 下 2 帧：可容忍一次单帧卡顿（约 33ms）而不产生
      「退出→挂载→再进入」抖动；滚动真正停止后回填落在下一帧，
      这是当前策略下不引入抖动的最小间隔。60Hz 以上刷新率自动更跟手。 */
-  const FAST_WINDOW_MS = 32;
+  const FAST_WINDOW_MS = 40; /** 预留出容差 */
   const FAST_SCROLL_FACTOR = 2;
 
   function enterFast(): void {
