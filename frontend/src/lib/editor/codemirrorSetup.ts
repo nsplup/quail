@@ -244,11 +244,15 @@ export function createEditorApi(
       const clamped = Math.max(1, Math.min(line, doc.lines));
       try {
         const pos = doc.line(clamped).from;
-        const block = view.lineBlockAt(pos);
-        // block.top 以文档顶部为基准，与 scrollDOM.scrollTop 同一坐标系（差一个常数 padding，
-        // 两侧采用同一约定，同步误差相互抵消）
+        // 经 CM6 的 scrollIntoView 落点：它会把目标行纳入 viewport、完成
+        // 测量修正 heightmap 后再计算滚动位置。直接写 scrollTop 用的是
+        // 未测量区的估计几何（lineWrapping 下行高估计误差随距离累积），
+        // 落点后 CM6 实测修正 → 行位置漂移，即大纲跳转概率性对不齐的根因。
+        // y:"start" + yMargin:6 与旧约定（scrollTop = block.top - 6）一致。
         programmaticUntil = performance.now() + 300;
-        view.scrollDOM.scrollTop = Math.max(0, block.top - 6);
+        view.dispatch({
+          effects: EditorView.scrollIntoView(pos, { y: "start", yMargin: 6 }),
+        });
       } catch {
         /* ignore */
       }
@@ -265,13 +269,35 @@ export function createEditorApi(
       try {
         const line = doc.line(i);
         const block = view.lineBlockAt(line.from);
+        const far = Math.abs(block.top - view.scrollDOM.scrollTop) > view.scrollDOM.clientHeight * 2;
+        programmaticUntil = performance.now() + 300;
+        if (far) {
+          // 远距目标（预览快速滚动空窗后一次性跟随）：走 CM6 的测量感知
+          // 落点（同 scrollToLine），落到整行后在 measure 回调里按实测
+          // 行高补小数插值；预览持续同步随后逐帧自纠
+          view.dispatch({
+            effects: EditorView.scrollIntoView(line.from, { y: "start", yMargin: 6 }),
+          });
+          view.requestMeasure({
+            read: () => view.lineBlockAt(line.from).top,
+            write: (top: number) => {
+              let t = top;
+              if (frac > 0 && i < doc.lines) {
+                const nextTop = view.lineBlockAt(doc.line(i + 1).from).top;
+                t += (nextTop - top) * frac;
+              }
+              view.scrollDOM.scrollTop = Math.max(0, t - 6);
+            },
+          });
+          return;
+        }
+        // 近距目标（连续同步，逐帧小步）：几何已实测，直接写保持跟手
         let top = block.top;
         if (frac > 0 && i < doc.lines) {
           // 用相邻行的文档坐标差作为该处行高，按小数部分插值
           const nextTop = view.lineBlockAt(doc.line(i + 1).from).top;
           top += (nextTop - block.top) * frac;
         }
-        programmaticUntil = performance.now() + 300;
         view.scrollDOM.scrollTop = Math.max(0, top - 6);
       } catch {
         /* ignore */

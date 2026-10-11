@@ -27,8 +27,7 @@
     "remark-gfm": "^4.0.1",
     "remark-parse": "^11.0.0",
     "svelte-i18n": "^4.0.1",
-    "unified": "^11.0.5",
-    "virtua": "^0.53.3"
+    "unified": "^11.0.5"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.0.0",

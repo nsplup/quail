@@ -1,16 +1,17 @@
 <script lang="ts">
   /**
-   * 预览面板：virtua 虚拟滚动（全量 data + 按需挂载）。
+   * 预览面板：原生虚拟滚动组件 VirtualList（全量 data + 按需挂载）。
    *
-   * - 滚动容器由 VList 根元素承担（class="preview-scroll" 维持 App 侧
+   * - 滚动容器由 VirtualList 根元素承担（class="preview-scroll" 维持 App 侧
    *   「按类名取滚动容器」的约定）；视口外的段不再挂载 DOM，
    *   长文档的节点数与布局成本与文档长度解耦；
    * - 不做渐进式渲染：虚拟化本身就是按需挂载（视口 ± overscan），
    *   data 直接绑定完整 segments——rAF 分批推进 visibleCount 在虚拟化下
    *   只剩 store 更新开销，且会人为延迟长文档的同步滚动/大纲可用性；
    * - 未测量/已卸载段的 offset/size 为估计值（types.ts 契约不变）：
-   *   virtua 在 scrollToIndex 后有 ~150ms 测量修正窗口（目标偏移随真实
-   *   测量重放），叠加 fixScrollJump 滚动锚定，缓解估计高度漂移；
+   *   挂载段由 ResizeObserver 实测，实测结果与估计的偏差按
+   *   「项整体位于视口顶上方才补偿 scrollTop」的规则消化，
+   *   上行滚动与跳转后的估高漂移自愈（详见 VirtualList.svelte）；
    * - 增量渲染：worker 段级补丁 + 未变化段节点引用复用 →
    *   Svelte 跳过对应子树，只更新变化段（见 MarkdownSegment）；
    * - 滚动闪烁与渐进渲染无关（渐进仅作用于解析窗口期，滚动期间早已追平），
@@ -20,8 +21,8 @@
    * - 解析期间不渲染预览遮罩：指针/滚轮/触屏交互全程直达滚动容器。
    */
   import { onMount } from "svelte";
-  import { VList } from "virtua/svelte";
-  import type { VListHandle } from "virtua/svelte";
+  import VirtualList from "../virtual/VirtualList.svelte";
+  import type { VirtualListHandle } from "../virtual/VirtualList.svelte";
   import type { HastSegment } from "../markdown/markdown-core";
   import { openExternal } from "../bridge";
   import MarkdownSegment from "../markdown/MarkdownSegment.svelte";
@@ -39,27 +40,26 @@
   } = $props();
 
   let paneEl = $state<HTMLDivElement | null>(null);
-  /** VList 实例：PreviewApi 与可视区探测的稳定入口 */
-  let vlist = $state<VListHandle | null>(null);
+  /** VirtualList 实例：PreviewApi 与可视区探测的稳定入口 */
+  let vlist = $state<VirtualListHandle | null>(null);
   let raf = 0;
 
   function scrollEl(): HTMLElement | null {
     return paneEl?.querySelector<HTMLElement>(".preview-scroll") ?? null;
   }
 
-  /* ---------- PreviewApi：全部映射到 VList handle ---------- */
+  /* ---------- PreviewApi：全部映射到 VirtualList handle ---------- */
 
   $effect(() => {
     onready({
       scrollToIndex(index, opts) {
-        const vl = vlist;
-        if (!vl || segments.length === 0) return;
-        vl.scrollToIndex(Math.max(0, Math.min(index, segments.length - 1)), {
+        if (!vlist || segments.length === 0) return;
+        vlist.scrollToIndex(Math.max(0, Math.min(index, segments.length - 1)), {
           align: "start",
-          // virtua 的 offset 是「目标滚动位置上的附加偏移」，取负映射原语义：
-          // scrollTop = 段顶 - offset（段顶落在视口顶部下方 offset px）。
-          // 跳转后 virtua 会在测量修正窗口内重放该目标，估计漂移可自愈。
-          offset: -(opts?.offset ?? 0),
+          // 与原 virtua 映射语义一致：scrollTop = 段顶 - offset
+          // （段顶落在视口顶部下方 offset px）。跳转后视口上方各段的
+          // 实测修正由组件的滚动补偿消化，估计漂移可自愈。
+          offset: opts?.offset ?? 0,
         });
       },
       getScrollTop() {
@@ -69,17 +69,16 @@
         vlist?.scrollTo(top);
       },
       getItemOffset(index: number): number {
-        const vl = vlist;
-        if (!vl || segments.length === 0) return 0;
-        return vl.getItemOffset(Math.max(0, Math.min(index, segments.length - 1)));
+        if (!vlist || segments.length === 0) return 0;
+        return vlist.getItemOffset(Math.max(0, Math.min(index, segments.length - 1)));
       },
       getItemSize(index: number): number {
-        const vl = vlist;
-        if (!vl || segments.length === 0) return 0;
-        return vl.getItemSize(Math.max(0, Math.min(index, segments.length - 1)));
+        if (!vlist || segments.length === 0) return 0;
+        return vlist.getItemSize(Math.max(0, Math.min(index, segments.length - 1)));
       },
       refresh() {
-        /* virtua 经 ResizeObserver 自适应测量，无需手动重算；保留 API 兼容 */
+        /* 挂载段经 ResizeObserver 自适应实测，偏移表惰性重算；保留 API 兼容 */
+        vlist?.refresh();
       },
     });
   });
@@ -95,7 +94,7 @@
 
     // 预览区链接点击统一拦截 → 后端转发系统浏览器打开；
     // 与 md-image 相同的模式：资源/动作一律交给 Go 侧处理。
-    // （事件委托到 VList 根元素：virtua 透传属性不含事件，改为手动挂载）
+    // （事件委托到虚拟滚动根元素：透传属性不含事件，改为手动挂载）
     const el = scrollEl();
     el?.addEventListener("click", handlePreviewClick);
 
@@ -119,7 +118,7 @@
     }
   }
 
-  /** 预览滚动 → onvisible（rAF 合并；首块索引来自 virtua 内核二分） */
+  /** 预览滚动 → onvisible（rAF 合并；首块索引来自组件内核二分） */
   function handleScroll(): void {
     if (raf) return;
     raf = requestAnimationFrame(() => {
@@ -140,9 +139,9 @@
 </script>
 
 <div class="pane pane-preview" bind:this={paneEl}>
-  <!-- VList 根元素即滚动容器。style 追加在 virtua 内联样式之后，
+  <!-- VirtualList 根元素即滚动容器。style 追加在组件基线样式之后，
        overflow-y: scroll 覆盖默认 auto，保持旧版「滚动条常驻」不跳动 -->
-  <VList
+  <VirtualList
     bind:this={vlist}
     class="preview-scroll"
     style="overflow-y: scroll;"
@@ -155,5 +154,5 @@
     {#snippet children(seg, index)}
       <MarkdownSegment {seg} {index} />
     {/snippet}
-  </VList>
+  </VirtualList>
 </div>
