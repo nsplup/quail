@@ -20,6 +20,27 @@
 
   let { node }: { node: RootContent } = $props();
 
+  /** HTML void 元素：无内容模型。hast 中它们 children 恒为空，但若仍走
+   *  带 {#each} 子内容的 svelte:element 分支，Svelte 5 运行时会因
+   *  「void 元素携带内容片段」持续输出 dynamic_void_element_content 警告，
+   *  故单独走无子内容的自闭合分支。 */
+  const VOID_ELEMENTS = new Set([
+    "area",
+    "base",
+    "br",
+    "col",
+    "embed",
+    "hr",
+    "img",
+    "input",
+    "link",
+    "meta",
+    "param",
+    "source",
+    "track",
+    "wbr",
+  ]);
+
   $effect(() => {
     if (node.type === "raw") {
       console.warn("[MarkdownNode] raw 节点未渲染（管线应已由 rehype-raw 融合）");
@@ -39,6 +60,9 @@
         "") as string}
       inline={(node as Element).properties?.["data-inline"] === "1"}
     />
+  {:else if VOID_ELEMENTS.has((node as Element).tagName)}
+    <!-- void 元素：无子内容，自闭合渲染（避免 dynamic_void_element_content 警告） -->
+    <svelte:element this={(node as Element).tagName} {...hastAttrs(node as Element)} />
   {:else}
     <svelte:element this={(node as Element).tagName} {...hastAttrs(node as Element)}>
       {#each (node as Element).children as child}
