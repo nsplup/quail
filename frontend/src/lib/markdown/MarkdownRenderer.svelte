@@ -40,7 +40,9 @@
 
   const effectiveTotal = $derived(Math.max(total, segments.length));
 
-  // 全量重建：清零渐进状态（epoch 不变时不触发，增量补丁保留已有渲染）
+  // 冷启动全量（boot / worker 崩溃重建，epoch 递增）：清零渐进状态重放。
+  // 例行全量（阈值/自愈）不递增 epoch，结果由 stores 原子采纳、此处原地 diff
+  // （增量补丁同理保留已有渲染）
   $effect(() => {
     void epoch;
     visibleCount = 0;

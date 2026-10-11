@@ -49,6 +49,14 @@ export interface FullBatch {
   /** 本批段在完整段列表中的起始下标（0 = 首批，主线程据此清空旧列表） */
   segStart: number;
   items: HastSegment[];
+  /**
+   * 冷启动全量（worker 实例内首次解析：boot / 崩溃重建后）→ true：
+   * 主线程清空旧列表并递增 renderEpoch（渐进重放）。
+   * 例行全量（25 次增量阈值 / idle 自愈 / 空态兜底）→ false：
+   * 主线程只缓冲批次，result 到达后原子采纳——不清空已有渲染，
+   * 由 Svelte 原地 diff 复用 DOM（与旧主线程版全量更新行为一致）。
+   */
+  cold: boolean;
 }
 
 export interface ParseResult {

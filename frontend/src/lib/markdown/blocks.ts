@@ -30,8 +30,11 @@ export function blockIndexForLine(blocks: PreviewBlock[], line: number): number 
 /**
  * 校验块行界是否连续覆盖整个文档（1..行数）：
  * 通过 → 增量解析结果与全量一致，无需周期性全量重算（自愈）。
+ * 空白文档（无任何可渲染块）视为已覆盖：全量解析对空白文档恒产出 0 块，
+ * 若按行数严格校验会永远失败 → worker 每 10s 空转一次全量自愈。
  */
 export function blocksCoverDoc(blocks: PreviewBlock[], src: string): boolean {
+  if (src.trim() === "") return blocks.length === 0;
   const totalLines = src.split("\n").length;
   let expect = 1;
   for (const b of blocks) {

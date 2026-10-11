@@ -72,6 +72,11 @@ function scheduleHeal(): void {
 }
 
 function parse(src: string, forceFull: boolean, rev: number): void {
+  /* 冷启动判定必须在推进状态前取：本 worker 实例从未解析过（boot / 崩溃重建后
+     的首次解析）→ 全量结果按「冷」回传，主线程清空重建 + 渐进重放；
+     其余全量（25 次增量阈值 / idle 自愈 / 空态兜底）为「例行」，主线程原子
+     采纳、不清空已有渲染（增量渲染不被例行全量打断）。 */
+  const coldFull = state.root === null;
   const res = buildBlocksIncremental(state, src, forceFull);
 
   // 推进 worker 状态（结构化克隆只影响回传对象，内部状态始终本线程对象）
@@ -89,9 +94,14 @@ function parse(src: string, forceFull: boolean, rev: number): void {
   };
 
   if (res.full) {
-    // 全量：分批回传段列表，最后一条 result 汇总（主线程据 full+rev 收口）
+    // 全量：分批回传段列表，最后一条 result 汇总（主线程据 full+rev 收口）。
+    // 空文档也必须发首批（items 为空）：主线程以 segStart=0 识别「清空旧列表」，
+    // 缺批会让 segments$ 残留上一份文档的段（预览不随清空更新）。
+    if (segments.length === 0) {
+      post({ type: "batch", rev, segStart: 0, items: [], cold: coldFull });
+    }
     for (let i = 0; i < segments.length; i += FULL_BATCH_SEGMENTS) {
-      post({ type: "batch", rev, segStart: i, items: segments.slice(i, i + FULL_BATCH_SEGMENTS) });
+      post({ type: "batch", rev, segStart: i, items: segments.slice(i, i + FULL_BATCH_SEGMENTS), cold: coldFull });
     }
     post({
       type: "result",

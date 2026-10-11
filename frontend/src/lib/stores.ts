@@ -126,7 +126,14 @@ export const ready$ = writable(false);
  * MarkdownNode 按 props 引用相等跳过子树（图片不重新请求）。
  */
 export const segments$ = writable<HastSegment[]>([]);
-/** 全量重建纪元：每次 full 解析 +1；渲染层据此重置渐进挂载状态 */
+/**
+ * 全量重建纪元：仅在「冷启动全量」（worker 实例内首次解析：boot / 崩溃重建后）
+ * 时 +1，渲染层据此重置渐进挂载状态。
+ * 例行全量（25 次增量阈值 / idle 自愈 / 空态兜底）不递增——旧主线程版本里
+ * 全量结果是 hast$ 原地替换、Svelte 原地 diff、用户无感；worker 重构后若
+ * 每次例行全量都清空重放，增量渲染就会被周期性打断（整树卸载 + 图片重请求）。
+ * 例行全量改走 fullBatchBuffer 缓冲 + result 到达后原子采纳（原地 diff）。
+ */
 export const renderEpoch$ = writable(0);
 /** 最近一次增量补丁（渲染层据此把补丁区间立即纳入可见范围） */
 export const patchHint$ = writable<{ segStart: number; segAdded: number } | null>(null);
@@ -168,11 +175,23 @@ let adaptHits = 0;
 let flushRaf: number | undefined;
 let flushTimer: ReturnType<typeof setTimeout> | undefined;
 
+/** 例行全量（cold=false）的批次缓冲：worker 分批发送期间暂存，
+ * result(full=true) 到达后一次性 segments$.set 原子采纳。
+ * 期间不写入 segments$，避免「批次边界处先卸载再重建」的中间态。
+ * worker 消息严格有序且一次全量只有一套批次，无并发交织。 */
+let fullBatchBuffer: HastSegment[] | null = null;
+
 /** worker 客户端：生命周期/崩溃重建封装在 parse-client，stores 只关心数据 */
 const parseClient = createParseClient({
   onBatch: (msg) => {
+    if (!msg.cold) {
+      // 例行全量：只缓冲（首批覆盖残留缓冲，防上一次全量中途出错遗留）
+      fullBatchBuffer = msg.segStart === 0 ? msg.items : fullBatchBuffer?.concat(msg.items) ?? msg.items;
+      return;
+    }
     if (msg.segStart === 0) {
-      // 首批：整列表重建 + 纪元递增（渲染层重置渐进挂载）
+      // 冷启动首批：整列表重建 + 纪元递增（渲染层重置渐进挂载）
+      fullBatchBuffer = null;
       segments$.set(msg.items);
       renderEpoch$.update((n) => n + 1);
     } else {
@@ -184,6 +203,12 @@ const parseClient = createParseClient({
     outline$.set(msg.outline);
     counts$.set(msg.counts);
     if (msg.full) {
+      // 例行全量收口：原子采纳缓冲的完整段列表（原地 diff，未变内容不动 DOM、
+      // 图片不重新请求；列表增长由渲染层渐进挂载追赶，缩短由 clamp 收敛）
+      if (fullBatchBuffer !== null) {
+        segments$.set(fullBatchBuffer);
+        fullBatchBuffer = null;
+      }
       renderTotal$.set(msg.totalSegments);
       parsePhase$.set("rendering"); // 是否仍有渐进工作由渲染层 onprogress 回报收敛
     } else {
@@ -202,11 +227,13 @@ const parseClient = createParseClient({
   },
   onWorkerError: (msg) => {
     console.warn("[parse] worker error:", msg.message);
+    fullBatchBuffer = null; // 例行全量半途出错：丢弃残缺缓冲
     toast$.set({ id: Date.now(), msg: get(t)("toast.parseFailed") });
     scheduleRebuild(get(doc$), true); // worker 状态已重建，强制全量
   },
   onCrashed: () => {
     console.warn("[parse] worker crashed; restarting");
+    fullBatchBuffer = null; // 崩溃：丢弃残缺缓冲（后续冷全量会整体重建）
     toast$.set({ id: Date.now(), msg: get(t)("toast.parseFailed") });
     scheduleRebuild(get(doc$), true);
   },
