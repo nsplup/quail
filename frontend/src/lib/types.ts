@@ -14,8 +14,8 @@ export type ThemeId =
 
 export type CountMode = "words" | "chars" | "auto";
 
-/** 预览解析/渲染阶段（遮罩与底栏进度指示的数据源） */
-export type ParsePhase = "idle" | "parsing" | "rendering";
+/** 预览解析阶段（底栏指示数据源；渲染随结果落地即时完成，无独立渲染阶段） */
+export type ParsePhase = "idle" | "parsing";
 
 export type Lang = "zh" | "en";
 

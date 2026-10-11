@@ -34,11 +34,6 @@
     ready$ as ready,
     blocks$ as blocks,
     segments$ as segments,
-    renderEpoch$ as renderEpoch,
-    patchHint$ as patchHint,
-    renderTotal$ as renderTotal,
-    parsePhase$ as parsePhase,
-    renderProgress$ as renderProgress,
     fontEditor$ as fontEditor,
     fontPreview$ as fontPreview,
     fontSizeEd$ as fontSizeEd,
@@ -262,17 +257,6 @@
     return document.querySelector<HTMLElement>(".preview-scroll");
   }
 
-  /** 渐进渲染进度回调（MarkdownRenderer → 遮罩/底栏进度指示）。
-   *  parsing 阶段不被打断（批传输未回齐时保持 parsing）；
-   *  渲染层追平后收敛 idle。 */
-  function onRenderProgress(visible: number, total: number): void {
-    renderProgress.set(total > 0 ? Math.min(1, visible / total) : 1);
-    parsePhase.update((p) => {
-      if (p === "parsing") return p;
-      return visible >= total ? "idle" : "rendering";
-    });
-  }
-
   function onPreviewVisible(index: number, atBottom: boolean): void {
     // 程序滚动（编辑器→预览 / 大纲跳转）期间不回写
     if (performance.now() < previewProgrammaticUntil) return;
@@ -413,10 +397,6 @@
 
         <PreviewPane
           segments={$segments}
-          epoch={$renderEpoch}
-          patchHint={$patchHint}
-          total={$renderTotal}
-          onprogress={onRenderProgress}
           onready={(api: PreviewApi) => previewApi.set(api)}
           onvisible={onPreviewVisible}
         />

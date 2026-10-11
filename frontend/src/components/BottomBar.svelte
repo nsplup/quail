@@ -2,7 +2,7 @@
   import Icon from "./Icon.svelte";
   import { t, locale } from "../lib/i18n.svelte";
   import type { Mode } from "../lib/types";
-  import { mode$ as mode, outlineOpen$ as outlineOpen, settingsOpen$ as settingsOpen, countLabel$ as countLabel, dirty$ as dirty, parsePhase$ as parsePhase, renderProgress$ as renderProgress } from "../lib/stores";
+  import { mode$ as mode, outlineOpen$ as outlineOpen, settingsOpen$ as settingsOpen, countLabel$ as countLabel, dirty$ as dirty, parsePhase$ as parsePhase } from "../lib/stores";
 
   const modes: { id: Mode; icon: string; label: string }[] = [
     { id: "source", icon: "code", label: "mode.source" },
@@ -94,11 +94,11 @@
     </div>
   </div>
   {#if $parsePhase !== "idle"}
-    <!-- 预览解析/渐进渲染进行中：加载动画 SVG icon + 渲染阶段实时百分比 -->
+    <!-- 预览解析进行中：加载动画 SVG icon（渲染随结果落地即时完成，无独立阶段） -->
     <div
       class="flex flex-none items-center gap-1.5 pr-2 text-xs text-muted select-none"
       role="status"
-      title={$parsePhase === "parsing" ? $t("preview.parsing") : $t("preview.rendering")}
+      title={$t("preview.parsing")}
     >
       <svg
         class="h-3.5 w-3.5 animate-spin"
@@ -121,9 +121,6 @@
           stroke-linecap="round"
         ></path>
       </svg>
-      {#if $parsePhase === "rendering"}
-        <span class="tabular-nums">{Math.round($renderProgress * 100)}%</span>
-      {/if}
     </div>
   {/if}
   <div class="bb-right truncate pr-1 text-xs text-muted tabular-nums" title={$countLabel}>

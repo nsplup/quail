@@ -1,107 +1,85 @@
 <script lang="ts">
   /**
-   * 预览面板：全量 DOM + 真实布局（offsetTop/offsetHeight 直接测量）。
-   * 与虚拟列表（virtua）相比的优势：布局高度 100% 精确——
-   * 拖动滚动条到底部/顶部不会因「估计高度与真实高度的差距累积」而回弹，
-   * 滚动同步插值（offset/size）也基于真实布局。
-   * 挂载节奏由 MarkdownRenderer 的渐进渲染控制（rAF 分批推进可见段数）；
-   * 增量渲染：worker 段级补丁 + 未变化段节点引用复用 →
-   * Svelte 跳过对应子树，只更新变化段。
-   * 解析/渐进渲染期间显示半透明遮罩：
-   * - 拦截点击/悬停/右键等指针交互，避免操作到「尚未稳定」的内容；
-   * - 手动转发 wheel 到滚动容器，保持滚动可用（无滚动穿透副作用）；
-   * - 触屏通过 touch-action:none + 手动转发保证滑动可用。
+   * 预览面板：virtua 虚拟滚动（全量 data + 按需挂载）。
+   *
+   * - 滚动容器由 VList 根元素承担（class="preview-scroll" 维持 App 侧
+   *   「按类名取滚动容器」的约定）；视口外的段不再挂载 DOM，
+   *   长文档的节点数与布局成本与文档长度解耦；
+   * - 不做渐进式渲染：虚拟化本身就是按需挂载（视口 ± overscan），
+   *   data 直接绑定完整 segments——rAF 分批推进 visibleCount 在虚拟化下
+   *   只剩 store 更新开销，且会人为延迟长文档的同步滚动/大纲可用性；
+   * - 未测量/已卸载段的 offset/size 为估计值（types.ts 契约不变）：
+   *   virtua 在 scrollToIndex 后有 ~150ms 测量修正窗口（目标偏移随真实
+   *   测量重放），叠加 fixScrollJump 滚动锚定，缓解估计高度漂移；
+   * - 增量渲染：worker 段级补丁 + 未变化段节点引用复用 →
+   *   Svelte 跳过对应子树，只更新变化段（见 MarkdownSegment）；
+   * - 滚动闪烁与渐进渲染无关（渐进仅作用于解析窗口期，滚动期间早已追平），
+   *   根源是虚拟化重挂载：MarkdownImage 用模块级终态缓存 + eager 加载 +
+   *   命中缓存时同步解码兜底（见该组件），本组件用较宽 overscan 预热
+   *   周边项的实测高度，摊薄重挂载频率；
+   * - 解析期间不渲染预览遮罩：指针/滚轮/触屏交互全程直达滚动容器。
    */
   import { onMount } from "svelte";
+  import { VList } from "virtua/svelte";
+  import type { VListHandle } from "virtua/svelte";
   import type { HastSegment } from "../markdown/markdown-core";
-  import { parsePhase$ as parsePhase } from "../stores";
   import { openExternal } from "../bridge";
-  import MarkdownRenderer from "../markdown/MarkdownRenderer.svelte";
+  import MarkdownSegment from "../markdown/MarkdownSegment.svelte";
   import type { PreviewApi } from "../types";
 
   let {
     segments,
-    epoch,
-    patchHint,
-    total,
-    onprogress,
     onready,
     onvisible,
   }: {
     segments: HastSegment[];
-    epoch: number;
-    patchHint: { segStart: number; segAdded: number } | null;
-    total: number;
-    onprogress: (visible: number, total: number) => void;
     onready: (api: PreviewApi) => void;
     /** 可视区首块变化（用于 预览→编辑器 同步滚动 与 大纲高亮）；atBottom=滚动到底 */
     onvisible: (index: number, atBottom: boolean) => void;
   } = $props();
 
   let paneEl = $state<HTMLDivElement | null>(null);
+  /** VList 实例：PreviewApi 与可视区探测的稳定入口 */
+  let vlist = $state<VListHandle | null>(null);
   let raf = 0;
 
   function scrollEl(): HTMLElement | null {
     return paneEl?.querySelector<HTMLElement>(".preview-scroll") ?? null;
   }
 
-  /** 块元素集合（live；自动排除顶部间隔元素，索引与 blocks 一致） */
-  function items(el: HTMLElement): HTMLCollectionOf<HTMLElement> {
-    return el.getElementsByClassName("md-item") as HTMLCollectionOf<HTMLElement>;
-  }
-
-  /** 可视区首块：按 offsetTop 二分（真实布局，O(log n)） */
-  function findStartIndex(el: HTMLElement): number {
-    const kids = items(el);
-    const top = el.scrollTop + 4;
-    let lo = 0;
-    let hi = kids.length - 1;
-    let res = 0;
-    while (lo <= hi) {
-      const mid = (lo + hi) >> 1;
-      if ((kids[mid] as HTMLElement).offsetTop <= top) {
-        res = mid;
-        lo = mid + 1;
-      } else {
-        hi = mid - 1;
-      }
-    }
-    return res;
-  }
+  /* ---------- PreviewApi：全部映射到 VList handle ---------- */
 
   $effect(() => {
     onready({
       scrollToIndex(index, opts) {
-        const el = scrollEl();
-        const kids = el ? items(el) : null;
-        if (!el || !kids || kids.length === 0) return;
-        const i = Math.max(0, Math.min(index, kids.length - 1));
-        const child = kids[i] as HTMLElement;
-        el.scrollTop = Math.max(0, child.offsetTop - (opts?.offset ?? 0));
+        const vl = vlist;
+        if (!vl || segments.length === 0) return;
+        vl.scrollToIndex(Math.max(0, Math.min(index, segments.length - 1)), {
+          align: "start",
+          // virtua 的 offset 是「目标滚动位置上的附加偏移」，取负映射原语义：
+          // scrollTop = 段顶 - offset（段顶落在视口顶部下方 offset px）。
+          // 跳转后 virtua 会在测量修正窗口内重放该目标，估计漂移可自愈。
+          offset: -(opts?.offset ?? 0),
+        });
       },
       getScrollTop() {
-        return scrollEl()?.scrollTop ?? 0;
+        return vlist?.getScrollOffset() ?? 0;
       },
       setScrollTop(top: number) {
-        const el = scrollEl();
-        if (el) el.scrollTop = top;
+        vlist?.scrollTo(top);
       },
       getItemOffset(index: number): number {
-        const el = scrollEl();
-        if (!el) return 0;
-        const kids = items(el);
-        const i = Math.max(0, Math.min(index, kids.length - 1));
-        return (kids[i] as HTMLElement)?.offsetTop ?? 0;
+        const vl = vlist;
+        if (!vl || segments.length === 0) return 0;
+        return vl.getItemOffset(Math.max(0, Math.min(index, segments.length - 1)));
       },
       getItemSize(index: number): number {
-        const el = scrollEl();
-        if (!el) return 0;
-        const kids = items(el);
-        const i = Math.max(0, Math.min(index, kids.length - 1));
-        return (kids[i] as HTMLElement)?.offsetHeight ?? 0;
+        const vl = vlist;
+        if (!vl || segments.length === 0) return 0;
+        return vl.getItemSize(Math.max(0, Math.min(index, segments.length - 1)));
       },
       refresh() {
-        /* 真实布局无需手动重算；保留 API 兼容 */
+        /* virtua 经 ResizeObserver 自适应测量，无需手动重算；保留 API 兼容 */
       },
     });
   });
@@ -114,11 +92,19 @@
     };
     zero();
     const t = setTimeout(zero, 250);
-    return () => clearTimeout(t);
+
+    // 预览区链接点击统一拦截 → 后端转发系统浏览器打开；
+    // 与 md-image 相同的模式：资源/动作一律交给 Go 侧处理。
+    // （事件委托到 VList 根元素：virtua 透传属性不含事件，改为手动挂载）
+    const el = scrollEl();
+    el?.addEventListener("click", handlePreviewClick);
+
+    return () => {
+      clearTimeout(t);
+      el?.removeEventListener("click", handlePreviewClick);
+    };
   });
 
-  /* 预览区链接点击统一拦截 → 后端转发系统浏览器打开；
-     与 md-image 相同的模式：资源/动作一律交给 Go 侧处理 */
   async function handlePreviewClick(e: MouseEvent): Promise<void> {
     const target = e.target as HTMLElement | null;
     const anchor = target?.closest?.("a");
@@ -133,101 +119,41 @@
     }
   }
 
+  /** 预览滚动 → onvisible（rAF 合并；首块索引来自 virtua 内核二分） */
   function handleScroll(): void {
     if (raf) return;
     raf = requestAnimationFrame(() => {
       raf = 0;
+      const vl = vlist;
       const el = scrollEl();
-      if (!el) return;
+      if (!vl || !el) return;
       try {
+        // atBottom 用真实滚动容器测量（scrollHeight 含尾部 45vh 缓冲，与旧行为一致）
         const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 4;
-        onvisible(findStartIndex(el), atBottom);
+        const idx = vl.findStartIndex();
+        onvisible(Math.max(0, Math.min(idx, segments.length - 1)), atBottom);
       } catch {
         /* ignore */
       }
     });
   }
-
-  /* ---------- 遮罩：接管指针交互，仅放行滚动 ---------- */
-
-  /** 遮罩上吞掉点击类事件，不冒泡到下面的预览内容 */
-  function blockPointer(e: MouseEvent): void {
-    e.preventDefault();
-    e.stopPropagation();
-  }
-
-  /** 遮罩上把 wheel 转发给滚动容器（保滚动、挡穿透） */
-  function forwardWheel(e: WheelEvent): void {
-    const el = scrollEl();
-    if (!el) return;
-    el.scrollTop += e.deltaY;
-    if (e.deltaX) el.scrollLeft += e.deltaX;
-    // 必须 preventDefault，避免滚到边界后触发链式滚动/整页回弹
-    e.preventDefault();
-  }
-
-  /* ---------- 遮罩：触屏滑动转发 ---------- */
-
-  let touchY = 0;
-
-  function onTouchStart(e: TouchEvent): void {
-    if (e.touches.length !== 1) return;
-    touchY = e.touches[0].clientY;
-  }
-
-  function onTouchMove(e: TouchEvent): void {
-    const el = scrollEl();
-    if (!el || e.touches.length !== 1) return;
-    const y = e.touches[0].clientY;
-    const dy = touchY - y; // 手指上滑 → 内容上滚 → scrollTop 增大
-    touchY = y;
-    el.scrollTop += dy;
-    e.preventDefault();
-  }
 </script>
 
 <div class="pane pane-preview" bind:this={paneEl}>
-  <div
-    class="preview-scroll h-full overflow-y-scroll"
+  <!-- VList 根元素即滚动容器。style 追加在 virtua 内联样式之后，
+       overflow-y: scroll 覆盖默认 auto，保持旧版「滚动条常驻」不跳动 -->
+  <VList
+    bind:this={vlist}
+    class="preview-scroll"
+    style="overflow-y: scroll;"
+    data={segments}
+    overscan={10}
     onscroll={handleScroll}
-    onclick={handlePreviewClick}
     role="log"
     aria-label="preview"
   >
-    <MarkdownRenderer {segments} {epoch} {patchHint} {total} {onprogress} />
-  </div>
-
-  {#if $parsePhase !== "idle"}
-    <!-- 半透明遮罩：提示解析/渐进渲染进行中。
-         挡住指针交互（点击/悬停/右键/拖选），但通过手动转发保留滚动。 -->
-    <div
-      class="pv-overlay"
-      aria-hidden="true"
-      onclick={blockPointer}
-      ondblclick={blockPointer}
-      oncontextmenu={blockPointer}
-      onwheel={forwardWheel}
-      ontouchstart={onTouchStart}
-      ontouchmove={onTouchMove}
-    ></div>
-  {/if}
+    {#snippet children(seg, index)}
+      <MarkdownSegment {seg} {index} />
+    {/snippet}
+  </VList>
 </div>
-
-<style>
-  .pane-preview {
-    position: relative; /* 遮罩定位基准 */
-  }
-
-  .pv-overlay {
-    position: absolute;
-    inset: 0;
-    z-index: 20;
-    background: rgba(255, 255, 255, 0.35);
-    /* 关键：恢复指针命中，接管交互；滚动由 JS 手动转发 */
-    pointer-events: auto;
-    cursor: progress; /* 忙状态提示 */
-    /* 触屏：禁用浏览器默认手势，交给 JS 转发 */
-    touch-action: none;
-    transition: opacity 0.12s ease;
-  }
-</style>

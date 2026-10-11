@@ -1,10 +1,12 @@
 /**
  * 全局状态中心：所有跨组件共享状态统一由 svelte store 持有。
  * - 持久化设置：persisted* 工厂在 store 创建时读入 localStorage，订阅期自动回写；
- * - 解析管线：doc$ 变化 → rAF 合并 + 自适应 minInterval + 120ms maxWait →
- *   发送到解析 worker（增量/全量由 worker 内部决定）→ 段级补丁回传
- *   → segments$/blocks$/outline$/counts$（未变段引用复用 → Svelte 跳过子树）；
- *   解析阶段/渐进渲染进度由 parsePhase$/renderProgress$ 对外报告；
+ * - 解析管线（双 worker）：doc$ 变化 → rAF 合并 + 自适应 minInterval + 120ms
+ *   maxWait → 增量 worker 实时解析（段级补丁回传，未变段引用复用 → Svelte
+ *   跳过子树）；例行周期全量重建由独立的重建 worker 并行执行（MessageChannel
+ *   直连 + 内容哈希去重，基线在增量 worker 内原子替换，不经主线程、不阻塞
+ *   打字响应）；冷启动/idle 自愈仍由增量 worker 就地全量；
+ *   解析阶段由 parsePhase$ 对外报告（结果落地即 idle，无渐进挂载阶段）；
  * - 组件私有交互细节（拖拽、程序滚动时间窗等）仍留在组件内，不在此处。
  */
 import { writable, derived, get, type Writable } from "svelte/store";
@@ -127,28 +129,18 @@ export const ready$ = writable(false);
  */
 export const segments$ = writable<HastSegment[]>([]);
 /**
- * 全量重建纪元：仅在「冷启动全量」（worker 实例内首次解析：boot / 崩溃重建后）
- * 时 +1，渲染层据此重置渐进挂载状态。
- * 例行全量（25 次增量阈值 / idle 自愈 / 空态兜底）不递增——旧主线程版本里
- * 全量结果是 hast$ 原地替换、Svelte 原地 diff、用户无感；worker 重构后若
- * 每次例行全量都清空重放，增量渲染就会被周期性打断（整树卸载 + 图片重请求）。
- * 例行全量改走 fullBatchBuffer 缓冲 + result 到达后原子采纳（原地 diff）。
+ * 全量重建纪元（renderEpoch$）与渐进渲染进度（renderTotal$/renderProgress$）
+ * 已随渐进式渲染一起移除：虚拟化预览按需挂载，全量/增量结果直接落地
+ * segments$，无需主线程重放窗口；parsePhase$ 只区分 parsing / idle。
  */
-export const renderEpoch$ = writable(0);
-/** 最近一次增量补丁（渲染层据此把补丁区间立即纳入可见范围） */
-export const patchHint$ = writable<{ segStart: number; segAdded: number } | null>(null);
-/** 全量解析的完整段数（渐进渲染进度分母；增量时与 segments.length 同步） */
-export const renderTotal$ = writable(0);
 export const blocks$ = writable<PreviewBlock[]>([]);
 /** 大纲（worker 由 mdast + blocks 计算后回传） */
 export const outline$ = writable<OutlineItem[]>([]);
 /** 字数统计（worker 按解析时刻源码快照计算后回传，主线程不再扫全文） */
 export const counts$ = writable<{ words: number; hanChars: number }>({ words: 0, hanChars: 0 });
 
-/** 预览解析/渲染阶段：parsing（worker 解析中）→ rendering（渐进挂载中）→ idle */
+/** 预览解析阶段：parsing（worker 解析中）→ idle（结果落地即收敛，无渐进挂载阶段） */
 export const parsePhase$ = writable<ParsePhase>("idle");
-/** 渐进渲染进度 0..1（visibleCount / total） */
-export const renderProgress$ = writable(1);
 
 /** 编辑器/预览 API 句柄（组件就绪后注入） */
 export const editorApi$ = writable<EditorApi | null>(null);
@@ -165,6 +157,8 @@ const MIN_INTERVAL_BASE = 16;
 const ADAPT_STEP = 32;
 const MAX_INTERVAL = 256;
 const MAX_WAIT = 120;
+/** 在途解析耗时超过该值才认为 worker 真的慢，允许拉长节流（见 noteAdapt） */
+const ADAPT_LATENCY_MS = 80;
 
 let minInterval = MIN_INTERVAL_BASE;
 let lastRun = 0;
@@ -190,10 +184,10 @@ const parseClient = createParseClient({
       return;
     }
     if (msg.segStart === 0) {
-      // 冷启动首批：整列表重建 + 纪元递增（渲染层重置渐进挂载）
+      // 冷启动首批：整列表重建（渲染层为 keyed 原地 diff + 虚拟化按需挂载，
+      // 无需纪元/重放机制；未变段引用复用，图片不重新请求）
       fullBatchBuffer = null;
       segments$.set(msg.items);
-      renderEpoch$.update((n) => n + 1);
     } else {
       segments$.update((arr) => [...arr, ...msg.items]);
     }
@@ -204,24 +198,22 @@ const parseClient = createParseClient({
     counts$.set(msg.counts);
     if (msg.full) {
       // 例行全量收口：原子采纳缓冲的完整段列表（原地 diff，未变内容不动 DOM、
-      // 图片不重新请求；列表增长由渲染层渐进挂载追赶，缩短由 clamp 收敛）
+      // 图片不重新请求；虚拟化按需挂载，长列表直接落地）
       if (fullBatchBuffer !== null) {
         segments$.set(fullBatchBuffer);
         fullBatchBuffer = null;
       }
-      renderTotal$.set(msg.totalSegments);
-      parsePhase$.set("rendering"); // 是否仍有渐进工作由渲染层 onprogress 回报收敛
     } else {
+      // 增量：只 splice 被替换区间（未变段引用不变 → Svelte 跳过对应子树）
       const { segStart, segCount, items } = msg.segments;
       segments$.update((arr) => {
         const next = arr.slice();
         next.splice(segStart, segCount, ...items);
         return next;
       });
-      patchHint$.set({ segStart, segAdded: items.length });
-      renderTotal$.set(msg.totalSegments);
-      parsePhase$.set("rendering");
     }
+    // 无渐进挂载阶段：结果落地即收敛（底栏转圈仅覆盖 worker 解析窗口）
+    parsePhase$.set("idle");
     // 若调度器有积压 src（worker 在途期间的新编辑），立即补跑
     onWorkerDrained();
   },
@@ -248,8 +240,14 @@ function onWorkerDrained(): void {
   }
 }
 
-/** 高频触发（在途时又来新 src）计数：连续 ≥3 次 → 拉长 minInterval */
+/** 高频触发（在途时又来新 src）计数：连续 ≥3 次 → 拉长 minInterval。
+ * 仅当在途解析实测偏慢（已耗时 > ADAPT_LATENCY_MS）才计数——
+ * 快速增量解析期间的一帧内连发按键（IME 组合、粘贴、连打）此前也会
+ * 累计计数并拉长节流，导致之后 worker 空闲时每次编辑仍要平白等待
+ * MAX_WAIT 才解析（「偶尔滞后」的主因）。慢文档下本机制照常生效，
+ * 维持对 worker 的背压。 */
 function noteAdapt(): void {
+  if (performance.now() - lastRun < ADAPT_LATENCY_MS) return;
   adaptHits++;
   if (adaptHits >= 3) {
     minInterval = Math.min(MAX_INTERVAL, minInterval + ADAPT_STEP);
@@ -293,9 +291,10 @@ function flushNow(): void {
   lastRun = performance.now();
   parsePhase$.set("parsing");
   parseClient.request(s, ff);
-  // 本轮无高频触发 → 向基准回落
+  // 本轮无高频触发 → 向基准回落（2×步长：拉长慢、回落快，避免一次
+  // 突发把后续单发编辑的解析延迟拖高好几个节流周期）
   if (adaptHits === 0) {
-    minInterval = Math.max(MIN_INTERVAL_BASE, minInterval - ADAPT_STEP);
+    minInterval = Math.max(MIN_INTERVAL_BASE, minInterval - ADAPT_STEP * 2);
   }
 }
 

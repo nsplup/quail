@@ -204,7 +204,7 @@ function hastType(node: HastContent): string {
 }
 
 /**
- * HAST 根 → 渲染段列表（MarkdownRenderer 顶层切分）。
+ * HAST 根 → 渲染段列表（MarkdownSegment 逐段渲染、PreviewPane 虚拟滚动）。
  * 每个锚 comment 开启新段，段收集锚后的全部内容节点——
  * 段数与 blocksFromHast 的块数一一对应（滚动同步依赖该不变量）。
  */
@@ -339,7 +339,8 @@ export function buildOutline(root: Root, blocks: PreviewBlock[]): OutlineItem[] 
  *    worker 回传段级补丁后，主线程未变段的对象引用保持稳定 →
  *    MarkdownNode 以节点引用为 props，引用不变 → Svelte 跳过该子树，
  *    只有真正变化的块被重渲染（增量渲染）。
- * 兜底：每 25 次增量或 worker idle 时强制全量解析，防止启发式误差累积。
+ * 兜底：连续增量达到阈值且距上次全量超过时间闸门时，或 worker idle 自愈校验
+ * 失败时，强制全量解析，防止启发式误差累积。
  */
 
 export interface IncrementalParseState {
@@ -348,9 +349,12 @@ export interface IncrementalParseState {
   /** 上一轮 HAST 根（增量拼接复用 head/tail 节点引用） */
   hast: HastRoot | null;
   blocks: PreviewBlock[];
-  /** 连续增量次数：达到阈值（SELF_HEAL_EVERY）强制全量防启发式误差累积；
+  /** 连续增量次数：达到阈值（SELF_HEAL_EVERY）且距上次全量超过
+   *  SELF_HEAL_MIN_INTERVAL_MS 时强制全量防启发式误差累积；
    *  可选字段，旧调用方不传也能跑（按 0 处理） */
   incrementalCount?: number;
+  /** 上次全量重建的时刻（ms）；与阈值共同决定例行全量时机（可选，0 = 从未） */
+  lastFullAt?: number;
 }
 
 /** 增量结果的段级补丁区间（全量结果不携带）：主线程按此 splice 段列表 */
@@ -371,12 +375,14 @@ export interface IncrementalParseResult {
   full: boolean;
   /** 连续增量次数（调用方应存回 IncrementalParseState.incrementalCount；全量后归零） */
   incrementalCount: number;
+  /** 全量发生时刻（调用方应存回 IncrementalParseState.lastFullAt） */
+  lastFullAt: number;
   /** 段级补丁区间（仅增量结果有值；全量由调用方整体重建段列表） */
   patch?: SegmentPatchRange;
 }
 
-/** 连续增量 N 次后强制全量（自愈式全量阈值，唯一的阈值归属点） */
-const SELF_HEAL_EVERY = 25;
+/** 连续增量 N 次后向重建 worker 请求周期性全量（阈值唯一归属点） */
+export const SELF_HEAL_EVERY = 25;
 
 /** 可能与前一顶层块延续成同一容器的行首特征 */
 const CONT_RE = /^\s*(?:[-*+]|\d{1,9}[.)]|>|(?:```+|~~~+))\s*/;
@@ -461,6 +467,7 @@ export function buildBlocksIncremental(
       blocks: buildBlocks(root, nextSrc),
       full: true,
       incrementalCount: 0,
+      lastFullAt: Date.now(),
       /* 全量结果不走补丁：主线程收到 full 标记后整体重建段列表 */
       patch: { segStart: 0, segRemoved: 0, segAdded: 0 },
     };
@@ -469,7 +476,6 @@ export function buildBlocksIncremental(
   const incCount = prev.incrementalCount ?? 0;
   if (
     forceFull ||
-    incCount >= SELF_HEAL_EVERY ||
     !prev.root ||
     !prev.src ||
     prev.blocks.length === 0
@@ -699,6 +705,7 @@ export function buildBlocksIncremental(
     blocks,
     full: false,
     incrementalCount: incCount + 1,
+    lastFullAt: prev.lastFullAt ?? 0,
     /* 段级补丁：blocks 与 segments 一一对应（锚数 === 块数不变量已在上文校验），
        被替换的段区间 = 被替换的块区间 [i0, i1] */
     patch: { segStart: i0, segRemoved: i1 - i0 + 1, segAdded: local.blocks.length },

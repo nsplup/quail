@@ -18,17 +18,25 @@
   outline: none;
   width: 100%;
   min-width: 0;
-  /* 尾部 45vh 缓冲，与编辑器呼应（真实布局下也保证最后一屏可完全展示） */
+  /* 尾部 45vh 缓冲，与编辑器呼应（虚拟滚动下同样保证最后一屏可完全展示） */
   padding-bottom: 45vh;
+  /* 关闭浏览器原生滚动锚定：虚拟滚动的定位修正（估高 → 实测）由 virtua
+     的 fixScrollJump 同帧补偿，原生锚定与其叠加会产生双重修正（上行滚动
+     时视口上方条目尺寸被测量，内容可见跳动/闪烁）。virtua 只对内层容器
+     设置了 overflow-anchor:none，滚动容器自身需在此显式关闭 */
+  overflow-anchor: none;
 }
 
-/* 首块顶部内间距（原 .pv-top-pad 占位元素改为 CSS 规则实现，首块不贴顶） */
-.preview-scroll > .md-item:first-child {
+/* 首块顶部内间距（原 .pv-top-pad 占位元素改为 CSS 规则实现，首块不贴顶）。
+   虚拟滚动后 .md-item 不再是滚动容器的直接子元素（外层多一层 virtua
+   绝对定位包装），:first-child 改为段组件按 index===0 打的 .md-first 标记 */
+.md-item.md-first {
   padding-top: 24px;
 }
 
-/* 块级外间距。注：预览为全量真实布局（无估计高度），
-   滚动条拖动/点击的落点与同步插值永远精确；增量渲染保证编辑时只重渲染变化块 */
+/* 块级间距。注：预览为虚拟滚动（virtua），未挂载段的高度为估计值，
+   挂载段由 ResizeObserver 实测；块间距用 padding（不用 margin）——
+   virtua 的绝对定位项包装不会破坏间距，也不存在相邻 margin 折叠 */
 .md-item {
   padding-bottom: 14px;
   min-width: 0;

@@ -18,7 +18,9 @@
  *   （结构与 worker 内 head/tail 节点引用复用互补，两层增量缺一不可）。
  */
 import type { HastSegment } from "../markdown/markdown-core";
+import type { Root as HastRoot } from "hast";
 import type { PreviewBlock, OutlineItem } from "../types";
+import type { Root as MdastRoot } from "mdast";
 
 export interface Counts {
   /** 英文单词数 */
@@ -42,7 +44,7 @@ export interface SegmentPatch {
   items: HastSegment[];
 }
 
-/** 全量路径：段列表分批回传（防止单条巨消息 + 支撑渐进渲染进度） */
+/** 全量路径：段列表分批回传（防止单条巨消息撑爆 postMessage / 主线程单帧成本） */
 export interface FullBatch {
   type: "batch";
   rev: number;
@@ -51,7 +53,7 @@ export interface FullBatch {
   items: HastSegment[];
   /**
    * 冷启动全量（worker 实例内首次解析：boot / 崩溃重建后）→ true：
-   * 主线程清空旧列表并递增 renderEpoch（渐进重放）。
+   * 主线程逐批落地 segments$（虚拟化按需挂载，无重放窗口）。
    * 例行全量（25 次增量阈值 / idle 自愈 / 空态兜底）→ false：
    * 主线程只缓冲批次，result 到达后原子采纳——不清空已有渲染，
    * 由 Svelte 原地 diff 复用 DOM（与旧主线程版全量更新行为一致）。
@@ -64,7 +66,7 @@ export interface ParseResult {
   rev: number;
   /** true = 全量重建（配合 FullBatch）；false = 增量（segments 为补丁） */
   full: boolean;
-  /** 完整段列表长度（渐进渲染进度分母） */
+  /** 完整段列表长度（调试对账用；渲染层直接消费 segments） */
   totalSegments: number;
   /** full=true 时无意义；full=false 时为段级补丁 */
   segments: SegmentPatch;
@@ -79,5 +81,39 @@ export interface WorkerError {
   message: string;
 }
 
+/* ---------------- 增量 worker ↔ 全量重建 worker（MessageChannel 直连） ----------------
+ * 例行全量重建（SELF_HEAL_EVERY 阈值触发）不再由增量 worker 就地执行——大文档
+ * 全量解析需数百毫秒到数秒，会阻塞后续增量请求（打字偶发卡顿的根源）。
+ * 改为：增量 worker 通过 port 把重建请求发给独立的重建 worker；重建完成后
+ * 结果经 port 直达增量 worker（结构化克隆发生在两个 worker 之间，不经过
+ * 主线程），增量 worker 校验 src 未漂移后原子替换持有的旧 HAST 基线。 */
+
+/** 增量 worker → 重建 worker：对指定 src 做一次完整解析。
+ *  hash = contentHash(src)：重建 worker 据此跳过同内容的重复重建
+ *  （内容未变时直接复用上次解析结果，避免无意义全量）。 */
+export interface RebuildRequestMsg {
+  type: "fullRequest";
+  src: string;
+  hash: string;
+}
+
+/** 重建 worker → 增量 worker：重建完成的全量解析基线 */
+export interface RebuildStateMsg {
+  type: "fullState";
+  src: string;
+  root: MdastRoot | null;
+  hast: HastRoot;
+  blocks: PreviewBlock[];
+}
+
+/** 主线程 → 两个 worker 的初始化消息：移交与对端直连的 MessageChannel port */
+export interface InitRebuildPortMsg {
+  type: "initRebuildPort";
+  port: MessagePort;
+}
+
+export type RebuildPortIn = RebuildRequestMsg; // 重建 worker 收
+export type RebuildPortOut = RebuildStateMsg; // 增量 worker 收
+
 export type WorkerOut = FullBatch | ParseResult | WorkerError;
-export type WorkerIn = ParseRequest;
+export type WorkerIn = ParseRequest | InitRebuildPortMsg;

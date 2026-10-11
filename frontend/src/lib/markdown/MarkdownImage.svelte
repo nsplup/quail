@@ -46,6 +46,9 @@
    * - 块级（inline=false，独立成段的图片，含 <a> 包裹独自成块）：
    *   占位三态统一 240px 高度；loaded 后 img 铺满、高度按图片比例自适应，
    *   alt 描述文本（caption）显示在图片底部；
+   * - 不用 loading="lazy"：虚拟滚动下段只在视口附近挂载，lazy 的
+   *   交叉观察反而推迟内存缓存命中与 load 事件 → 滚动往复时占位/空白
+   *   帧闪烁；配合模块级终态缓存 + 命中时 sync 解码，重挂载首帧即有像素。
    * - 行内（inline=true，与文字混排等一切其他场景，data-inline 标注）：
    *   不设宽高，使用图片原本尺寸；占位为行内布局 [SVG 图标][说明文本][刷新]，
    *   高度以行高为准，描边与背景色与块级占位一致；描述文本以 title 属性呈现。
@@ -76,6 +79,8 @@
 
   let status = $state<ImgStatus>(cached?.status ?? "loading");
   let errorCode = $state<ImgErrorCode>(cached?.code ?? "");
+  /** 缓存命中 → 同步解码（见 img.decoding；重挂载首帧即有像素，不闪空白帧） */
+  let decodeSync = $state(cached?.status === "loaded");
   /** 刷新穿透参数（query 片段）：reload() 设置，src 变化时清零 */
   let bust = $state("");
   /**
@@ -93,6 +98,7 @@
     const hit = cache.get(src);
     status = hit?.status ?? "loading";
     errorCode = hit?.code ?? "";
+    decodeSync = hit?.status === "loaded";
   });
 
   /** 刷新：回占位态 + 缓存穿透参数重新请求（阻止冒泡——块级图片可能在 <a> 内） */
@@ -155,8 +161,7 @@
     src={imgSrc}
     {alt}
     title={inline && alt ? alt : undefined}
-    loading="lazy"
-    decoding="async"
+    decoding={decodeSync ? "sync" : "async"}
     onload={() => {
       status = "loaded";
       errorCode = "";
