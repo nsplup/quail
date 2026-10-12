@@ -172,6 +172,22 @@ function requestRebuild(): void {
 
 /* ---------------- 主线程请求处理 ---------------- */
 
+/** 空白文档重置：不解析，把内部状态归零为干净空基线（主线程已直接落地空结果）。
+ * root 置 null → 下一次真实解析按冷启动全量走；清掉自愈计时；
+ * 在途例行重建若针对旧 src，回包后会被 adoptRebuildState 的 src 不变守卫丢弃。 */
+function resetEmpty(): void {
+  state.src = "";
+  state.root = null;
+  state.hast = null;
+  state.blocks = [];
+  state.incrementalCount = 0;
+  state.lastFullAt = 0;
+  if (healTimer !== undefined) {
+    clearTimeout(healTimer);
+    healTimer = undefined;
+  }
+}
+
 /** 每次解析后重置 idle 自愈计时：有新请求则重新计时（等效「空闲 10s」判定） */
 function scheduleHeal(): void {
   if (healTimer !== undefined) clearTimeout(healTimer);
@@ -234,6 +250,10 @@ ctx.onmessage = (e: MessageEvent<WorkerIn>): void => {
   if (!msg) return;
   if (msg.type === "initRebuildPort") {
     attachRebuildPort(msg.port);
+    return;
+  }
+  if (msg.type === "resetEmpty") {
+    resetEmpty();
     return;
   }
   if (msg.type !== "parse") return;

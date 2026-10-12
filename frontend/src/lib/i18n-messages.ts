@@ -73,6 +73,15 @@ export const zhMessages = {
     parsing: "解析中…",
     rendering: "渲染中",
   },
+  parse: {
+    ready: "准备就绪",
+    parsing: "解析中",
+    done: "解析 {ms}ms",
+    tooltipEmpty: "暂无解析耗时数据",
+    max: "最大耗时 {ms}ms",
+    avg: "平均耗时 {ms}ms",
+    min: "最小耗时 {ms}ms",
+  },
 } as const;
 
 export const enMessages = {
@@ -142,6 +151,15 @@ export const enMessages = {
     imageReload: "Reload",
     parsing: "Parsing…",
     rendering: "Rendering",
+  },
+  parse: {
+    ready: "Ready",
+    parsing: "Parsing",
+    done: "Parse {ms}ms",
+    tooltipEmpty: "No parse timing yet",
+    max: "Max time {ms}ms",
+    avg: "Avg time {ms}ms",
+    min: "Min time {ms}ms",
   },
 } as const;
 

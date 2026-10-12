@@ -5,6 +5,10 @@
  *   ParseRequest { rev, src, forceFull }
  *     - worker 内部维护解析状态（IncrementalParseState），按到达顺序串行处理；
  *     - forceFull=true 时全量重建（boot / 自愈 / 结构漂移兜底）。
+ *   ResetEmptyMsg {}
+ *     - 文档为空白（trim 后为空）：解析无意义，主线程直接落地空结果，
+ *       仅通知 worker 把内部状态重置为干净空基线（不解析、不回包）。
+ *       重置后 root=null，下一次真实解析按冷启动全量走，保证一致性。
  *
  * 响应（worker → 主）：
  *   FullBatch    全量段列表分批回传（segStart=0 的第一批触发主线程整列表重建）
@@ -81,6 +85,11 @@ export interface WorkerError {
   message: string;
 }
 
+/** 空白文档重置：不解析，仅把增量 worker 内部状态归零（无响应） */
+export interface ResetEmptyMsg {
+  type: "resetEmpty";
+}
+
 /* ---------------- 增量 worker ↔ 全量重建 worker（MessageChannel 直连） ----------------
  * 例行全量重建（SELF_HEAL_EVERY 阈值触发）不再由增量 worker 就地执行——大文档
  * 全量解析需数百毫秒到数秒，会阻塞后续增量请求（打字偶发卡顿的根源）。
@@ -116,4 +125,4 @@ export type RebuildPortIn = RebuildRequestMsg; // 重建 worker 收
 export type RebuildPortOut = RebuildStateMsg; // 增量 worker 收
 
 export type WorkerOut = FullBatch | ParseResult | WorkerError;
-export type WorkerIn = ParseRequest | InitRebuildPortMsg;
+export type WorkerIn = ParseRequest | ResetEmptyMsg | InitRebuildPortMsg;

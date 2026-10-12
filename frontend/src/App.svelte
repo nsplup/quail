@@ -45,6 +45,7 @@
     editorApi$ as editorApi,
     previewApi$ as previewApi,
     bootApp,
+    markNextParseAsOpen,
     indexOfLine,
     docState$ as docState,
   } from "./lib/stores";
@@ -175,6 +176,8 @@
 
   /** 装载已打开的文档状态（对话框打开与拖拽打开共用） */
   function loadOpened(state: QuailDocState): void {
+    // 打开文档语义：指示器立即进入「解析中」（无 200ms 阈值，空白文档除外）
+    markNextParseAsOpen();
     docState.set(state);
     doc.set(state.content);
     get(editorApi)?.setDoc(state.content);

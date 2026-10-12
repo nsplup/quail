@@ -32,6 +32,8 @@ export interface ParseClientHandlers {
 export interface ParseClient {
   /** 发送解析请求；返回本次 rev */
   request(src: string, forceFull: boolean): number;
+  /** 空白文档重置：通知增量 worker 把内部状态归零（不解析、不回包、不计在途） */
+  resetEmpty(): void;
   /** 是否有请求在途（发出 → 响应回齐） */
   busy(): boolean;
   /** 手动重建增量 worker（崩溃恢复路径） */
@@ -138,6 +140,13 @@ export function createParseClient(handlers: ParseClientHandlers): ParseClient {
     return rev;
   }
 
+  /** 空白文档重置：fire-and-forget（不解析不回包），不计入在途请求 */
+  function resetEmpty(): void {
+    if (disposed) return;
+    if (!worker || !rebuildWorker) spawnAll();
+    worker!.postMessage({ type: "resetEmpty" });
+  }
+
   function dispose(): void {
     disposed = true;
     worker?.terminate();
@@ -149,6 +158,7 @@ export function createParseClient(handlers: ParseClientHandlers): ParseClient {
 
   return {
     request,
+    resetEmpty,
     restart,
     dispose,
     busy: () => outstanding > 0,

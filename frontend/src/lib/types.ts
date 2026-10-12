@@ -17,6 +17,14 @@ export type CountMode = "words" | "chars" | "auto";
 /** 预览解析阶段（底栏指示数据源；渲染随结果落地即时完成，无独立渲染阶段） */
 export type ParsePhase = "idle" | "parsing";
 
+/**
+ * 解析触发上下文（底栏解析状态指示器区分展示规则用）：
+ * - open：打开文档触发（冷启动 / 磁盘重载）——「解析中」无启动阈值，出现后至少停留 500ms；
+ * - blank-open：打开的是空白文档——指示器直接使用「准备就绪」；
+ * - edit：编辑触发——解析持续超过 200ms 才显示「解析中」，出现后至少停留 500ms。
+ */
+export type ParseContext = "open" | "blank-open" | "edit";
+
 export type Lang = "zh" | "en";
 
 /** 缩进单位：制表符 / 2 空格 / 4 空格 */

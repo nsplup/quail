@@ -17,6 +17,7 @@ import type {
   CountMode,
   OutlineItem,
   ParsePhase,
+  ParseContext,
   PreviewApi,
   PreviewBlock,
 } from "./types";
@@ -142,6 +143,13 @@ export const counts$ = writable<{ words: number; hanChars: number }>({ words: 0,
 /** 预览解析阶段：parsing（worker 解析中）→ idle（结果落地即收敛，无渐进挂载阶段） */
 export const parsePhase$ = writable<ParsePhase>("idle");
 
+/**
+ * 最近一次解析的触发上下文（底栏解析状态指示器区分展示规则用）：
+ * open / blank-open / edit，语义见 types.ts 的 ParseContext 注释。
+ * 由调度器在发送解析请求时写入（markNextParseAsOpen 标记打开文档触发）。
+ */
+export const parseContext$ = writable<ParseContext>("edit");
+
 /** 编辑器/预览 API 句柄（组件就绪后注入） */
 export const editorApi$ = writable<EditorApi | null>(null);
 /** 脏状态：当前文档与最近一次干净引用（初始化/保存时记录）不一致 */
@@ -165,6 +173,10 @@ let lastRun = 0;
 let pendingSrc: string | null = null;
 let pendingForceFull = false;
 let pending = false;
+/** 与 pendingSrc 同生命周期的「打开文档触发」标记（调度时并入，flushNow 消费） */
+let pendingOpen = false;
+/** 待生效的「打开文档触发」单次标记（markNextParseAsOpen 置位，下次调度消费） */
+let nextParseIsOpen = false;
 let adaptHits = 0;
 let flushRaf: number | undefined;
 let flushTimer: ReturnType<typeof setTimeout> | undefined;
@@ -254,10 +266,19 @@ function noteAdapt(): void {
   }
 }
 
+/** 标记下一次调度到的解析为「打开文档」触发（bootApp 装载 / 磁盘文件重载时调用）。
+ * 打开触发的解析无「解析中」显示阈值（底栏指示器语义，见 ParseContext.open）。 */
+export function markNextParseAsOpen(): void {
+  nextParseIsOpen = true;
+}
+
 /** 调度一次解析：rAF 快路径（无背压）+ minInterval 节流 + MAX_WAIT 强制兜底 */
 function scheduleRebuild(src: string, forceFull = false): void {
   pendingSrc = src;
   pendingForceFull = forceFull;
+  // 单次「打开文档」标记并入本次待发送请求（多次标记取或；无请求时留待下次调度）
+  pendingOpen = pendingOpen || nextParseIsOpen;
+  nextParseIsOpen = false;
   if (pending) {
     noteAdapt();
     return;
@@ -288,7 +309,34 @@ function flushNow(): void {
   pendingSrc = null;
   pendingForceFull = false;
   if (s === null) return;
+  // 消费「打开文档」标记，写入本次解析的触发上下文（空白文档打开 → blank-open）
+  const openNow = pendingOpen;
+  pendingOpen = false;
+  // 空白文档（打开空白文档 / 编辑清空）：解析是无用功 → 不发 worker 请求，
+  // 主线程直接落地空结果，仅同步 worker 内部状态为干净空基线（不解析不回包）。
+  // root 归零后下一次真实解析按冷启动全量走，例行重建的旧基线也会被 src 守卫丢弃。
+  if (s.trim() === "") {
+    lastRun = performance.now();
+    fullBatchBuffer = null;
+    parseClient.resetEmpty();
+    segments$.set([]);
+    blocks$.set([]);
+    outline$.set([]);
+    counts$.set({ words: 0, hanChars: 0 });
+    parseContext$.set(openNow ? "blank-open" : "edit");
+    if (openNow) {
+      // 打开空白文档 → 指示器切「准备就绪」：合成一对 parsing/idle 相位事件
+      // 驱动组件状态机（组件对 blank-open 不记统计、不出转圈）
+      parsePhase$.set("parsing");
+      parsePhase$.set("idle");
+    }
+    if (adaptHits === 0) {
+      minInterval = Math.max(MIN_INTERVAL_BASE, minInterval - ADAPT_STEP * 2);
+    }
+    return;
+  }
   lastRun = performance.now();
+  parseContext$.set(openNow ? "open" : "edit");
   parsePhase$.set("parsing");
   parseClient.request(s, ff);
   // 本轮无高频触发 → 向基准回落（2×步长：拉长慢、回落快，避免一次
@@ -366,6 +414,8 @@ export async function bootApp(): Promise<void> {
   ready$.set(true);
   // ready 前的 doc$.set 不进入调度管线（订阅早退），ready 后补跑一次确保贯通；
   // 首次解析强制全量（worker 内部状态为空，语义等同全量重建）
+  // 打开文档触发：指示器按 open / blank-open 语义展示
+  markNextParseAsOpen();
   scheduleRebuild(get(doc$), true);
   // 初始化流程末尾统一调度 Ready（下一轮宏任务）：
   // 不等待编辑区/预览区渲染结束，窗口显示与首帧绘制并行推进。
@@ -389,6 +439,8 @@ function subscribeFileEvents(): void {
     if (get(dirty$)) {
       toast$.set({ id: Date.now(), msg: get(t)("toast.fileChangedDirty") });
     } else {
+      // 磁盘文件重载 = 打开文档语义：指示器按 open 规则展示（无 200ms 阈值）
+      markNextParseAsOpen();
       doc$.set(d.content!);
       toast$.set({ id: Date.now(), msg: get(t)("toast.fileReloaded") });
     }
