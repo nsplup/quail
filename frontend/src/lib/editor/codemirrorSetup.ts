@@ -29,7 +29,7 @@ import { syntaxHighlighting, HighlightStyle, bracketMatching, indentUnit } from 
 import { tags } from "@lezer/highlight";
 import type { Command } from "@codemirror/view";
 import { createModernSearchPanel, searchPanelModF } from "./searchPanel";
-import { dirty$ } from "../stores";
+import { dirty$, setImeComposing } from "../stores";
 
 export interface EditorHandlers {
   /** 文档内容变化（编辑器是源码的唯一编辑入口） */
@@ -212,6 +212,20 @@ export function createEditorApi(
             handlers.onchange(u.state.doc.toString());
             if (cleanDoc) dirty$.set(!cleanDoc.eq(u.state.doc));
           }
+        }),
+        /* 输入法组合事件上报：compositionstart/end 经 setImeComposing 写入
+           全局 imeComposing$，解析调度器在组合期间永不发起请求（组合中的
+           临时文本不进预览，组合结束后重新起防抖统一解析最终内容）。
+           返回 false：只上报状态，不拦截事件、不影响默认组合行为。 */
+        EditorView.domEventHandlers({
+          compositionstart: () => {
+            setImeComposing(true);
+            return false;
+          },
+          compositionend: () => {
+            setImeComposing(false);
+            return false;
+          },
         }),
       ],
     }),

@@ -1,8 +1,9 @@
 /**
  * 全局状态中心：所有跨组件共享状态统一由 svelte store 持有。
  * - 持久化设置：persisted* 工厂在 store 创建时读入 localStorage，订阅期自动回写；
- * - 解析管线（双 worker）：doc$ 变化 → rAF 合并 + 自适应 minInterval + 120ms
- *   maxWait → 增量 worker 实时解析（段级补丁回传，未变段引用复用 → Svelte
+ * - 解析管线（双 worker）：doc$ 变化 → 200ms 防抖（打开文档触发立即发送；
+ *   IME 输入法组合期间永不发请求，内容积压到组合结束统一补跑）→ 增量 worker
+ *   实时解析（段级补丁回传，未变段引用复用 → Svelte
  *   跳过子树）；例行周期全量重建由独立的重建 worker 并行执行（MessageChannel
  *   直连 + 内容哈希去重，基线在增量 worker 内原子替换，不经主线程、不阻塞
  *   打字响应）；冷启动/idle 自愈仍由增量 worker 就地全量；
@@ -156,20 +157,17 @@ export const editorApi$ = writable<EditorApi | null>(null);
 export const dirty$ = writable(false);
 export const previewApi$ = writable<PreviewApi | null>(null);
 
-/* ---------------- 解析调度：rAF 合并 + 自适应 minInterval + maxWait + worker 背压 ----------------
- * 相比固定 500ms 防抖：输入流畅时下一帧即解析（预览延迟 500ms → ~16ms），
- * 高频全量替换时自适应拉长 minInterval 节流；maxWait 兜底防“永远没空档”；
- * worker 在途时积压最新 src，响应回齐后立即补跑（worker 串行处理，
- * 乱序发送会让增量补丁相对 worker 内部状态错位，故必须背压）。 */
-const MIN_INTERVAL_BASE = 16;
-const ADAPT_STEP = 32;
-const MAX_INTERVAL = 256;
-const MAX_WAIT = 120;
-/** 在途解析耗时超过该值才认为 worker 真的慢，允许拉长节流（见 noteAdapt） */
-const ADAPT_LATENCY_MS = 80;
+/* ---------------- 解析调度：200ms 防抖 + IME 组合闸门 + worker 背压 ----------------
+ * - 防抖：文档变化后静默 PARSE_DEBOUNCE_MS 才发起解析请求，连续输入
+ *   （打字、粘贴、连续撤销）只解析最终内容，不逐次发请求；
+ * - 打开文档触发（markNextParseAsOpen）跳过防抖立即发送，保证首屏即时；
+ * - IME 输入法组合期间（compositionstart → compositionend，CM6 经
+ *   setImeComposing 上报）永不发起请求：组合中的临时文本不进预览，
+ *   内容只记入积压，组合结束后重新起防抖统一补跑；
+ * - worker 在途时积压最新 src，响应回齐后重新起防抖补跑（worker 串行处理，
+ *   乱序发送会让增量补丁相对 worker 内部状态错位，故必须背压）。 */
+const PARSE_DEBOUNCE_MS = 200;
 
-let minInterval = MIN_INTERVAL_BASE;
-let lastRun = 0;
 let pendingSrc: string | null = null;
 let pendingForceFull = false;
 let pending = false;
@@ -177,9 +175,33 @@ let pending = false;
 let pendingOpen = false;
 /** 待生效的「打开文档触发」单次标记（markNextParseAsOpen 置位，下次调度消费） */
 let nextParseIsOpen = false;
-let adaptHits = 0;
-let flushRaf: number | undefined;
-let flushTimer: ReturnType<typeof setTimeout> | undefined;
+/** 防抖定时器（undefined = 无待触发的 flush） */
+let debounceTimer: ReturnType<typeof setTimeout> | undefined;
+
+/**
+ * 输入法组合状态（CM6 compositionstart/compositionend 经 setImeComposing 上报）。
+ * 组合期间调度器只积压内容、永不发起解析请求（flush 也会被闸门拦下）。
+ */
+export const imeComposing$ = writable(false);
+
+/** 上报输入法组合开始/结束（CM6 dom 事件）。结束时若有积压且无闸门 → 重新起防抖补跑 */
+export function setImeComposing(composing: boolean): void {
+  imeComposing$.set(composing);
+  if (!composing) resumeParseScheduling();
+}
+
+/** 重新起防抖（组合结束 / worker 回齐后共用）：有积压、无在途、未在组合中才生效 */
+function resumeParseScheduling(): void {
+  if (debounceTimer !== undefined) return;
+  if (!pending || pendingSrc === null) return;
+  if (get(imeComposing$) || parseClient.busy()) return;
+  armDebounce();
+}
+
+function armDebounce(): void {
+  if (debounceTimer !== undefined) clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(flushNow, PARSE_DEBOUNCE_MS);
+}
 
 /** 例行全量（cold=false）的批次缓冲：worker 分批发送期间暂存，
  * result(full=true) 到达后一次性 segments$.set 原子采纳。
@@ -243,27 +265,10 @@ const parseClient = createParseClient({
   },
 });
 
-/** worker 响应回齐后的积压补跑（无在途、有积压 → rAF 快路径） */
+/** worker 响应回齐后的积压补跑（无在途、有积压 → 重新起防抖） */
 function onWorkerDrained(): void {
   if (parseClient.busy()) return;
-  if (pending && pendingSrc !== null && flushRaf === undefined && flushTimer === undefined) {
-    flushRaf = requestAnimationFrame(flushNow);
-    flushTimer = setTimeout(flushNow, MAX_WAIT);
-  }
-}
-
-/** 高频触发（在途时又来新 src）计数：连续 ≥3 次 → 拉长 minInterval。
- * 仅当在途解析实测偏慢（已耗时 > ADAPT_LATENCY_MS）才计数——
- * 快速增量解析期间的一帧内连发按键（IME 组合、粘贴、连打）此前也会
- * 累计计数并拉长节流，导致之后 worker 空闲时每次编辑仍要平白等待
- * MAX_WAIT 才解析（「偶尔滞后」的主因）。慢文档下本机制照常生效，
- * 维持对 worker 的背压。 */
-function noteAdapt(): void {
-  if (performance.now() - lastRun < ADAPT_LATENCY_MS) return;
-  adaptHits++;
-  if (adaptHits >= 3) {
-    minInterval = Math.min(MAX_INTERVAL, minInterval + ADAPT_STEP);
-  }
+  resumeParseScheduling();
 }
 
 /** 标记下一次调度到的解析为「打开文档」触发（bootApp 装载 / 磁盘文件重载时调用）。
@@ -272,36 +277,30 @@ export function markNextParseAsOpen(): void {
   nextParseIsOpen = true;
 }
 
-/** 调度一次解析：rAF 快路径（无背压）+ minInterval 节流 + MAX_WAIT 强制兜底 */
+/** 调度一次解析：200ms 防抖（打开触发立即发送；IME 组合中只积压不发送） */
 function scheduleRebuild(src: string, forceFull = false): void {
   pendingSrc = src;
   pendingForceFull = forceFull;
   // 单次「打开文档」标记并入本次待发送请求（多次标记取或；无请求时留待下次调度）
   pendingOpen = pendingOpen || nextParseIsOpen;
   nextParseIsOpen = false;
-  if (pending) {
-    noteAdapt();
+  if (pending) return; // 已有待发送：防抖语义，等最后一次变化后统一解析
+  pending = true;
+  // IME 组合中：永不发起请求（内容已记入积压），组合结束后统一补跑
+  if (get(imeComposing$)) return;
+  // 打开文档触发：跳过防抖立即发送（首屏即时，指示器同步进入解析中）
+  if (pendingOpen) {
+    flushNow();
     return;
   }
-  pending = true;
-  adaptHits = 0;
-  const since = performance.now() - lastRun;
-  const delay = Math.max(0, minInterval - since);
-  if (delay < MIN_INTERVAL_BASE && !parseClient.busy()) {
-    // 快路径：下一帧解析；MAX_WAIT 双保险（rAF 被后台节流时仍按时解析）
-    flushRaf = requestAnimationFrame(flushNow);
-    flushTimer = setTimeout(flushNow, MAX_WAIT);
-  } else {
-    // 背压：minInterval 内刚跑过或 worker 在途 → 最多再等 MAX_WAIT
-    flushTimer = setTimeout(flushNow, Math.min(delay, MAX_WAIT));
-  }
+  armDebounce();
 }
 
-/** 消费 pendingSrc 并发送解析请求（rAF/timer 竞争，单线程下先到先清） */
+/** 消费 pendingSrc 并发送解析请求（防抖定时器到期 / 打开触发直调） */
 function flushNow(): void {
-  flushRaf = undefined;
-  clearTimeout(flushTimer);
-  flushTimer = undefined;
+  debounceTimer = undefined;
+  // IME 组合闸门：组合中永不发起请求；保留积压，组合结束后重新起防抖
+  if (get(imeComposing$)) return;
   if (parseClient.busy()) return; // worker 在途：响应回齐后 onWorkerDrained 补跑
   pending = false;
   const s = pendingSrc;
@@ -316,7 +315,6 @@ function flushNow(): void {
   // 主线程直接落地空结果，仅同步 worker 内部状态为干净空基线（不解析不回包）。
   // root 归零后下一次真实解析按冷启动全量走，例行重建的旧基线也会被 src 守卫丢弃。
   if (s.trim() === "") {
-    lastRun = performance.now();
     fullBatchBuffer = null;
     parseClient.resetEmpty();
     segments$.set([]);
@@ -330,23 +328,14 @@ function flushNow(): void {
       parsePhase$.set("parsing");
       parsePhase$.set("idle");
     }
-    if (adaptHits === 0) {
-      minInterval = Math.max(MIN_INTERVAL_BASE, minInterval - ADAPT_STEP * 2);
-    }
     return;
   }
-  lastRun = performance.now();
   parseContext$.set(openNow ? "open" : "edit");
   parsePhase$.set("parsing");
   parseClient.request(s, ff);
-  // 本轮无高频触发 → 向基准回落（2×步长：拉长慢、回落快，避免一次
-  // 突发把后续单发编辑的解析延迟拖高好几个节流周期）
-  if (adaptHits === 0) {
-    minInterval = Math.max(MIN_INTERVAL_BASE, minInterval - ADAPT_STEP * 2);
-  }
 }
 
-// doc$ 变化 → 记 pendingSrc → rAF 合并（ready 后生效；全量阈值/idle 自愈在 worker 内）
+// doc$ 变化 → 记 pendingSrc → 200ms 防抖（ready 后生效；全量阈值/idle 自愈在 worker 内）
 doc$.subscribe((src) => {
   if (!get(ready$)) return;
   scheduleRebuild(src);
