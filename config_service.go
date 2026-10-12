@@ -40,7 +40,7 @@ func defaultConfig() Config {
                 Mode:            "split",
                 Theme:           "ayu-dark",
                 Locale:          "zh",
-                Indent:          "2",
+                Indent:          "space2",
                 CountMode:       "chars",
                 FontEditor:      "",
                 FontPreview:     "",

@@ -1,19 +1,18 @@
 /**
- * 设置存储抽象：统一 localStorage 持久化与 Wails 后端配置两种模式。
+ * 设置存储抽象：后端 ConfigService（~/.config/quail/settings.json）为唯一事实源。
  *
- * - 浏览器环境：localStorage 直通（与旧行为一致）；
- * - Wails 环境：以后端 ConfigService（~/.config/quail/settings.json）为唯一
- *   事实源。get/set 读写内存快照；set 记录脏字段，防抖后仅把脏字段增量回写
+ * - get/set 读写内存快照；set 记录脏字段，防抖后仅把脏字段增量回写
  *   后端（SaveFields 与磁盘最新配置按字段合并，多窗口/多实例互不覆盖）；
- *   boot 时一次性迁移旧 localStorage 值（仅当后端配置文件尚不存在）；
+ *   历史上的 localStorage 直通与一次性迁移已随浏览器模式移除，项目中不再
+ *   存在任何 localStorage 调用；
  * - 后端 config:changed 事件（其他窗口保存 / 外部改配置文件）→ 快照刷新 +
  *   重放到各 store；重放期间 store 回写不视为本地修改，本地尚未落盘的脏
  *   字段不被远端广播回退（避免编辑中的设置"跳回原值"）。
  */
 
-import { loadConfig, persistConfig, persistConfigFields, configExists, onBackendEvent } from "./bridge";
+import { loadConfig, persistConfigFields, onBackendEvent } from "./bridge";
 
-/** 后端 Config JSON 字段 ↔ 前端 localStorage 键 的映射 */
+/** 后端 Config JSON 字段 ↔ 前端设置键（md.*）的映射 */
 const KEY_MAP: Record<string, string> = {
   "md.mode": "mode",
   "md.theme": "theme",
@@ -32,7 +31,6 @@ const SAVE_DEBOUNCE = 300;
 type Snapshot = Record<string, unknown>;
 
 let snapshot: Snapshot = {};
-let wailsMode = false;
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 /** 距上次落盘仍待回写的脏字段（增量保存的单位） */
 let dirtyFields = new Set<string>();
@@ -43,29 +41,16 @@ let ready = false;
  *  不记脏、不触发回写（否则多窗口间会形成保存-广播-保存乒乓循环） */
 let replaying = false;
 
-/** 同步读（store 工厂在模块加载期调用；wails 快照未加载时返回 fallback） */
+/** 同步读（store 工厂在模块加载期调用；快照未加载时返回 null → store 用兜底默认值） */
 export function kvGet(key: string): string | null {
-  if (!wailsMode) {
-    try {
-      return localStorage.getItem(key);
-    } catch {
-      return null;
-    }
-  }
   const v = snapshot[KEY_MAP[key] ?? key.slice(LS_PREFIX.length)];
   if (v === undefined || v === null) return null;
   if (typeof v === "boolean") return v ? "1" : "0";
   return String(v);
 }
 
-/** 同步写；wails 模式下记录脏字段，防抖后增量回写后端 */
+/** 同步写；记录脏字段，防抖后增量回写后端 */
 export function kvSet(key: string, value: string): void {
-  if (!wailsMode) {
-    try {
-      localStorage.setItem(key, value);
-    } catch { /* ignore */ }
-    return;
-  }
   if (!ready) return; // 快照未加载，丢弃 store 初始化期的兜底回写
   const field = KEY_MAP[key] ?? key.slice(LS_PREFIX.length);
   snapshot[field] = value === "1" && typeof snapshot[field] === "boolean" ? true : coerce(field, value);
@@ -74,7 +59,7 @@ export function kvSet(key: string, value: string): void {
   scheduleSave();
 }
 
-/** localStorage 存的是 "1"/"0" 的布尔字段 */
+/** KV 里以 "1"/"0" 字符串表示布尔字段，数值字段转 number */
 function coerce(field: string, raw: string): unknown {
   const n = Number(raw);
   if ((field === "fontSizeEditor" || field === "fontSizePreview") && Number.isFinite(n)) return n;
@@ -86,7 +71,7 @@ function scheduleSave(): void {
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     saveTimer = null;
-    if (!wailsMode || dirtyFields.size === 0) return;
+    if (dirtyFields.size === 0) return;
     // 仅提交脏字段：后端与磁盘最新配置按字段合并，陈旧字段不参与覆盖
     const fields = dirtyFields;
     dirtyFields = new Set();
@@ -104,23 +89,13 @@ export function onConfigReplay(cb: (snap: Snapshot) => void): void {
   replay = cb;
 }
 
-/* ---------------- 启动：加载 / 迁移 / 订阅 ---------------- */
+/* ---------------- 启动：加载 / 订阅 ---------------- */
 
 /** boot 阶段调用一次（bootApp 内 await） */
 export async function initSettings(): Promise<void> {
-  wailsMode = true;
-
-  const [cfg, exists] = await Promise.all([loadConfig(), configExists()]);
+  const cfg = await loadConfig();
   if (cfg) {
-    if (!exists) {
-      // 一次性迁移：后端配置文件不存在 → 以旧 localStorage 值初始化并固化
-      // （注意：持久化的是合并旧值之后的快照，而非后端返回的原始默认配置）
-      snapshot = { ...(cfg as unknown as Snapshot) };
-      migrateFromLocalStorage(snapshot);
-      await persistConfig(snapshot as never).catch(() => undefined);
-    } else {
-      snapshot = { ...(cfg as unknown as Snapshot) };
-    }
+    snapshot = { ...(cfg as unknown as Snapshot) };
   }
 
   // 快照就绪：放开回写门闸，并把磁盘配置主动重放进各 store。
@@ -164,15 +139,4 @@ function configMatchesSnapshot(cfg: Snapshot): boolean {
     if (norm(snapshot[field]) !== norm(cfg[field])) return false;
   }
   return true;
-}
-
-/** 把 localStorage 中 md.* 非空值合并进快照（仅首次迁移） */
-function migrateFromLocalStorage(snap: Snapshot): void {
-  for (const lsKey of Object.keys(KEY_MAP)) {
-    let raw: string | null = null;
-    try {
-      raw = localStorage.getItem(lsKey);
-    } catch { /* ignore */ }
-    if (raw != null && raw !== "") snap[KEY_MAP[lsKey]] = coerce(KEY_MAP[lsKey], raw);
-  }
 }

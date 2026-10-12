@@ -22,7 +22,7 @@ import {
   CloseDoc,
   StartupDoc,
 } from "../../bindings/quail/fileservice";
-import { Get as ConfigGet, ConfigExists, Save as ConfigSave, SaveFields as ConfigSaveFields } from "../../bindings/quail/configservice";
+import { Get as ConfigGet, SaveFields as ConfigSaveFields } from "../../bindings/quail/configservice";
 import { Events, Browser } from "@wailsio/runtime";
 
 export interface QuailDocState {
@@ -109,9 +109,9 @@ export async function saveDocumentAs(path: string, content: string): Promise<Qua
   return (await SaveAs(path, content)) as unknown as QuailSaveResult;
 }
 
-/** 弹系统另存对话框并保存（取消返回 null） */
-export async function saveAsViaDialog(content: string): Promise<QuailSaveResult | null> {
-  const path = await PickSave("untitled.md");
+/** 弹系统另存对话框并保存（取消返回 null；defaultName 由调用方按界面语言传入） */
+export async function saveAsViaDialog(content: string, defaultName = "untitled.md"): Promise<QuailSaveResult | null> {
+  const path = await PickSave(defaultName);
   if (!path) return null;
   return (await SaveAs(path, content)) as unknown as QuailSaveResult;
 }
@@ -131,16 +131,6 @@ export async function closeDocument(): Promise<void> {
 /** 读取配置 */
 export async function loadConfig(): Promise<QuailConfig | null> {
   return (await ConfigGet()) as unknown as QuailConfig;
-}
-
-/** 配置文件是否已存在 */
-export async function configExists(): Promise<boolean> {
-  return await ConfigExists();
-}
-
-/** 保存配置（整包；仅旧 localStorage 一次性迁移使用） */
-export async function persistConfig(cfg: QuailConfig): Promise<void> {
-  await ConfigSave(cfg);
 }
 
 /** 增量保存配置：仅提交脏字段，后端与磁盘最新配置按字段合并（多窗口互不覆盖） */

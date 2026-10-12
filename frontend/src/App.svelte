@@ -127,7 +127,7 @@
 
   // 窗口标题与文档名同步
   $effect(() => {
-    void setTitle($docState?.name ?? "untitled");
+    void setTitle($docState?.name || $t("doc.untitled"));
   });
 
   // 全局快捷键：Ctrl/Cmd+O 打开、Ctrl/Cmd+Shift+S 另存为
@@ -185,7 +185,8 @@
 
   /** 另存为（Wails 原生保存对话框 → FileService.SaveAs） */
   async function saveFileAs(): Promise<void> {
-    const res = await saveAsViaDialog(get(doc));
+    // 对话框默认文件名跟随界面语言（后端不做 i18n）
+    const res = await saveAsViaDialog(get(doc), `${get(t)("doc.untitled")}.md`);
     if (res?.ok) {
       docState.set({
         path: res.path,

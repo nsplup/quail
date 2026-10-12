@@ -24,6 +24,9 @@ export const zhMessages = {
     split: "双栏",
     preview: "预览",
   },
+  doc: {
+    untitled: "未命名",
+  },
   outline: {
     title: "大纲",
     filter: "筛选",
@@ -102,6 +105,9 @@ export const enMessages = {
     source: "Source",
     split: "Split",
     preview: "Preview",
+  },
+  doc: {
+    untitled: "Untitled",
   },
   outline: {
     title: "Outline",

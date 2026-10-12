@@ -4,7 +4,7 @@
  * - 消息为分组嵌套 JSON（common.* / mode.* / outline.* / settings.* / stats.* / toast.*），
  *   支持 {param} 插值与 ICU 复数（后续扩展直接写消息即可）；
  * - locale 由 svelte-i18n 的响应式 store 驱动：模板中用 $t("key")，脚本中用 get(t)("key")；
- * - 语言持久化经 settings KV（localStorage / 后端配置），初始值回退到 navigator.language；
+ * - 语言持久化经 settings KV（后端配置文件），初始值回退到 navigator.language；
  * - 回退链：当前语言缺失的键自动回退 fallbackLocale（en）。
  */
 import { addMessages, init, t as tStore, locale } from "svelte-i18n";

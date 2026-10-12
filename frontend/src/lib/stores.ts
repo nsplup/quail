@@ -1,6 +1,6 @@
 /**
  * 全局状态中心：所有跨组件共享状态统一由 svelte store 持有。
- * - 持久化设置：persisted* 工厂在 store 创建时读入 localStorage，订阅期自动回写；
+ * - 持久化设置：persisted* 工厂在 store 创建时读入 settings 快照，订阅期自动回写；
  * - 解析管线（双 worker）：doc$ 变化 → 200ms 防抖（打开文档触发立即发送；
  *   IME 输入法组合期间永不发请求，内容积压到组合结束统一补跑）→ 增量 worker
  *   实时解析（段级补丁回传，未变段引用复用 → Svelte
@@ -93,7 +93,7 @@ export const theme$ = persistedEnum<ThemeId>(
   ["ayu-dark", "ayu-mirage", "ayu-light", "one-dark-pro", "dracula", "nord", "tokyo-night", "github-light", "github-dark", "solarized-light"] as const
 );
 
-export const indent$ = persistedEnum<IndentId>("md.indent", "tab", ["tab", "space2", "space4"] as const);
+export const indent$ = persistedEnum<IndentId>("md.indent", "space2", ["tab", "space2", "space4"] as const);
 
 /** 字数统计方式（auto = 跟随界面语言） */
 export const countMode$ = persistedEnum<CountMode>("md.countMode", "auto", ["auto", "words", "chars"] as const);
@@ -119,7 +119,7 @@ export const toast$ = writable<{ id: number; msg: string } | null>(null);
 
 /* ---------------- 解析管线（worker 承载） ---------------- */
 
-/** 编辑器文档（保存走后端，不落 localStorage） */
+/** 编辑器文档（保存走后端，不落本地存储） */
 export const doc$ = writable("");
 
 export const ready$ = writable(false);
@@ -376,7 +376,7 @@ export function indexOfLine(line: number): number {
 }
 
 /** 启动：装载文档 + 全量解析（App onMount 调用一次）。
- * Wails 环境：先加载后端配置（含 localStorage 一次性迁移）、订阅文档事件，
+ * Wails 环境：先加载后端配置、订阅文档事件，
  * 然后打开文档；无打开文档时回退本地草稿/示例。 */
 export async function bootApp(): Promise<void> {
   if (booted) return;
@@ -448,7 +448,9 @@ export function applyBackendConfig(snap: Record<string, unknown>): void {
   const th = str("theme");
   if (th) theme$.set(th as ThemeId);
   const ind = str("indent");
-  if (ind) indent$.set(ind as IndentId);
+  // 校验后再回放：旧配置文件可能残留非法值（如早期后端默认 "2"），
+  // 直接写入会让 CM6 缩进配置拿到 undefined
+  if (ind === "tab" || ind === "space2" || ind === "space4") indent$.set(ind);
   const cm = str("countMode");
   if (cm) countMode$.set(cm as CountMode);
   const fe = str("fontEditor");

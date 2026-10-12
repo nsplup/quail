@@ -78,7 +78,8 @@ func (f *FileService) ServiceShutdown() {
 }
 
 // StartupDoc 启动文档：取命令行传入的第一个文件路径并打开；
-// 无有效路径 → 返回空文档（untitled），不弹任何对话框。
+// 无有效路径 → 返回空文档（Name 为空串，窗口标题的"未命名"文案由前端按
+// 界面语言本地化，后端不做 i18n），不弹任何对话框。
 func (f *FileService) StartupDoc() (*DocState, error) {
         for _, arg := range os.Args[1:] {
                 if arg == "" || strings.HasPrefix(arg, "-") {
@@ -91,7 +92,7 @@ func (f *FileService) StartupDoc() (*DocState, error) {
         return &DocState{
                 Path:     "",
                 Dir:      "",
-                Name:     "untitled",
+                Name:     "",
                 Content:  "",
                 Encoding: "utf-8",
                 Size:     0,
