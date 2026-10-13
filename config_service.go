@@ -43,7 +43,7 @@ func defaultConfig() Config {
                 Theme:           "ayu-dark",
                 Locale:          "system",
                 Indent:          "space2",
-                CountMode:       "chars",
+                CountMode:       "auto",
                 FontEditor:      "",
                 FontPreview:     "",
                 FontSizeEditor:  14,
