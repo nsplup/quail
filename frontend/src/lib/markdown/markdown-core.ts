@@ -73,8 +73,9 @@ interface MdastToHastState {
 /**
  * 未定义引用的字面回退（与 mdast-util-to-hast 默认 imageReference 行为一致）：
  * 全写 `![alt][id]`、收窄 `![alt][]`、缩写 `![alt]` 分别还原为对应源码文本。
+ * （alt 兼容 null：mdast ImageReference.alt 可为 string | null | undefined）
  */
-function revertReferenceText(node: Reference & { alt?: string }): string {
+function revertReferenceText(node: Reference & { alt?: string | null }): string {
   let suffix = "]";
   if (node.referenceType === "collapsed") suffix += "[]";
   else if (node.referenceType === "full") suffix += `[${node.label || node.identifier}]`;

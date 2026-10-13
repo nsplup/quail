@@ -132,6 +132,64 @@
   font-size: 0.875em;
 }
 
+/* ---------- 代码块着色（CodeBlock.svelte + highlight.js） ----------
+ * 仅使用 hljs 的类名输出（不引任何 hljs 主题 CSS）；作用域颜色全部映射到
+ * 编辑区同一套 --ed-* 变量（与 codemirrorSetup 的 mdHighlight 对齐）：
+ * 主题切换 / 新增主题自动生效。 */
+.md-block pre code.hljs {
+  color: var(--ed-fg);
+}
+
+/* 关键字 / 类型 / 内建 → accent（对应编辑区 keyword / atom / tag） */
+.md-block pre .hljs-keyword,
+.md-block pre .hljs-selector-tag,
+.md-block pre .hljs-built_in,
+.md-block pre .hljs-type,
+.md-block pre .hljs-doctag,
+.md-block pre .hljs-name {
+  color: var(--ed-accent);
+}
+
+/* 字面量：字符串 / 数字 / 正则 → string */
+.md-block pre .hljs-string,
+.md-block pre .hljs-regexp,
+.md-block pre .hljs-number,
+.md-block pre .hljs-literal,
+.md-block pre .hljs-template-variable,
+.md-block pre .hljs-addition {
+  color: var(--ed-string);
+}
+
+/* 注释 / 元信息 → muted 斜体（与编辑区注释样式一致） */
+.md-block pre .hljs-comment,
+.md-block pre .hljs-quote,
+.md-block pre .hljs-meta {
+  color: var(--ed-muted);
+  font-style: italic;
+}
+
+/* 标识符：函数 / 类 / 变量 / 属性 → code */
+.md-block pre .hljs-title,
+.md-block pre .hljs-function,
+.md-block pre .hljs-variable,
+.md-block pre .hljs-property,
+.md-block pre .hljs-attr,
+.md-block pre .hljs-attribute,
+.md-block pre .hljs-symbol,
+.md-block pre .hljs-section,
+.md-block pre .hljs-selector-id,
+.md-block pre .hljs-selector-class {
+  color: var(--ed-code);
+}
+
+/* 删除行 / 非法序列 → danger；新增行沿用 string；强调/斜体随语义 */
+.md-block pre .hljs-deletion {
+  color: var(--ed-danger);
+}
+.md-block pre .hljs-strong {
+  font-weight: 680;
+}
+
 .md-block blockquote {
   margin: 1em 0;
   padding: 0.55em 1.1em;

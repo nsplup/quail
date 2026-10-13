@@ -16,6 +16,7 @@
   import type { Element, RootContent, Text } from "hast";
   import MarkdownImage from "./MarkdownImage.svelte";
   import MarkdownNode from "./MarkdownNode.svelte"; // 自导入实现递归（Svelte 5 不支持隐式自引用）
+  import CodeBlock from "../highlight/CodeBlock.svelte";
   import { hastAttrs } from "./hast-attrs";
 
   let { node }: { node: RootContent } = $props();
@@ -60,6 +61,11 @@
         "") as string}
       inline={(node as Element).properties?.["data-inline"] === "1"}
     />
+  {:else if (node as Element).tagName === "pre" &&
+      (node as Element).children.some((c) => c.type === "element" && c.tagName === "code")}
+    <!-- 围栏代码块（pre>code）→ CodeBlock（着色 worker + 内容寻址缓存）；
+         其余 pre（无 code 子元素，如 raw HTML 场景）走通用分支 -->
+    <CodeBlock node={node as Element} />
   {:else if VOID_ELEMENTS.has((node as Element).tagName)}
     <!-- void 元素：无子内容，自闭合渲染（避免 dynamic_void_element_content 警告） -->
     <svelte:element this={(node as Element).tagName} {...hastAttrs(node as Element)} />
