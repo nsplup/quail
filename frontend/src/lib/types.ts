@@ -1,5 +1,12 @@
 export type Mode = "source" | "split" | "preview";
 
+/**
+ * 启动时的默认布局：
+ * - memory：记住上次的布局（mode 持久化，即历史行为）；
+ * - source / split / preview：每次启动固定使用指定布局。
+ */
+export type DefaultLayout = "memory" | "source" | "split" | "preview";
+
 export type ThemeId =
   | "ayu-dark"
   | "ayu-mirage"

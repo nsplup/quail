@@ -23,21 +23,23 @@ import (
 
 // Config 前端设置快照（字段与前端 store 一一对应）。
 type Config struct {
-        Mode            string   `json:"mode"`           // editor | split | preview
-        Theme           string   `json:"theme"`          // ThemeId
-        Locale          string   `json:"locale"`         // zh | en
-        Indent          string   `json:"indent"`         // IndentId
-        CountMode       string   `json:"countMode"`      // CountMode
-        FontEditor      string   `json:"fontEditor"`
-        FontPreview     string   `json:"fontPreview"`
-        FontSizeEditor  float64  `json:"fontSizeEditor"`
-        FontSizePreview float64  `json:"fontSizePreview"`
+        Mode            string  `json:"mode"`           // editor | split | preview
+        DefaultLayout   string  `json:"defaultLayout"`  // memory | source | split | preview（启动时的默认布局）
+        Theme           string  `json:"theme"`          // ThemeId
+        Locale          string  `json:"locale"`         // zh | en
+        Indent          string  `json:"indent"`         // IndentId
+        CountMode       string  `json:"countMode"`      // CountMode
+        FontEditor      string  `json:"fontEditor"`
+        FontPreview     string  `json:"fontPreview"`
+        FontSizeEditor  float64 `json:"fontSizeEditor"`
+        FontSizePreview float64 `json:"fontSizePreview"`
 }
 
 // defaultConfig 出厂默认值。
 func defaultConfig() Config {
         return Config{
                 Mode:            "split",
+                DefaultLayout:   "memory",
                 Theme:           "ayu-dark",
                 Locale:          "zh",
                 Indent:          "space2",

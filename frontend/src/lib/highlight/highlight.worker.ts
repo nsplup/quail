@@ -2,7 +2,7 @@
  * 预览代码块着色 worker：highlight.js 解析 + IndexedDB 持久缓存 + 闲时清理。
  *
  * 【worker 专属模块】由 hl-client.ts 以 module worker 启动；不 import 任何
- * UI 侧模块（仅 contentHash 纯函数），hljs core 纯 JS、零 DOM 依赖。
+ * UI 侧模块（仅 contentHash 纯函数），hljs 主包纯 JS、零 DOM 依赖。
  *
  * 缓存设计（权威缓存在 worker，主线程无缓存状态）：
  * - 键 = contentHash(lang + "\0" + code)（内容寻址，复用 lib/worker/contentHash）：
@@ -25,48 +25,16 @@
  *   空闲 GC_RESUME_DELAY 后续跑。清理幂等（每批按当前条件重新判定，
  *   无游标状态），挂起/恢复不丢一致性。
  */
-import hljs from "highlight.js/lib/core";
-import type { LanguageFn } from "highlight.js";
+import hljs from "highlight.js";
 import { contentHash } from "../worker/contentHash";
 import type { HlIn, HlOut, HlSkip } from "./protocol";
 
-/* ---------------- 语言：curated 常用语言 + 别名，动态 import 按需加载 ----------------
- * 显式静态映射（而非模板字符串 import）：vite 只打包列出的语言分包，
- * 运行时按首次出现加载，主包保持轻量。 */
-
-const LANG_LOADERS: Record<string, () => Promise<{ default: LanguageFn }>> = {
-  javascript: () => import("highlight.js/lib/languages/javascript"),
-  typescript: () => import("highlight.js/lib/languages/typescript"),
-  python: () => import("highlight.js/lib/languages/python"),
-  go: () => import("highlight.js/lib/languages/go"),
-  rust: () => import("highlight.js/lib/languages/rust"),
-  java: () => import("highlight.js/lib/languages/java"),
-  kotlin: () => import("highlight.js/lib/languages/kotlin"),
-  swift: () => import("highlight.js/lib/languages/swift"),
-  ruby: () => import("highlight.js/lib/languages/ruby"),
-  php: () => import("highlight.js/lib/languages/php"),
-  c: () => import("highlight.js/lib/languages/c"),
-  cpp: () => import("highlight.js/lib/languages/cpp"),
-  csharp: () => import("highlight.js/lib/languages/csharp"),
-  bash: () => import("highlight.js/lib/languages/bash"),
-  json: () => import("highlight.js/lib/languages/json"),
-  yaml: () => import("highlight.js/lib/languages/yaml"),
-  ini: () => import("highlight.js/lib/languages/ini"),
-  sql: () => import("highlight.js/lib/languages/sql"),
-  xml: () => import("highlight.js/lib/languages/xml"),
-  css: () => import("highlight.js/lib/languages/css"),
-  scss: () => import("highlight.js/lib/languages/scss"),
-  less: () => import("highlight.js/lib/languages/less"),
-  markdown: () => import("highlight.js/lib/languages/markdown"),
-  diff: () => import("highlight.js/lib/languages/diff"),
-  dockerfile: () => import("highlight.js/lib/languages/dockerfile"),
-  makefile: () => import("highlight.js/lib/languages/makefile"),
-  lua: () => import("highlight.js/lib/languages/lua"),
-  perl: () => import("highlight.js/lib/languages/perl"),
-  haskell: () => import("highlight.js/lib/languages/haskell"),
-  dart: () => import("highlight.js/lib/languages/dart"),
-  r: () => import("highlight.js/lib/languages/r"),
-};
+/* ---------------- 语言：主包全量自动注册 + 别名归一 ----------------
+ * 桌面应用无网络加载成本，不维护 curated 语言清单：直接导入主包
+ * highlight.js，193 种语言及其内置别名（js/ts/py/golang…）在模块加载时
+ * 自动注册。围栏信息串先经 LANG_ALIAS 归一（覆盖主包未收录的社区别名），
+ * 再查 hljs 注册表；未命中 → nolang（纯文本，不解析）。
+ * 桌面本地加载全量语言包无网络成本，体积代价可接受；同步查表解析。 */
 
 /** 围栏信息串别名 → 规范语言名（hljs 模块注册名） */
 const LANG_ALIAS: Record<string, string> = {
@@ -105,19 +73,11 @@ const LANG_ALIAS: Record<string, string> = {
   docker: "dockerfile",
 };
 
-/** 确保语言已注册；返回规范语言名（不可用返回 null） */
-async function ensureLanguage(lang: string): Promise<string | null> {
+/** 确保语言可用；返回规范语言名（不可用返回 null）。
+ *  主包全量注册后为同步查表：LANG_ALIAS 归一 + getLanguage 命中检查 */
+function ensureLanguage(lang: string): string | null {
   const canonical = LANG_ALIAS[lang] ?? lang;
-  if (hljs.getLanguage(canonical)) return canonical;
-  const loader = LANG_LOADERS[canonical];
-  if (!loader) return null;
-  try {
-    const mod = await loader();
-    hljs.registerLanguage(canonical, mod.default);
-    return canonical;
-  } catch {
-    return null;
-  }
+  return hljs.getLanguage(canonical) ? canonical : null;
 }
 
 /* ---------------- 常量 ---------------- */

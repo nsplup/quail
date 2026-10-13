@@ -112,10 +112,13 @@ const editorTheme = EditorView.theme({
     backgroundColor: "var(--ed-selection)",
   },
   ".cm-selectionMatch": { backgroundColor: "var(--ed-selection)" },
+  /* 查找匹配项：主题柔和色底（--ed-search，各主题注入） */
   ".cm-searchMatch": {
     backgroundColor: "var(--ed-search)",
-    outline: "1px solid var(--ed-accent)",
-    borderRadius: "2px",
+  },
+  /* 当前匹配项（CM6 的 cm-searchMatch-selected）：复用选区背景色，与匹配项区分 */
+  ".cm-searchMatch.cm-searchMatch-selected": {
+    backgroundColor: "var(--ed-selection)",
   },
   ".cm-activeLine": { backgroundColor: "var(--ed-activeline)" },
   ".cm-panels": {

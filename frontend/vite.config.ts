@@ -12,8 +12,8 @@ export default defineConfig({
   },
   plugins: [svelte(), wails("./bindings"), tailwindcss()],
   worker: {
-    // ES worker：module worker 内的动态 import 保持独立分包（着色语言包按需加载，
-    // 首次用到某语言才拉取对应 chunk）；默认 iife 会把动态 import 内联进 worker 主体
+    // ES module worker（着色 worker 全量静态引入语法包，无动态 import，
+    // 分包策略不影响其加载）；默认 iife 亦可，保持 es 与主包模块语义一致
     format: "es",
   },
 });

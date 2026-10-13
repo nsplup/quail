@@ -69,8 +69,11 @@ func serveLocal(w http.ResponseWriter, r *http.Request, fs *FileService) {
         }
         docDir := filepath.Dir(docPath)
 
-        raw := r.URL.Query().Get("p")
+        raw := strings.TrimSpace(r.URL.Query().Get("p"))
         if raw == "" {
+                // 空链接校验（与前端 md-image 拦截互为纵深）：p 为空或全空白
+                // 直接 400，不触达文件系统（TrimSpace 前 raw 仅空白时会构造出
+                // "文档目录/空白文件名" 这类无意义目标）
                 writeProxyError(w, http.StatusBadRequest, "missing p")
                 return
         }
@@ -115,7 +118,13 @@ func serveLocal(w http.ResponseWriter, r *http.Request, fs *FileService) {
 
 // serveRemote 远程图片：缓存命中直回，未命中下载后写缓存。
 func serveRemote(w http.ResponseWriter, r *http.Request) {
-        rawURL := r.URL.Query().Get("url")
+        rawURL := strings.TrimSpace(r.URL.Query().Get("url"))
+        if rawURL == "" {
+                // 空链接校验（与前端 md-image 拦截互为纵深）：url 为空或全空白
+                // 直接 400，不进入缓存键计算与上游下载
+                writeProxyError(w, http.StatusBadRequest, "missing url")
+                return
+        }
         u, err := url.Parse(rawURL)
         if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
                 writeProxyError(w, http.StatusBadRequest, "invalid url")

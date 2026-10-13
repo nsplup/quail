@@ -12,9 +12,10 @@
     fontPreview$ as fontPreview,
     fontSizeEd$ as fontSizeEd,
     fontSizePv$ as fontSizePv,
+    defaultLayout$ as defaultLayout,
     settingsOpen$ as settingsOpen,
   } from "../lib/stores";
-  import type { ThemeId, Lang, IndentId, CountMode } from "../lib/types";
+  import type { ThemeId, Lang, IndentId, CountMode, DefaultLayout } from "../lib/types";
 
 
 
@@ -40,6 +41,14 @@
     { id: "auto", key: "settings.countAuto" },
     { id: "chars", key: "settings.countChars" },
     { id: "words", key: "settings.countWords" },
+  ];
+
+  /* 启动时的默认布局（mode.* 复用源码/双栏/预览文案） */
+  const layouts: { id: DefaultLayout; key: string }[] = [
+    { id: "memory", key: "settings.layoutMemory" },
+    { id: "source", key: "mode.source" },
+    { id: "split", key: "mode.split" },
+    { id: "preview", key: "mode.preview" },
   ];
 </script>
 
@@ -114,6 +123,18 @@
         <!-- 通用 -->
         <div>
           <div class="mb-2 text-xs text-muted">{$t("settings.general")}</div>
+          <div class="mb-2 text-[11px] text-muted">{$t("settings.defaultLayout")}</div>
+          <div class="mb-3 flex gap-2">
+            {#each layouts as l (l.id)}
+              <button
+                class="pill"
+                class:active={$defaultLayout === l.id}
+                onclick={() => defaultLayout.set(l.id)}
+              >
+                {$t(l.key)}
+              </button>
+            {/each}
+          </div>
           <div class="mb-2 text-[11px] text-muted">{$t("settings.countMode")}</div>
           <div class="mb-3 flex gap-2">
             {#each counts as c (c.id)}

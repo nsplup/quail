@@ -157,6 +157,11 @@ function mdastToHastRaw(root: Root): RawResult {
   }
   // 无 raw HTML 时跳过 parse5 全树重解析（大文档主要成本），锚天然保留
   const result = hasRaw ? (rehypeRaw(anchored as never) as HastRoot) : anchored;
+  // rehype-raw 融合后，HTML 语法书写的 <img>（含嵌在其他 HTML 标签内）只是
+  // 普通元素——image/imageReference handler 只作用于 Markdown 语法的图片，
+  // 管不到 raw 路径。这里把融合树中的 <img> 归一化为 md-image 容器，
+  // 与 Markdown 语法图片走同一 MarkdownImage 组件（ImgProxy 重写 / 三态占位）。
+  if (hasRaw) convertHtmlImgToMdImage(result);
   // 剥除 HAST position：渲染层只消费结构/文本，不读行号（行号在锚 comment 与
   // mdast root 上）；统一剥除后增量（局部转换、position 为 chunk 行号）与全量
   // （全文行号）的 HAST 结构完全一致，渲染层引用对比/快照测试不受干扰。
@@ -171,6 +176,41 @@ function stripHastPosition(node: HastContent): void {
   delete n.position;
   const kids = (node as { children?: HastContent[] }).children;
   if (Array.isArray(kids)) for (const k of kids) stripHastPosition(k);
+}
+
+/* ---------------- HTML 语法图片归一化（rehype-raw 融合后） ---------------- */
+
+/**
+ * 把融合树中的 <img>（HTML 语法书写的图片，含嵌在其他 HTML 标签内）原地
+ * 替换为 md-image 容器（in-place），与 Markdown 语法图片（image /
+ * imageReference handler 产物）走同一 MarkdownImage 组件。
+ * 仅迁移 src / alt（组件消费的属性）；width/height/style 等由 HTML 语法
+ * 直接控制的属性不迁移——与块级/行内分派语义（annotateImageContext）保持一致。
+ */
+function imgToMdImage(el: HastElement): HastElement {
+  const props = (el.properties ?? {}) as Record<string, unknown>;
+  return {
+    type: "element",
+    tagName: "md-image",
+    properties: {
+      "data-src": rewriteImageSrc(String(props.src ?? "")),
+      "data-alt": String(props.alt ?? ""),
+    },
+    children: [],
+  };
+}
+
+function convertHtmlImgToMdImage(node: HastContent): void {
+  const kids = (node as { children?: HastContent[] }).children;
+  if (!Array.isArray(kids)) return;
+  for (let i = 0; i < kids.length; i++) {
+    const c = kids[i];
+    if (c.type === "element" && (c as HastElement).tagName === "img") {
+      kids[i] = imgToMdImage(c as HastElement);
+      continue;
+    }
+    convertHtmlImgToMdImage(c);
+  }
 }
 
 /* ---------------- 图片上下文标注（块级 vs 行内） ---------------- */

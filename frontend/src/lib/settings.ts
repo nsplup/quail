@@ -15,6 +15,7 @@ import { loadConfig, persistConfigFields, onBackendEvent } from "./bridge";
 /** 后端 Config JSON 字段 ↔ 前端设置键（md.*）的映射 */
 const KEY_MAP: Record<string, string> = {
   "md.mode": "mode",
+  "md.defaultLayout": "defaultLayout",
   "md.theme": "theme",
   "md.lang": "locale",
   "md.indent": "indent",

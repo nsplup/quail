@@ -73,11 +73,19 @@
     inline?: boolean;
   } = $props();
 
+  // 空链接图片（data-src 为空或全空白，如 ![]()、<img src="">、<img>）：
+  // 组件直接拦截——不生成代理 URL、img 不带 src 属性、不向后端图片代理发起
+  // 任何请求（img 的 src 为空时浏览器会转而请求页面根地址，同样必须避免），
+  // 首帧即通用失败终态；派生判定零成本，不写入模块缓存。
+  const emptySrc = $derived(src.trim() === "");
+
   // svelte-ignore state_referenced_locally —— 仅用于首帧快读（缓存命中则首帧即终态，
   // 避免闪烁）；props.src 的后续变化由下方 $effect 响应
-  const cached = cache.get(src);
+  const cached = emptySrc ? undefined : cache.get(src);
 
-  let status = $state<ImgStatus>(cached?.status ?? "loading");
+  let status = $state<ImgStatus>(
+    cached?.status ?? (emptySrc ? "error" : "loading"),
+  );
   let errorCode = $state<ImgErrorCode>(cached?.code ?? "");
   /** 缓存命中 → 同步解码（见 img.decoding；重挂载首帧即有像素，不闪空白帧） */
   let decodeSync = $state(cached?.status === "loaded");
@@ -87,24 +95,36 @@
    * 实际请求 URL：响应式派生自 props.src + 穿透参数。
    * 渲染器按索引复用组件实例（非 keyed each），编辑器修改图片地址时
    * props.src 更新 → imgSrc 即时跟随 → img 重新请求。
+   * 空链接派生为 null：模板 src={null} 移除属性，img 不发起任何请求。
    */
-  const imgSrc = $derived(src + bust);
+  const imgSrc = $derived<string | null>(emptySrc ? null : src + bust);
 
-  // props.src 变化（实例复用、非重建）→ 重置请求状态：模块缓存命中直接终态
-  // （不闪占位），否则回 loading；同时清掉针对旧地址的刷新穿透参数。
+  // props.src 变化（实例复用、非重建）→ 重置请求状态：空链接直接失败终态；
+  // 模块缓存命中直接终态（不闪占位），否则回 loading；同时清掉针对旧地址
+  // 的刷新穿透参数。
   $effect(() => {
     void src; // 建立追踪；bust/status/errorCode 仅写入、不参与依赖，无循环风险
     bust = "";
+    if (emptySrc) {
+      status = "error";
+      errorCode = "";
+      decodeSync = false;
+      return;
+    }
     const hit = cache.get(src);
     status = hit?.status ?? "loading";
     errorCode = hit?.code ?? "";
     decodeSync = hit?.status === "loaded";
   });
 
-  /** 刷新：回占位态 + 缓存穿透参数重新请求（阻止冒泡——块级图片可能在 <a> 内） */
+  /** 刷新：回占位态 + 缓存穿透参数重新请求（阻止冒泡——块级图片可能在 <a> 内）；
+   *  classifySeq++ 使进行中的过期复核失效（结果落地不回跳刚设置的 loading）。
+   *  空链接直接返回：无请求可刷新，保持失败终态（不发任何请求） */
   function reload(ev: MouseEvent): void {
     ev.stopPropagation();
     ev.preventDefault();
+    if (emptySrc) return;
+    classifySeq++;
     status = "loading";
     errorCode = "";
     bust = bustParams(src);
@@ -127,17 +147,30 @@
     }
     if (lastDir === d) return;
     lastDir = d;
+    if (emptySrc) return; // 空链接：保持失败终态，无请求可刷新
+    classifySeq++; // 使进行中的过期复核失效（同 reload）
     status = "loading";
     errorCode = "";
     bust = bustParams(src);
   });
 
-  /** error 细分：对代理路径 HEAD 复核真实状态码（img error 事件不含状态信息） */
+  /**
+   * error 细分：对代理路径 HEAD 复核真实状态码（img error 事件不含状态信息）。
+   * 复核期间组件保持 loading 态——不先落通用错误占位，复核完成后一次性
+   * 切换到最终异常态（notfound / restricted / 通用失败），加载 → 异常
+   * 永远只有一次切换、一个结果，不出现「失败 → 不存在」两段闪烁。
+   * 代际守卫：复核 await 期间发生 reload / 换址（props.src 变化）时，
+   * 过期结果直接丢弃（seq 失配或 src 已变），不回写状态与缓存。
+   */
+  let classifySeq = 0;
+
   async function classifyError(): Promise<void> {
+    const seq = ++classifySeq;
+    const target = src;
     let code: ImgErrorCode = "";
-    if (src.includes("/__imgproxy/")) {
+    if (target.includes("/__imgproxy/")) {
       try {
-        const resp = await fetch(src, { method: "HEAD" });
+        const resp = await fetch(target, { method: "HEAD" });
         if (resp.status === 404) code = "notfound";
         else if (resp.status === 401 || resp.status === 403)
           code = "restricted";
@@ -145,8 +178,10 @@
         /* 网络错误保持通用失败态 */
       }
     }
+    if (seq !== classifySeq || target !== src) return;
     errorCode = code;
-    record(src, { status: "error", code });
+    status = "error";
+    record(target, { status: "error", code });
   }
 </script>
 
@@ -168,9 +203,9 @@
       record(src, { status: "loaded", code: "" });
     }}
     onerror={() => {
-      status = "error";
-      errorCode = "";
-      record(src, { status: "error", code: "" });
+      // 不先落通用错误占位：保持 loading 态（HEAD 复核的是本地 imgproxy，
+      // 耗时极短），复核完成后一次性切换到最终异常占位——加载 → 异常
+      // 只有一次切换、一个结果；过期复核结果由 classifyError 内部守卫丢弃
       void classifyError();
     }}
   />
