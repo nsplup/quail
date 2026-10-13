@@ -34,6 +34,14 @@ export type ParseContext = "open" | "blank-open" | "edit";
 
 export type Lang = "zh" | "en";
 
+/**
+ * 语言设置（设置面板持久化的原始值）：
+ * - system：跟随系统语言（默认项）；
+ * - zh / en：指定语言。
+ * 解析规则见 i18n.svelte.ts 的 resolveLang（解析结果超出可用语言时回落英语）。
+ */
+export type LangSetting = "system" | Lang;
+
 /** 缩进单位：制表符 / 2 空格 / 4 空格 */
 export type IndentId = "tab" | "space2" | "space4";
 

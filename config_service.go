@@ -26,7 +26,7 @@ type Config struct {
         Mode            string  `json:"mode"`           // editor | split | preview
         DefaultLayout   string  `json:"defaultLayout"`  // memory | source | split | preview（启动时的默认布局）
         Theme           string  `json:"theme"`          // ThemeId
-        Locale          string  `json:"locale"`         // zh | en
+        Locale          string  `json:"locale"`         // system | zh | en（system = 跟随系统语言，默认）
         Indent          string  `json:"indent"`         // IndentId
         CountMode       string  `json:"countMode"`      // CountMode
         FontEditor      string  `json:"fontEditor"`
@@ -41,7 +41,7 @@ func defaultConfig() Config {
                 Mode:            "split",
                 DefaultLayout:   "memory",
                 Theme:           "ayu-dark",
-                Locale:          "zh",
+                Locale:          "system",
                 Indent:          "space2",
                 CountMode:       "chars",
                 FontEditor:      "",

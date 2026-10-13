@@ -15,10 +15,54 @@
    * 标记的 span（围栏内容在 mdast 中为纯文本，无标记注入通道），可 {@html}。
    */
   import type { Element } from "hast";
+  import Icon from "../../components/Icon.svelte";
+  import { t } from "../i18n.svelte";
   import { hastAttrs } from "../markdown/hast-attrs";
   import { requestHighlight } from "./hl-client";
 
   let { node }: { node: Element } = $props();
+
+  /* ---------- 复制按钮（默认隐藏，悬停代码块时显示；显隐用 visibility，不用 opacity） ---------- */
+  let copied = $state(false);
+  let copiedTimer: ReturnType<typeof setTimeout> | undefined;
+
+  async function copyCode(): Promise<void> {
+    const ok = await writeClipboard(plain);
+    if (!ok) return;
+    copied = true;
+    if (copiedTimer !== undefined) clearTimeout(copiedTimer);
+    copiedTimer = setTimeout(() => (copied = false), 1500);
+  }
+
+  /** 剪贴板写入：优先 Clipboard API，不可用（如 webkitgtk 旧版）时回退 execCommand */
+  function writeClipboard(text: string): Promise<boolean> {
+    if (navigator.clipboard?.writeText) {
+      return navigator.clipboard
+        .writeText(text)
+        .then(
+          () => true,
+          () => writeClipboardFallback(text)
+        );
+    }
+    return Promise.resolve(writeClipboardFallback(text));
+  }
+
+  function writeClipboardFallback(text: string): boolean {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.left = "-9999px"; // 移出视口而非 visibility/opacity 隐藏（需可选中）
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand("copy");
+      ta.remove();
+      return ok;
+    } catch {
+      return false;
+    }
+  }
 
   /** pre 的直接子 code 元素（分派方保证存在） */
   const codeEl = $derived(
@@ -80,5 +124,64 @@
   });
 </script>
 
-<!-- code 内部严禁出现字面空白（pre 上下文，空白即内容）：标签与表达式紧邻书写 -->
-<pre {...hastAttrs(node)}><code class={codeClass}>{#if html !== null}{@html html}{:else}{plain}{/if}</code></pre>
+<!-- code 内部严禁出现字面空白（pre 上下文，空白即内容）：标签与表达式紧邻书写。
+     外层 wrap 提供 position:relative 定位锚点，复制按钮挂在 wrap 上而非 pre 内，
+     避免 pre 横向滚动时按钮被滚走 -->
+<div class="codeblock-wrap"><pre {...hastAttrs(node)}><code class={codeClass}>{#if html !== null}{@html html}{:else}{plain}{/if}</code></pre><button
+    class="code-copy-btn"
+    class:copied
+    type="button"
+    title={copied ? $t("preview.codeCopied") : $t("preview.copyCode")}
+    aria-label={copied ? $t("preview.codeCopied") : $t("preview.copyCode")}
+    onclick={copyCode}
+  >
+    <Icon name={copied ? "check" : "copy"} size={13} />
+  </button></div>
+
+<style>
+  .codeblock-wrap {
+    position: relative;
+  }
+
+  /* 默认隐藏（visibility 而非 opacity），悬停代码块或按钮聚焦时显示 */
+  .code-copy-btn {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border: 1px solid var(--pv-border);
+    border-radius: 6px;
+    background: var(--pv-code-bg);
+    color: var(--pv-muted);
+    cursor: pointer;
+    visibility: hidden;
+    pointer-events: none;
+    /* visibility 的离散过渡：隐藏延迟到过渡结束，显隐均有时间窗且不触碰 opacity */
+    transition:
+      visibility 0.15s,
+      color 0.15s,
+      border-color 0.15s;
+  }
+
+  .codeblock-wrap:hover .code-copy-btn,
+  .code-copy-btn:focus-visible,
+  .code-copy-btn.copied {
+    visibility: visible;
+    pointer-events: auto;
+  }
+
+  .code-copy-btn:hover {
+    color: var(--pv-fg);
+    border-color: var(--pv-muted);
+  }
+
+  .code-copy-btn.copied {
+    color: var(--ui-accent);
+  }
+</style>

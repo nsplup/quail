@@ -2,7 +2,7 @@
     import Icon from "./Icon.svelte";
   import NumberInput from "./NumberInput.svelte";
   import TextInput from "./TextInput.svelte";
-  import { t, locale, setLang } from "../lib/i18n.svelte";
+  import { t, locale, langSetting, setLang } from "../lib/i18n.svelte";
   import { THEMES, THEME_CARD_DESC, EDITOR_FONT_FALLBACK, PREVIEW_FONT_FALLBACK } from "../lib/themes";
   import {
     theme$ as theme,
@@ -15,7 +15,7 @@
     defaultLayout$ as defaultLayout,
     settingsOpen$ as settingsOpen,
   } from "../lib/stores";
-  import type { ThemeId, Lang, IndentId, CountMode, DefaultLayout } from "../lib/types";
+  import type { ThemeId, LangSetting, IndentId, CountMode, DefaultLayout } from "../lib/types";
 
 
 
@@ -26,7 +26,11 @@
   });
   const desc = $derived($locale === "zh" ? THEME_CARD_DESC.zh : THEME_CARD_DESC.en);
 
-  const langs: { id: Lang; label: string }[] = [
+  /* 语言设置：跟随系统（默认）+ 可用语言。zh/en 标签用各自语言原文展示；
+     高亮依据 langSetting 原始值（而非解析后的 locale），跟随系统与手动
+     选择的生效语言可同时区分 */
+  const langs: { id: LangSetting; key?: string; label?: string }[] = [
+    { id: "system", key: "settings.langSystem" },
     { id: "zh", label: "中文" },
     { id: "en", label: "English" },
   ];
@@ -152,10 +156,10 @@
             {#each langs as l (l.id)}
               <button
                 class="pill"
-                class:active={$locale === l.id}
+                class:active={$langSetting === l.id}
                 onclick={() => setLang(l.id)}
               >
-                {l.label}
+                {l.key ? $t(l.key) : l.label}
               </button>
             {/each}
           </div>

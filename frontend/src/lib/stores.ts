@@ -487,5 +487,6 @@ export function applyBackendConfig(snap: Record<string, unknown>): void {
   const fsp = snap["fontSizePreview"];
   if (fsp != null && Number.isFinite(Number(fsp))) fontSizePv$.set(Number(fsp));
   const loc = str("locale");
-  if (loc === "zh" || loc === "en") setLang(loc);
+  // 校验后再回放：旧配置文件可能残留非法值（非法值由 setLang 归一化为跟随系统）
+  if (loc === "system" || loc === "zh" || loc === "en") setLang(loc);
 }
