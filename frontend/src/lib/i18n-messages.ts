@@ -8,6 +8,7 @@
 export const zhMessages = {
   common: {
     close: "关闭",
+    cancel: "取消",
     saved: "已保存",
     dirty: "未保存",
     open: "打开",
@@ -15,9 +16,15 @@ export const zhMessages = {
   },
   confirm: {
     ok: "确定",
+    save: "保存",
+    discard: "丢弃",
+    saveStill: "仍然保存",
     quit: "确定退出 quail 吗？",
-    quitDirty: "当前文档有未保存的修改，退出将丢失。确定退出吗？",
+    quitDirty: "当前文档有未保存的修改，退出前要保存吗？丢弃将不保存直接退出。",
+    openDirty: "当前文档有未保存的修改，打开其他文档前要保存吗？丢弃将不保存直接打开。",
     conflict: "文件已被其他程序修改。以当前编辑内容覆盖磁盘上的版本吗？",
+    deletedSave:
+      "文件“{path}”已在存储设备中移动或者删除。\n\n您真的想要保存此文件吗？您将会覆盖该文件在磁盘上被更改的数据。",
   },
   mode: {
     source: "源码",
@@ -55,7 +62,6 @@ export const zhMessages = {
     indentTab: "制表符",
     indentSpace2: "2 空格",
     indentSpace4: "4 空格",
-    indentHint: "Tab 无选区时插入缩进，有选区时整体缩进（Shift+Tab 反向）",
   },
   stats: {
     words: "词",
@@ -95,6 +101,7 @@ export const zhMessages = {
 export const enMessages = {
   common: {
     close: "Close",
+    cancel: "Cancel",
     saved: "Saved",
     dirty: "Unsaved",
     open: "Open",
@@ -102,9 +109,15 @@ export const enMessages = {
   },
   confirm: {
     ok: "OK",
+    save: "Save",
+    discard: "Discard",
+    saveStill: "Save Anyway",
     quit: "Quit quail?",
-    quitDirty: "You have unsaved changes. Quit and discard them?",
+    quitDirty: "You have unsaved changes. Save before quitting? Discard quits without saving.",
+    openDirty: "You have unsaved changes. Save before opening another document? Discard opens without saving.",
     conflict: "The file has been modified by another program. Overwrite it with your current edits?",
+    deletedSave:
+      "The file \"{path}\" has been moved or removed from the storage device.\n\nDo you really want to save this file? You will overwrite the data that has been changed on disk.",
   },
   mode: {
     source: "Source",
@@ -142,7 +155,6 @@ export const enMessages = {
     indentTab: "Tabs",
     indentSpace2: "2 spaces",
     indentSpace4: "4 spaces",
-    indentHint: "Tab inserts indent with no selection, indents selected lines otherwise (Shift+Tab to outdent)",
   },
   stats: {
     words: "words",

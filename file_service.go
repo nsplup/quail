@@ -35,6 +35,9 @@ type DocState struct {
         Encoding string `json:"encoding"` // 磁盘原编码（保存写回用）
         Size     int64  `json:"size"`
         ModTime  int64  `json:"modTime"` // unix 毫秒
+        // Deleted 文件已被外部移动/删除（前端由 file:deleted 事件置位）。
+        // 置位期间前端把保存路由到「确认重建」流程；Open/SaveAs 返回恒为 false。
+        Deleted bool `json:"deleted,omitempty"`
 }
 
 // SaveResult 保存结果。

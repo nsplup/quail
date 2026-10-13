@@ -168,6 +168,13 @@ export const parseContext$ = writable<ParseContext>("edit");
 export const editorApi$ = writable<EditorApi | null>(null);
 /** 脏状态：当前文档与最近一次干净引用（初始化/保存时记录）不一致 */
 export const dirty$ = writable(false);
+/**
+ * 自打开/保存基线以来是否存在用户编辑操作记录。
+ * 撤销回原内容也不会复位（操作记录仍在）；setDoc（打开/外部重载）与
+ * markClean（保存成功）重置为 false。未命名空文档等「默认脏」场景下，
+ * 关闭/打开守卫据此失效：没有任何操作记录时不拦截。
+ */
+export const edited$ = writable(false);
 export const previewApi$ = writable<PreviewApi | null>(null);
 
 /* ---------------- 解析调度：200ms 防抖 + IME 组合闸门 + worker 背压 ----------------
@@ -436,6 +443,18 @@ export async function bootApp(): Promise<void> {
 /** 打开的文档状态（路径、编码等，供保存/标题/底部栏展示） */
 export const docState$ = writable<QuailDocState | null>(null);
 
+/**
+ * 守卫用脏状态：退出/打开替换等确认拦截的实际依据。
+ * - 有路径的文档（含 deleted）：内容对比的脏状态即拦截依据
+ *   （文件被删除后未编辑则内容仍与基线一致 → 不拦截，可直接退出/另存）；
+ * - 未命名文档：默认脏，但仅在存在编辑操作记录时才拦截
+ *   （无操作记录的空文档可直接退出/打开替换）。
+ */
+export const guardDirty$ = derived(
+  [dirty$, edited$, docState$],
+  ([d, edited, s]) => d && (s?.path ? true : edited)
+);
+
 /** 订阅后端文档事件（外部修改 / 删除），只挂一次 */
 let fileEventsBound = false;
 function subscribeFileEvents(): void {
@@ -443,7 +462,10 @@ function subscribeFileEvents(): void {
   fileEventsBound = true;
   void onBackendEvent("file:changed", (d: { path: string; content?: string }) => {
     if (typeof d?.content !== "string") return;
-    docState$.update((s) => (s && s.path === d.path ? { ...s, content: d.content! } : s));
+    // 文件重新出现在磁盘（如删除后又被外部恢复/重建）：解除 deleted 标记
+    docState$.update((s) =>
+      s && s.path === d.path ? { ...s, content: d.content!, deleted: false } : s
+    );
     // 未保存的本地修改不被外部改动静默覆盖：脏状态时仅提示
     if (get(dirty$)) {
       toast$.set({ id: Date.now(), msg: get(t)("toast.fileChangedDirty") });
@@ -455,7 +477,10 @@ function subscribeFileEvents(): void {
     }
   });
   void onBackendEvent("file:deleted", (d: { path: string }) => {
-    docState$.set(null);
+    // 文件被外部移动/删除：保留路径并标记 deleted，内容与脏状态维持
+    // 删除前的值（未编辑则仍可直接退出/另存；保存路由到确认重建流程）。
+    // 当前未命名文档（无路径）时删除事件不适用，保持原状。
+    docState$.update((s) => (s && s.path === d.path ? { ...s, deleted: true } : s));
     toast$.set({ id: Date.now(), msg: get(t)("toast.fileDeleted") });
   });
 }

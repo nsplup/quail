@@ -29,7 +29,8 @@ import { syntaxHighlighting, HighlightStyle, bracketMatching, indentUnit } from 
 import { tags } from "@lezer/highlight";
 import type { Command } from "@codemirror/view";
 import { createModernSearchPanel, searchPanelModF } from "./searchPanel";
-import { dirty$, setImeComposing } from "../stores";
+import { dirty$, docState$, edited$, setImeComposing } from "../stores";
+import { get } from "svelte/store";
 
 export interface EditorHandlers {
   /** 文档内容变化（编辑器是源码的唯一编辑入口） */
@@ -213,7 +214,17 @@ export function createEditorApi(
         EditorView.updateListener.of((u) => {
           if (u.docChanged) {
             handlers.onchange(u.state.doc.toString());
-            if (cleanDoc) dirty$.set(!cleanDoc.eq(u.state.doc));
+            // 记录编辑操作痕迹（守卫用）：撤销回原内容也不复位，
+            // setDoc（打开/外部重载）与 markClean（保存成功）重置
+            edited$.set(true);
+            if (cleanDoc) {
+              // 未命名文档（无路径）始终视为脏：内容即使撤销回基线，
+              // 也仍是一份未落盘的文档（空文档同理）。
+              // 注意守卫是否拦截由 guardDirty$（dirty ∧ 操作记录）决定，
+              // 无任何操作记录的未命名空文档不会被关闭/打开确认拦截。
+              const untitled = !get(docState$)?.path;
+              dirty$.set(untitled || !cleanDoc.eq(u.state.doc));
+            }
           }
         }),
         /* 输入法组合事件上报：compositionstart/end 经 setImeComposing 写入
@@ -338,6 +349,7 @@ export function createEditorApi(
       });
       cleanDoc = view.state.doc;
       dirty$.set(false);
+      edited$.set(false); // 装载新文档：操作记录清零
       /* 限定撤销历史只包含打开后的记录：卸载再重装 history（重装即全新
          空历史），同时抹掉上面全量替换自身产生的那条撤销记录 */
       view.dispatch({ effects: historyCompartment.reconfigure([]) });
@@ -363,6 +375,7 @@ export function createEditorApi(
     markClean() {
       cleanDoc = view.state.doc;
       dirty$.set(false);
+      edited$.set(false); // 落盘成功：操作记录清零
     },
     setPhrases(lang: string) {
       view.dispatch({

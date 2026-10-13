@@ -42,6 +42,7 @@
     activeHeading$ as activeHeading,
     countLabel$ as countLabel,
     dirty$ as dirty,
+    guardDirty$ as guardDirty,
     editorApi$ as editorApi,
     previewApi$ as previewApi,
     bootApp,
@@ -96,20 +97,39 @@
   /* ---------------- 启动 ---------------- */
   onMount(async () => {
     setLang(currentLang());
-    // 关闭请求 → confirm → ConfirmQuit（取消则无操作）
+    // 关闭请求 → 三选确认（保存/丢弃/取消）→ ConfirmQuit（取消则无操作）。
+    // 后端已启用脏状态关闭拦截（ShouldQuit + WindowClosing）：
+    // 有未保存改动时后端先取消关闭，再发 close:request 到这里。
+    // closeDialogOpen 防重入：对话框打开期间重复的 close:request
+    // （如连续点击标题栏关闭按钮）不叠加弹窗。
+    let closeDialogOpen = false;
     void onBackendEvent("close:request", async () => {
-      const msg = get(dirty)
-        ? get(t)("confirm.quitDirty")
-        : get(t)("confirm.quit");
-      if (await confirmDialog(msg)) {
-        await confirmQuit();
+      if (closeDialogOpen) return;
+      closeDialogOpen = true;
+      try {
+        // close:request 仅在守卫脏时由后端发出；confirm 消息仅为兜底
+        const g = get(guardDirty);
+        const res = await confirmDialog(
+          g ? get(t)("confirm.quitDirty") : get(t)("confirm.quit"),
+          g ? "dirty" : "confirm"
+        );
+        if (res === "cancel") return; // 中止关闭
+        if (res === "save") {
+          await save(); // 先保存当前文档（未命名走另存为；deleted 走确认重建）
+          if (get(guardDirty)) return; // 保存未完成（另存被取消/写盘失败）→ 放弃退出
+        }
+        await confirmQuit(); // 丢弃，或保存成功后退出
+      } finally {
+        closeDialogOpen = false;
       }
     });
     // 拖拽打开（Wails File Drop 官方通道）：根元素已标 data-file-drop-target，
-    // 后端 WindowFilesDropped 转发文件绝对路径 → 取第一个走标准打开流程装载
+    // 后端 WindowFilesDropped 转发文件绝对路径 → 取第一个走标准打开流程装载。
+    // 脏状态守卫：有未保存修改时先确认，避免静默丢弃当前编辑内容。
     void onBackendEvent("file:dropped", async (d: { files?: string[] }) => {
       const path = d?.files?.find((p) => !!p);
       if (!path) return;
+      if (!(await confirmDirty())) return;
       try {
         const state = await openDocument(path);
         if (state) loadOpened(state);
@@ -120,9 +140,11 @@
     await bootApp();
   });
 
-  // 脏状态上报后端（供后续 WindowClosing 拦截钩子使用）
+  // 守卫脏状态上报后端（供 WindowClosing 拦截钩子与 ShouldQuit 关闭守卫
+  // 使用）：未命名空文档在无编辑操作记录时不拦截，故上报 guardDirty 而非
+  // 指示器用的 dirty
   $effect(() => {
-    void reportDirty($dirty);
+    void reportDirty($guardDirty);
   });
 
   // 窗口标题与文档名同步
@@ -149,6 +171,12 @@
   });
 
   async function save(force = false): Promise<void> {
+    // 文件已被外部移动/删除：保存路由到确认重建流程（无论是否脏——
+    // 用户显式保存即意图重建文件）
+    if (get(docState)?.deleted) {
+      await saveDeletedDoc();
+      return;
+    }
     if (!get(dirty) && !force) return; // 非脏状态静默：无修改不写后端、不弹提示
     if (!get(docState)?.path) {
       await saveFileAs(); // 未命名文档：保存即另存为，落盘后标题随文档名更新
@@ -159,17 +187,63 @@
       if (res.ok) {
         get(editorApi)?.markClean();
       } else if (res.conflict) {
-        // 磁盘已被外部修改：确认后以当前编辑内容覆盖
-        const overwrite = await confirmDialog(get(t)("confirm.conflict"));
-        if (overwrite) await save(true);
+        // 磁盘已被外部修改：确认后以当前编辑内容覆盖（confirm 模式）
+        const res2 = await confirmDialog(get(t)("confirm.conflict"), "confirm");
+        if (res2 === "ok") await save(true);
       }
     } catch {
       toast.set({ id: Date.now(), msg: get(t)("toast.saveFailed") });
     }
   }
 
+  /**
+   * 已删除文档的保存：弹出确认（仍然保存/取消），确认后以当前内容
+   * 强制覆盖重建原路径文件（磁盘上可能已被外部更改的数据将被覆盖，
+   * 用户已通过确认知悉）。取消则不做任何写盘。
+   */
+  async function saveDeletedDoc(): Promise<void> {
+    const st = get(docState);
+    if (!st?.path) return;
+    const res = await confirmDialog(
+      get(t)("confirm.deletedSave", { values: { path: st.path } }),
+      "deletedSave"
+    );
+    if (res !== "save") return; // 取消：不写盘
+    try {
+      const r = await saveDocument(get(doc), true); // force：文件已不在磁盘，跳过冲突检测重建
+      if (r.ok) {
+        get(editorApi)?.markClean();
+        docState.set({ ...st, deleted: false }); // 重建完成：解除删除标记
+      }
+    } catch {
+      toast.set({ id: Date.now(), msg: get(t)("toast.saveFailed") });
+    }
+  }
+
+  /**
+   * 脏状态守卫：守卫脏（guardDirty，见 stores）时弹三选确认
+   * （保存/丢弃/取消），用于打开对话框 / 拖拽等会替换当前文档的操作入口。
+   * 未命名空文档无编辑操作记录时守卫失效（直接放行）。
+   * - 取消：中止被拦截的操作；
+   * - 保存：先保存当前文档（未命名走另存为；deleted 走确认重建；
+   *   保存未完成则中止），再继续被拦截的操作；
+   * - 丢弃：放弃修改，直接继续被拦截的操作。
+   * 返回 true = 放行；false = 中止操作。
+   */
+  async function confirmDirty(): Promise<boolean> {
+    if (!get(guardDirty)) return true;
+    const res = await confirmDialog(get(t)("confirm.openDirty"));
+    if (res === "cancel") return false;
+    if (res === "save") {
+      await save();
+      if (get(guardDirty)) return false; // 保存未完成（另存被取消/写盘失败）→ 中止
+    }
+    return true; // 丢弃，或保存成功
+  }
+
   /** 打开文档（Wails 原生文件对话框 → FileService.Open） */
   async function openFile(): Promise<void> {
+    if (!(await confirmDirty())) return; // 脏状态守卫：替换文档前确认
     const state = await openViaDialog();
     if (state) loadOpened(state);
   }

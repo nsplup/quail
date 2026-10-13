@@ -176,7 +176,6 @@
               </button>
             {/each}
           </div>
-          <div class="mt-1.5 text-[11px] text-muted">{$t("settings.indentHint")}</div>
         </div>
         </div>
       </section>

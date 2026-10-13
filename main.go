@@ -6,7 +6,9 @@
 //   - 主窗口以 Hidden 启动，前端首帧渲染完成后调用 AppService.Ready 显示；
 //   - 窗口尺寸记忆（$XDG_STATE_HOME/quail）由窗口事件驱动（window_state.go）；
 //   - 文件拖拽打开走 Wails File Drop 官方通道（EnableFileDrop + 窗口事件），
-//     前端 data-file-drop-target 标注放置区。
+//     前端 data-file-drop-target 标注放置区；
+//   - 脏状态关闭拦截：ShouldQuit（应用级退出）+ WindowClosing 拦截钩子
+//     （窗口关闭按钮）双通道，有未保存改动时取消关闭并通知前端弹 confirm。
 //
 // 事件名与 payload 模型集中在 events.go，枚举由 bindings 生成器自动产出 TS。
 package main
@@ -43,6 +45,19 @@ func main() {
                         application.NewService(appSvc),
                         application.NewService(fileSvc),
                         application.NewService(configSvc),
+                },
+                // 应用级关闭拦截（与下方 WindowClosing 拦截钩子构成完整关闭链）：
+                // 窗口关闭按钮走 WindowClosing，Cmd+Q 等应用级退出走 ShouldQuit。
+                // - 已确认退出或无脏状态 → 直接放行；
+                // - 有脏状态 → ShouldQuit 立即返回 false 阻止退出，异步通知
+                //   前端弹 confirm（close:request），确认后经 ConfirmQuit 退出时
+                //   confirmed 已置位，此处放行。
+                ShouldQuit: func() bool {
+                        if appSvc.QuitConfirmed() || !appSvc.Dirty() {
+                                return true
+                        }
+                        go appSvc.RequestClose()
+                        return false
                 },
         })
 
@@ -81,6 +96,19 @@ func main() {
                 if w, h := win.Size(); w > 0 && h > 0 {
                         winState.Flush(WindowState{Width: w, Height: h})
                 }
+        })
+
+        // 窗口关闭拦截（参考 ref.go 实现思路）：有未保存改动时取消关闭，
+        // 通知前端弹 confirm（close:request），由前端决定 ConfirmQuit 或取消。
+        // 已确认退出（confirmed 置位）或无脏状态时直接放行。
+        // 与 ShouldQuit 构成完整关闭链：窗口关闭按钮走这里，
+        // Cmd+Q 等应用级退出走 ShouldQuit。
+        win.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
+                if appSvc.QuitConfirmed() || !appSvc.Dirty() {
+                        return
+                }
+                e.Cancel()
+                appSvc.RequestClose()
         })
 
         // 拖拽打开（Wails File Drop 官方通道）：前端在应用根元素标

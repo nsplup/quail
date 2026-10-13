@@ -33,6 +33,8 @@ export interface QuailDocState {
   encoding: string;
   size: number;
   modTime: number;
+  /** 文件已被外部移动/删除（file:deleted 事件置位；保存路由到确认重建流程） */
+  deleted?: boolean;
 }
 
 export interface QuailSaveResult {
