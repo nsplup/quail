@@ -11,7 +11,7 @@
  * - 同步滚动、大纲、预览渲染全部依赖这份 AST 的位置信息。
  *
  * 渲染管线（Svelte 组件树直渲染，不经 HTML 字符串 / {@html}）：
- *   parseMarkdown → mdastToHastRaw（注入行号锚 + rehype-raw 融合）→ HAST Root
+ *   parseMarkdown → mdastToHastRaw（注入行号锚 + rehype-raw 融合 + rehype-sanitize 净化）→ HAST Root
  *   → splitSegments → 段列表（经结构化克隆回传主线程）
  *   → MarkdownRenderer/MarkdownNode 递归组件 → DOM。
  * 块行界由锚 comment 驱动（blocksFromHast），供滚动同步 / 大纲 / 增量解析使用。
@@ -19,6 +19,10 @@
 import { unified } from "unified";
 import remarkParse from "remark-parse";
 import remarkGfm from "remark-gfm";
+import remarkSlug from "remark-slug";
+import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
+import type { Schema } from "hast-util-sanitize";
+import type { Plugin } from "unified";
 import { toHast } from "mdast-util-to-hast";
 import { raw as rehypeRaw } from "hast-util-raw";
 import type {
@@ -44,12 +48,52 @@ import {
   countHanCharacters,
 } from "./blocks";
 
-const processor = unified().use(remarkParse).use(remarkGfm);
+/* remark-slug 自带的 @types/mdast / vfile 版本与项目顶层 unified 实例存在
+   结构性版本差（dual-package type 实例），对统一管线做一次收窄转换 */
+const processor = unified()
+  .use(remarkParse)
+  .use(remarkGfm)
+  .use(remarkSlug as unknown as Plugin<[]>);
 
-/** 从 Markdown 源码解析出 mdast AST（含 GFM 扩展：表格 / 任务列表 / 删除线 / 自动链接 / 脚注） */
+/** Markdown 源码 → mdast AST（含 GFM 扩展：表格 / 任务列表 / 删除线 / 自动链接 / 脚注）。
+ * remark 转换阶段（run）在此同步执行：remark-slug 为标题注入 GitHub 风格 slug id
+ * （data.hProperties.id，经 toHast 落为元素 id 属性）——页内锚点跳转的定位依据。
+ * 注意：增量路径的局部 chunk 独立 parse，标题 id 去重仅在其 chunk 内生效，
+ * 与全量 parse 的文档级去重可能存在差异（锚点跳转取首个命中，且 idle 自愈
+ * 全量重建会最终对齐）。 */
 export function parseMarkdown(src: string): Root {
-  return processor.parse(src) as unknown as Root;
+  return processor.runSync(processor.parse(src)) as unknown as Root;
 }
+
+/* ---------------- rehype-sanitize 净化 schema ----------------
+ * 在 GitHub 向默认白名单（defaultSchema）上做最小扩展，全部为管线
+ * 既有产物的存活声明：
+ * - allowComments：保留「mdl:」行号锚 comment——块映射 / 滚动同步 /
+ *   增量解析 / 大纲的基石，默认 schema 会把注释整体剥除；
+ * - clobberPrefix 置空：id 原样保留。默认 schema 会对白名单放行的 id
+ *   无条件前缀化 user-content-（脚注 id 由 mdast-util-to-hast 生成时
+ *   已自带该前缀，二次前缀化会让脚注锚点失配）；本应用只渲染用户本地
+ *   文档，DOM clobbering 风险由 tagNames / attributes / protocols
+ *   白名单兜底；
+ * - id 显式进 '*' 白名单（默认已含，显式声明固化语义）：标题锚点
+ *   （remark-slug）与脚注定义 / 回链 id 的载体；
+ * - md-image 进 tagNames：编译期 image handler 产物的容器标签
+ *   （未知标签默认被 unwrap，MarkdownImage 组件容器会丢失）；
+ * - data* 进 '*' 属性：md-image 的 data-src / data-alt 与 data-inline
+ *   等标注（hast 属性键经规范化可能为 dataSrc 或 data-src，
+ *   'data*' 通配两者；后者由 annotateImageContext 在净化后写入，
+ *   此处仅作声明）。
+ */
+const sanitizeSchema = {
+  ...defaultSchema,
+  allowComments: true,
+  clobberPrefix: "",
+  tagNames: [...(defaultSchema.tagNames ?? []), "md-image"],
+  attributes: {
+    ...(defaultSchema.attributes ?? {}),
+    "*": [...(defaultSchema.attributes?.["*"] ?? []), "id", "data*"],
+  },
+} satisfies Schema;
 
 /**
  * 整篇 mdast → hast → rehype-raw 融合（社区成熟链路：remark-rehype / rehype-raw）。
@@ -157,17 +201,23 @@ function mdastToHastRaw(root: Root): RawResult {
   }
   // 无 raw HTML 时跳过 parse5 全树重解析（大文档主要成本），锚天然保留
   const result = hasRaw ? (rehypeRaw(anchored as never) as HastRoot) : anchored;
+  // rehype-sanitize 净化（XSS 白名单）。必须在 rehype-raw 融合之后——
+  // 融合前 raw HTML 只是 text / raw 节点，净化形同虚设；
+  // convertHtmlImgToMdImage / annotateImageContext 在其后执行，
+  // 其写入/迁移的属性无需进 schema。sanitize 重建整棵树（非 in-place），
+  // 后续步骤全部改用其产物。
+  const sanitized = rehypeSanitize(sanitizeSchema)(result as never) as unknown as HastRoot;
   // rehype-raw 融合后，HTML 语法书写的 <img>（含嵌在其他 HTML 标签内）只是
   // 普通元素——image/imageReference handler 只作用于 Markdown 语法的图片，
   // 管不到 raw 路径。这里把融合树中的 <img> 归一化为 md-image 容器，
   // 与 Markdown 语法图片走同一 MarkdownImage 组件（ImgProxy 重写 / 三态占位）。
-  if (hasRaw) convertHtmlImgToMdImage(result);
+  if (hasRaw) convertHtmlImgToMdImage(sanitized);
   // 剥除 HAST position：渲染层只消费结构/文本，不读行号（行号在锚 comment 与
   // mdast root 上）；统一剥除后增量（局部转换、position 为 chunk 行号）与全量
   // （全文行号）的 HAST 结构完全一致，渲染层引用对比/快照测试不受干扰。
-  for (const n of result.children as HastContent[]) stripHastPosition(n);
-  annotateImageContext(result);
-  return { hast: result, hasRaw };
+  for (const n of sanitized.children as HastContent[]) stripHastPosition(n);
+  annotateImageContext(sanitized);
+  return { hast: sanitized, hasRaw };
 }
 
 /** 递归剥除 HAST 节点 position（in-place；含 children 深层） */
@@ -529,7 +579,8 @@ function parseRange(
   baseLine: number
 ): { children: MdastContent[]; hast: HastRoot; blocks: PreviewBlock[] | null } {
   const chunk = lines.slice(fromLine - 1, toLine).join("\n");
-  const root = processor.parse(chunk) as unknown as Root;
+  // 与 parseMarkdown 同链路：runSync 执行 remark 转换（remark-slug 注入标题 id）
+  const root = processor.runSync(processor.parse(chunk)) as unknown as Root;
   const parsed = mdastToHastRaw(root);
   // 局部 chunk 含 raw HTML（rehype-raw 融合）时块边界可能跨越区间外 → 保守全量
   const { blocks, unmapped } = parsed.hasRaw

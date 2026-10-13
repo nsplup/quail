@@ -58,6 +58,7 @@
    *   并跳过前后端缓存；
    * - 依赖 docState.dir：目录变化时自动执行刷新（回占位态 + 缓存穿透重新请求）。
    */
+  import { untrack } from "svelte";
   import { t } from "../i18n.svelte";
   import { docState$ } from "../stores";
 
@@ -79,12 +80,12 @@
   // 首帧即通用失败终态；派生判定零成本，不写入模块缓存。
   const emptySrc = $derived(src.trim() === "");
 
-  // svelte-ignore state_referenced_locally —— 仅用于首帧快读（缓存命中则首帧即终态，
+  // 仅用于首帧快读（缓存命中则首帧即终态，
   // 避免闪烁）；props.src 的后续变化由下方 $effect 响应
-  const cached = emptySrc ? undefined : cache.get(src);
+  const cached = untrack(() => (emptySrc ? undefined : cache.get(src)));
 
   let status = $state<ImgStatus>(
-    cached?.status ?? (emptySrc ? "error" : "loading"),
+    untrack(() => cached?.status ?? (emptySrc ? "error" : "loading")),
   );
   let errorCode = $state<ImgErrorCode>(cached?.code ?? "");
   /** 缓存命中 → 同步解码（见 img.decoding；重挂载首帧即有像素，不闪空白帧） */

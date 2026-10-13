@@ -23,6 +23,7 @@
   import { onMount } from "svelte";
   import VirtualList from "../virtual/VirtualList.svelte";
   import type { VirtualListHandle } from "../virtual/VirtualList.svelte";
+  import type { Element as HastElement, ElementContent as HastContent } from "hast";
   import type { HastSegment } from "../markdown/markdown-core";
   import { openExternal } from "../bridge";
   import MarkdownSegment from "../markdown/MarkdownSegment.svelte";
@@ -109,13 +110,103 @@
     const anchor = target?.closest?.("a");
     if (!anchor) return;
     const href = anchor.getAttribute("href") ?? "";
-    if (!href || href.startsWith("#")) return; // 文档内锚点：无对应实现，保持默认
+    if (!href) return;
+    // 页内锚点（标题锚点 / 脚注引用 #user-content-fn-N / 脚注回链
+    // #user-content-fnref-N）：劫持默认导航。虚拟滚动下浏览器默认锚点
+    // 定位不可用——视口外目标元素未挂载，且滚动容器是虚拟列表根；
+    // 交由 scrollToAnchor 在段索引（HAST 数据）与已挂载 DOM 两级定位。
+    if (href.startsWith("#")) {
+      e.preventDefault();
+      scrollToAnchor(href.slice(1));
+      return;
+    }
     e.preventDefault();
     try {
       await openExternal(href);
     } catch {
       /* 后端转发失败：已阻止默认导航，避免 webview 内跳转 */
     }
+  }
+
+  /* ---------- 页内锚点 / 脚注跳转 ---------- */
+
+  /** GitHub 风格 id 前缀：脚注锚（mdast-util-to-hast 产物）自带，标题锚点为裸 slug */
+  const USER_CONTENT_PREFIX = "user-content-";
+
+  /** 解码 href 片段（decodeURIComponent 容错：畸形转义原样返回） */
+  function decodeAnchor(raw: string): string {
+    try {
+      return decodeURIComponent(raw);
+    } catch {
+      return raw;
+    }
+  }
+
+  /**
+   * 锚点 id 候选序列（去重保序）：
+   * 1. href 原文解码值——脚注链接（#user-content-fn-N）与带前缀书写的标题锚；
+   * 2. 去 user-content- 前缀的裸 id——标题锚点（remark-slug 产物）的主流写法；
+   * 3. 补 user-content- 前缀——文档按 GitHub 习惯书写（#hello ↔ user-content-hello）。
+   */
+  function anchorIdCandidates(raw: string): string[] {
+    const decoded = decodeAnchor(raw);
+    const bare = decoded.startsWith(USER_CONTENT_PREFIX)
+      ? decoded.slice(USER_CONTENT_PREFIX.length)
+      : decoded;
+    return [...new Set([decoded, bare, USER_CONTENT_PREFIX + bare])].filter(Boolean);
+  }
+
+  /** 段内深度优先查找携带目标 id 的元素（脚注定义 li 嵌在 section > ol 内，
+   *  标题 id 直接落在段顶层节点上） */
+  function segmentHasId(seg: HastSegment, id: string): boolean {
+    const walk = (n: HastContent): boolean => {
+      if (n.type !== "element") return false;
+      const el = n as HastElement;
+      if (typeof el.properties?.id === "string" && el.properties.id === id) return true;
+      return el.children.some(walk);
+    };
+    return seg.nodes.some(walk);
+  }
+
+  /** 元素级定位：以滚动容器为基准换算绝对 scrollTop（元素可能深嵌在
+   *  section/ol 内，段顶 ≠ 元素顶，故不做 scrollToIndex 兜底近似） */
+  function jumpToElement(el: globalThis.Element): void {
+    const container = scrollEl();
+    if (!container) return;
+    const cr = container.getBoundingClientRect();
+    const er = el.getBoundingClientRect();
+    vlist?.scrollTo(container.scrollTop + (er.top - cr.top));
+  }
+
+  /**
+   * 页内锚点跳转（虚拟滚动感知的两级定位）：
+   * 1. id 候选在已挂载 DOM 中精确查询（视口内 / overscan 覆盖的常见情况），
+   *    命中即元素级定位；
+   * 2. 未挂载则遍历段列表找到承载该 id 的段，scrollToIndex 触发段挂载，
+   *    挂载完成后（双 rAF：Svelte flush + 项布局）再元素级微调——段顶
+   *    与目标元素顶不重合（脚注 li 在段内偏移）时二次修正。
+   */
+  function scrollToAnchor(rawId: string): void {
+    for (const id of anchorIdCandidates(rawId)) {
+      const mounted = scrollEl()?.querySelector(`[id="${CSS.escape(id)}"]`) ?? null;
+      if (mounted) {
+        jumpToElement(mounted);
+        return;
+      }
+      const segIndex = segments.findIndex((s) => segmentHasId(s, id));
+      if (segIndex >= 0) {
+        vlist?.scrollToIndex(segIndex, { align: "start" });
+        requestAnimationFrame(() =>
+          requestAnimationFrame(() => {
+            const el = scrollEl()?.querySelector(`[id="${CSS.escape(id)}"]`);
+            if (el) jumpToElement(el);
+          }),
+        );
+        return;
+      }
+    }
+    /* 未命中任何候选：目标锚点不存在（空引用 / 增量窗口尚未解析到），
+       保守不动，与浏览器「无效锚点无副作用」行为一致 */
   }
 
   /** 预览滚动 → onvisible（rAF 合并；首块索引来自组件内核二分） */
