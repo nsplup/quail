@@ -497,9 +497,9 @@ md-image {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  /* 不设 gap：占位态（loading/error）的 img 不可见但仍是 flex 子项，
-     容器 gap 会把占位层顶偏导致与纯单子项的 error 态居中不一致；
-     loaded 态 img 与 caption 的间距由 .md-img-cap 的 margin-top 提供 */
+  /* 不设 gap：占位态（loading/error）img 整体退出布局（见 .md-img 规则），
+     容器内只有占位层一个 flex 子项；loaded 态 img 与 caption 的间距
+     由 .md-img-cap 的 margin-top 提供 */
 
   width: 100%;
   height: var(--md-image-height);
@@ -517,7 +517,17 @@ md-image .md-img {
   width: 100%;
   height: auto;
   border-radius: 8px;
-  visibility: hidden; /* 非 loaded 态直接隐藏（无 opacity / 无过渡动画），保留布局空间 */
+}
+
+/* 非 loaded 态（loading / error）：img 整体退出布局（display:none）。
+   旧实现用 visibility:hidden「保留布局空间」——img 仍是 flex 子项；
+   点击刷新回 loading 时换 src 不会清空旧位图，浏览器保留上一次加载的
+   固有尺寸，不可见 img 以旧宽高参与 flex 布局，把居中的占位层顶偏：
+   块级下占位层被推出容器可视区（overflow:hidden 裁剪），行内下占位行
+   被推出容器右侧。display:none 与 error 态行为统一，占位态容器内
+   永远只有占位层一个布局子项。 */
+md-image:not([data-status="loaded"]) .md-img {
+  display: none;
 }
 
 md-image[data-status="loaded"] {
@@ -566,13 +576,10 @@ md-image[data-status="loading"] .md-img-ic {
   animation: mdimg-spin 1s linear infinite;
 }
 
-/* 加载失败：受限（401/403）或网络错误，虚线边框区分 */
+/* 加载失败：受限（401/403）或网络错误，虚线边框区分
+   （img 的 display:none 已由上方非 loaded 态统一规则覆盖，error 态不单独处理） */
 md-image[data-status="error"] {
   border: 1px dashed var(--ui-border);
-}
-
-md-image[data-status="error"] .md-img {
-  display: none;
 }
 
 /* 刷新按钮（占位态：状态文本后的文字链接） */
@@ -644,8 +651,9 @@ md-image[data-inline] {
   display: inline-flex;
   flex-direction: row;
   align-items: center;
-  /* 不设 gap：行内占位态 img 不可见但仍是 flex 子项，gap 会把占位行顶偏；
-     图标与说明文本的间距由 .md-img-ph（row gap: 0.35em）提供 */
+  /* 不设 gap：行内占位态 img 整体退出布局（见 .md-img 规则），容器内
+     只有占位行一个 flex 子项；图标与说明文本的间距由 .md-img-ph
+     （row gap: 0.35em）提供 */
 
   width: auto;
   height: auto;

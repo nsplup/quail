@@ -27,7 +27,14 @@ import type {
   Element as HastElement,
   RootContent,
 } from "hast";
-import type { Root, RootContent as MdastContent, PhrasingContent, Image } from "mdast";
+import type {
+  Root,
+  RootContent as MdastContent,
+  PhrasingContent,
+  Image,
+  ImageReference,
+  Reference,
+} from "mdast";
 import type { PreviewBlock, OutlineItem } from "../types";
 import { rewriteImageSrc } from "../imgproxy";
 import {
@@ -56,6 +63,22 @@ interface RawResult {
   hast: HastRoot;
   /** 树中任意深度存在 raw HTML（rehype-raw 执行过融合） */
   hasRaw: boolean;
+}
+
+/** mdast-util-to-hast state 中本管线消费的最小定义查找接口 */
+interface MdastToHastState {
+  definitionById: Map<string, { url?: string | null }>;
+}
+
+/**
+ * 未定义引用的字面回退（与 mdast-util-to-hast 默认 imageReference 行为一致）：
+ * 全写 `![alt][id]`、收窄 `![alt][]`、缩写 `![alt]` 分别还原为对应源码文本。
+ */
+function revertReferenceText(node: Reference & { alt?: string }): string {
+  let suffix = "]";
+  if (node.referenceType === "collapsed") suffix += "[]";
+  else if (node.referenceType === "full") suffix += `[${node.label || node.identifier}]`;
+  return `![${node.alt ?? ""}${suffix}`;
 }
 
 /** 任意深度是否存在 raw 节点（raw HTML 可能嵌在列表/引用内，顶层检测会漏） */
@@ -90,6 +113,32 @@ function mdastToHastRaw(root: Root): RawResult {
           },
           children: [],
         }) as unknown as HastContent) as never,
+      // 链接引用式图片（![alt][id] / ![alt][] / ![alt]）在 mdast 中是
+      // imageReference 节点，定义解析发生在 remark-parse 内部，toHast 默认
+      // handler 会直接产出普通 <img>——绕过上面的 image handler，
+      // 导致此类图片不走 MarkdownImage 组件（无 ImgProxy 重写 / 三态占位）。
+      // 这里按默认 handler 的语义（definitionById 大写键查找；未定义引用
+      // 回退字面文本）把可解析的引用也归一到 md-image：
+      imageReference: ((state: MdastToHastState, node: ImageReference) => {
+        const def = state.definitionById.get(String(node.identifier).toUpperCase());
+        if (!def) {
+          // 未定义引用：回退字面文本（text 节点；handler 返回值不会被
+          // mdast-util-to-hast 自动包装成节点，必须显式给 {type:"text"}）
+          return {
+            type: "text",
+            value: revertReferenceText(node),
+          } as unknown as HastContent;
+        }
+        return {
+          type: "element",
+          tagName: "md-image",
+          properties: {
+            "data-src": rewriteImageSrc(def.url ?? ""),
+            "data-alt": node.alt ?? "",
+          },
+          children: [],
+        } as unknown as HastContent;
+      }) as never,
     } as never,
   }) as HastRoot;
   const hasRaw = (hast.children as HastContent[]).some(treeHasRaw);
