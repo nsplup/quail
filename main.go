@@ -9,6 +9,11 @@
 //     前端 data-file-drop-target 标注放置区；
 //   - 脏状态关闭拦截：ShouldQuit（应用级退出）+ WindowClosing 拦截钩子
 //     （窗口关闭按钮）双通道，有未保存改动时取消关闭并通知前端弹 confirm。
+//   - 快捷键（前端 keydown 统一分发）：Ctrl+N 新实例（AppService.NewInstance
+//     拉起新进程，可选携带文件路径）；Ctrl+Q 退出（AppService.CloseWindow，
+//     语义等同窗口关闭，触发脏状态守卫）；Ctrl+O / 拖拽打开按前端判定分流：
+//     当前实例为未命名空白文档且无编辑记录 → 当前实例原地装载，否则 →
+//     新实例装载。
 //
 // 事件名与 payload 模型集中在 events.go，枚举由 bindings 生成器自动产出 TS。
 package main
@@ -47,7 +52,8 @@ func main() {
                         application.NewService(configSvc),
                 },
                 // 应用级关闭拦截（与下方 WindowClosing 拦截钩子构成完整关闭链）：
-                // 窗口关闭按钮走 WindowClosing，Cmd+Q 等应用级退出走 ShouldQuit。
+                // 窗口关闭按钮走 WindowClosing，Ctrl+Q（AppService.CloseWindow
+                // 无脏状态时）与 Cmd+Q 等应用级退出走 ShouldQuit。
                 // - 已确认退出或无脏状态 → 直接放行；
                 // - 有脏状态 → ShouldQuit 立即返回 false 阻止退出，异步通知
                 //   前端弹 confirm（close:request），确认后经 ConfirmQuit 退出时
@@ -102,7 +108,7 @@ func main() {
         // 通知前端弹 confirm（close:request），由前端决定 ConfirmQuit 或取消。
         // 已确认退出（confirmed 置位）或无脏状态时直接放行。
         // 与 ShouldQuit 构成完整关闭链：窗口关闭按钮走这里，
-        // Cmd+Q 等应用级退出走 ShouldQuit。
+        // Ctrl+Q（AppService.CloseWindow）与 Cmd+Q 等应用级退出走 ShouldQuit。
         win.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
                 if appSvc.QuitConfirmed() || !appSvc.Dirty() {
                         return
@@ -113,8 +119,10 @@ func main() {
 
         // 拖拽打开（Wails File Drop 官方通道）：前端在应用根元素标
         // data-file-drop-target（全窗口为放置区），放置后此事件携带全部
-        // 文件绝对路径与目标元素信息 → 转发前端走标准打开流程装载
-        // （后端不直接 Open：文档装载、脏状态与编辑器替换是前端职责）。
+        // 文件绝对路径与目标元素信息 → 转发前端按判定分流：当前实例为
+        // 未命名空白文档且无编辑记录 → 原地装载；否则新实例装载
+        // （后端不直接 Open：文档装载与编辑器替换是前端/新实例启动流程
+        // StartupDoc 的职责）。
         win.OnWindowEvent(events.Common.WindowFilesDropped, func(ev *application.WindowEvent) {
                 files := ev.Context().DroppedFiles()
                 if len(files) == 0 {

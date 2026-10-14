@@ -12,6 +12,8 @@ import {
   RequestClose,
   ConfirmQuit,
   SetTitle,
+  CloseWindow,
+  NewInstance,
 } from "../../bindings/quail/appservice";
 import {
   PickOpen,
@@ -82,6 +84,16 @@ export async function openExternal(url: string): Promise<void> {
   await Browser.OpenURL(url);
 }
 
+/** Ctrl+Q 退出：等同窗口关闭操作（无脏状态直接退出；脏状态走守卫 confirm） */
+export async function closeWindow(): Promise<void> {
+  await CloseWindow();
+}
+
+/** 拉起新实例（Ctrl+N）：path 为空以未命名空文档启动，非空由新实例装载该文件 */
+export async function newInstance(path = ""): Promise<void> {
+  await NewInstance(path);
+}
+
 /* ---------------- FileService ---------------- */
 
 /** 启动文档：后端按命令行参数提交，无路径则空文档（untitled），不弹对话框 */
@@ -89,16 +101,18 @@ export async function startupDoc(): Promise<QuailDocState | null> {
   return (await StartupDoc()) as unknown as QuailDocState | null;
 }
 
-/** 弹系统打开对话框并打开所选文档（取消返回 null） */
-export async function openViaDialog(): Promise<QuailDocState | null> {
+/** 弹系统打开对话框，仅返回所选路径（取消返回 null） */
+export async function pickOpenPath(): Promise<string | null> {
   const path = await PickOpen();
-  if (!path) return null;
-  return (await Open(path)) as unknown as QuailDocState;
+  return path || null;
 }
 
-/** 打开指定路径文档（拖拽打开：App 层 HTML5 DnD 解析路径 → 装载） */
+/**
+ * 原地打开指定路径文档（当前实例为未命名空白文档且无编辑记录时的打开通道）；
+ * 二进制文件返回 null（静默丢弃，与启动装载口径一致）。
+ */
 export async function openDocument(path: string): Promise<QuailDocState | null> {
-  return (await Open(path)) as unknown as QuailDocState;
+  return (await Open(path)) as unknown as QuailDocState | null;
 }
 
 /** 保存当前文档（force=true 跳过磁盘基线校验强制覆盖） */

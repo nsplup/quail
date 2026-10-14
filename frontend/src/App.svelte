@@ -14,8 +14,10 @@
     confirmQuit,
     onBackendEvent,
     reportDirty,
-    openViaDialog,
+    pickOpenPath,
     openDocument,
+    newInstance,
+    closeWindow,
     saveAsViaDialog,
     setTitle,
   } from "./lib/bridge";
@@ -42,6 +44,7 @@
     activeHeading$ as activeHeading,
     countLabel$ as countLabel,
     dirty$ as dirty,
+    edited$ as edited,
     guardDirty$ as guardDirty,
     editorApi$ as editorApi,
     previewApi$ as previewApi,
@@ -124,18 +127,12 @@
       }
     });
     // 拖拽打开（Wails File Drop 官方通道）：根元素已标 data-file-drop-target，
-    // 后端 WindowFilesDropped 转发文件绝对路径 → 取第一个走标准打开流程装载。
-    // 脏状态守卫：有未保存修改时先确认，避免静默丢弃当前编辑内容。
+    // 后端 WindowFilesDropped 转发文件绝对路径 → 与对话框打开同一分流：
+    // 当前实例为未命名空白文档且无编辑记录 → 原地装载；否则新实例装载。
     void onBackendEvent("file:dropped", async (d: { files?: string[] }) => {
       const path = d?.files?.find((p) => !!p);
       if (!path) return;
-      if (!(await confirmDirty())) return;
-      try {
-        const state = await openDocument(path);
-        if (state) loadOpened(state);
-      } catch {
-        toast.set({ id: Date.now(), msg: get(t)("toast.openFailed") });
-      }
+      await openPath(path);
     });
     await bootApp();
   });
@@ -152,15 +149,22 @@
     void setTitle($docState?.name || $t("doc.untitled"));
   });
 
-  // 全局快捷键：Ctrl/Cmd+O 打开、Ctrl/Cmd+Shift+S 另存为
+  // 全局快捷键：Ctrl/Cmd+N 新实例、Ctrl/Cmd+O 新实例中打开、
+  // Ctrl/Cmd+Q 退出（等同窗口关闭，触发脏状态守卫）、Ctrl/Cmd+Shift+S 另存为
   $effect(() => {
     const onKey = (e: KeyboardEvent) => {
       const mod = e.ctrlKey || e.metaKey;
       if (!mod) return;
       const k = e.key.toLowerCase();
-      if (k === "o") {
+      if (k === "n") {
+        e.preventDefault();
+        void spawnInstance(); // 新实例：未命名空文档
+      } else if (k === "o") {
         e.preventDefault();
         void openFile();
+      } else if (k === "q") {
+        e.preventDefault();
+        void closeWindow();
       } else if (k === "s" && e.shiftKey) {
         e.preventDefault();
         void saveFileAs();
@@ -221,34 +225,52 @@
   }
 
   /**
-   * 脏状态守卫：守卫脏（guardDirty，见 stores）时弹三选确认
-   * （保存/丢弃/取消），用于打开对话框 / 拖拽等会替换当前文档的操作入口。
-   * 未命名空文档无编辑操作记录时守卫失效（直接放行）。
-   * - 取消：中止被拦截的操作；
-   * - 保存：先保存当前文档（未命名走另存为；deleted 走确认重建；
-   *   保存未完成则中止），再继续被拦截的操作；
-   * - 丢弃：放弃修改，直接继续被拦截的操作。
-   * 返回 true = 放行；false = 中止操作。
+   * 拉起新实例（Ctrl+N 快捷键与新实例装载通道共用）。
+   * 仅在新进程启动失败时提示。
    */
-  async function confirmDirty(): Promise<boolean> {
-    if (!get(guardDirty)) return true;
-    const res = await confirmDialog(get(t)("confirm.openDirty"));
-    if (res === "cancel") return false;
-    if (res === "save") {
-      await save();
-      if (get(guardDirty)) return false; // 保存未完成（另存被取消/写盘失败）→ 中止
+  async function spawnInstance(path = ""): Promise<void> {
+    try {
+      await newInstance(path);
+    } catch {
+      toast.set({ id: Date.now(), msg: get(t)("toast.newInstanceFailed") });
     }
-    return true; // 丢弃，或保存成功
   }
 
-  /** 打开文档（Wails 原生文件对话框 → FileService.Open） */
+  /**
+   * 原地装载判定：当前实例为未命名空白文档且无编辑操作记录
+   * （docState 无路径 + 内容 trim 为空 + edited 基线干净）。此状态下打开
+   * 不会覆盖任何内容，无需确认弹窗，直接在当前实例装载。
+   */
+  function canOpenInPlace(): boolean {
+    const s = get(docState);
+    return (!s || !s.path) && get(doc).trim() === "" && !get(edited);
+  }
+
+  /**
+   * 打开文档统一分流：未命名空白文档且无编辑记录 → 当前实例原地装载；
+   * 否则 → 新实例装载（当前窗口不受影响）。
+   */
+  async function openPath(path: string): Promise<void> {
+    if (!canOpenInPlace()) {
+      await spawnInstance(path);
+      return;
+    }
+    try {
+      const state = await openDocument(path);
+      if (state) loadOpened(state); // null = 二进制文件，静默丢弃
+    } catch {
+      toast.set({ id: Date.now(), msg: get(t)("toast.openFailed") });
+    }
+  }
+
+  /** 打开文档：对话框选路径 → 统一分流（原地 / 新实例） */
   async function openFile(): Promise<void> {
-    if (!(await confirmDirty())) return; // 脏状态守卫：替换文档前确认
-    const state = await openViaDialog();
-    if (state) loadOpened(state);
+    const path = await pickOpenPath();
+    if (!path) return; // 用户取消
+    await openPath(path);
   }
 
-  /** 装载已打开的文档状态（对话框打开与拖拽打开共用） */
+  /** 装载已打开的文档状态（原地打开通道，仅未命名空白文档场景可达） */
   function loadOpened(state: QuailDocState): void {
     // 打开文档语义：指示器立即进入「解析中」（无 200ms 阈值，空白文档除外）
     markNextParseAsOpen();

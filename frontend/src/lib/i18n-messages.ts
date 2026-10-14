@@ -21,7 +21,6 @@ export const zhMessages = {
     saveStill: "仍然保存",
     quit: "确定退出 quail 吗？",
     quitDirty: "当前文档有未保存的修改，退出前要保存吗？丢弃将不保存直接退出。",
-    openDirty: "当前文档有未保存的修改，打开其他文档前要保存吗？丢弃将不保存直接打开。",
     conflict: "文件已被其他程序修改。以当前编辑内容覆盖磁盘上的版本吗？",
     deletedSave:
       "文件“{path}”已在存储设备中移动或者删除。\n\n您真的想要保存此文件吗？您将会覆盖该文件在磁盘上被更改的数据。",
@@ -71,6 +70,7 @@ export const zhMessages = {
     saved: "已保存（本地暂存，后端待接入）",
     saveFailed: "保存失败",
     openFailed: "打开失败",
+    newInstanceFailed: "无法启动新实例",
     fileReloaded: "文件已在磁盘上更新，已重新加载",
     fileChangedDirty: "文件已被外部修改（本地有未保存修改，未自动加载）",
     fileDeleted: "文件已被外部删除",
@@ -114,7 +114,6 @@ export const enMessages = {
     saveStill: "Save Anyway",
     quit: "Quit quail?",
     quitDirty: "You have unsaved changes. Save before quitting? Discard quits without saving.",
-    openDirty: "You have unsaved changes. Save before opening another document? Discard opens without saving.",
     conflict: "The file has been modified by another program. Overwrite it with your current edits?",
     deletedSave:
       "The file \"{path}\" has been moved or removed from the storage device.\n\nDo you really want to save this file? You will overwrite the data that has been changed on disk.",
@@ -164,6 +163,7 @@ export const enMessages = {
     saved: "Saved (local stub, backend pending)",
     saveFailed: "Save failed",
     openFailed: "Failed to open file",
+    newInstanceFailed: "Failed to launch new instance",
     fileReloaded: "File changed on disk; reloaded",
     fileChangedDirty: "File modified externally (local changes kept, not reloaded)",
     fileDeleted: "File deleted externally",

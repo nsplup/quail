@@ -19,8 +19,8 @@ export interface HlOk {
   id: number;
   /** hljs 输出（转义文本 + class 标记 span），组件可直接 {@html} 渲染 */
   html: string;
-  /** 结果来源：hot 内存热缓存 / idb 持久缓存 / parse 本次解析 */
-  from: "hot" | "idb" | "parse";
+  /** 结果来源：hot 内存缓存 / parse 本次解析 */
+  from: "hot" | "parse";
 }
 
 export interface HlSkip {
