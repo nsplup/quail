@@ -250,7 +250,7 @@ function imgToMdImage(el: HastElement): HastElement {
   };
 }
 
-function convertHtmlImgToMdImage(node: HastContent): void {
+function convertHtmlImgToMdImage(node: HastRoot | HastContent): void {
   const kids = (node as { children?: HastContent[] }).children;
   if (!Array.isArray(kids)) return;
   for (let i = 0; i < kids.length; i++) {

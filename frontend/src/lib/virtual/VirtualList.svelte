@@ -45,7 +45,11 @@
      *  语义 scrollTop = 项顶 − offset） */
     scrollToIndex(
       index: number,
-      opts?: { align?: "start" | "center" | "end"; offset?: number; smooth?: boolean },
+      opts?: {
+        align?: "start" | "center" | "end";
+        offset?: number;
+        smooth?: boolean;
+      },
     ): void;
     /** 滚动到绝对位置（像素） */
     scrollTo(top: number): void;
@@ -66,7 +70,10 @@
   import type { Snippet } from "svelte";
   import type { HTMLAttributes } from "svelte/elements";
 
-  interface Props<T> extends HTMLAttributes<HTMLElement> {
+  type Props<T> = Omit<
+    HTMLAttributes<HTMLElement>,
+    "children" | "class" | "style"
+  > & {
     data: T[];
     /** 项 key（如大纲项取 line）：每块 DOM 复用 + 实测高度按 key 缓存。
      *  缺省按索引缓存（预览段索引稳定，增量补丁后由 ResizeObserver 自纠）。 */
@@ -79,7 +86,7 @@
     children: Snippet<[T, number]>;
     class?: string;
     style?: string;
-  }
+  };
 
   let {
     data,
@@ -278,7 +285,9 @@
       const idx = Number((entry.target as HTMLElement).dataset.index);
       if (!Number.isInteger(idx) || idx < 0 || idx >= sizes.length) continue;
       const bbs = entry.borderBoxSize?.[0];
-      const h = bbs ? bbs.blockSize : (entry.target as HTMLElement).offsetHeight;
+      const h = bbs
+        ? bbs.blockSize
+        : (entry.target as HTMLElement).offsetHeight;
       if (!(h > 0)) continue;
       // 亚像素抖动直接忽略：省一轮重渲染，也减少无效的待应用项。
       // 以当前生效尺寸判断，同帧重复通知以最新为准（Map 覆盖）
@@ -310,7 +319,9 @@
       let firstMeasure: boolean;
       if (getKey !== undefined) {
         const k =
-          sizesFor && idx < sizesFor.length ? getKey(sizesFor[idx], idx) : undefined;
+          sizesFor && idx < sizesFor.length
+            ? getKey(sizesFor[idx], idx)
+            : undefined;
         firstMeasure = !keyCache.has(k as unknown);
       } else {
         firstMeasure = !indexCache.has(idx);
@@ -346,7 +357,9 @@
   }
 
   const ro: ResizeObserver | null =
-    typeof ResizeObserver === "undefined" ? null : new ResizeObserver(handleResize);
+    typeof ResizeObserver === "undefined"
+      ? null
+      : new ResizeObserver(handleResize);
 
   /** 挂载项测量（observe 首次回调即完成初始实测） */
   function measure(node: HTMLElement): { destroy(): void } {
@@ -468,7 +481,11 @@
 
   export function scrollToIndex(
     index: number,
-    opts?: { align?: "start" | "center" | "end"; offset?: number; smooth?: boolean },
+    opts?: {
+      align?: "start" | "center" | "end";
+      offset?: number;
+      smooth?: boolean;
+    },
   ): void {
     const c = el;
     if (!c) return;
@@ -549,7 +566,8 @@
   bind:this={el}
   {...rest}
   class={className}
-  style="display: block; width: 100%; height: 100%; overflow-y: auto; overflow-anchor: none; {style ?? ''}"
+  style="display: block; width: 100%; height: 100%; overflow-y: auto; overflow-anchor: none; {style ??
+    ''}"
 >
   <!-- 内层定位容器：height 撑起全部内容（估计+实测），滚动条长度与
        virtua 一致为估计语义；绝对定位项不参与流布局，由 top 精确摆放。
