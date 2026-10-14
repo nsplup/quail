@@ -14,7 +14,7 @@
  */
 import hljs from "highlight.js";
 import { contentHash } from "../worker/contentHash";
-import type { HlIn, HlOut, HlSkip } from "./protocol";
+import type { HlIn, HlOut, HlSkip, HlRequest } from "./protocol";
 
 /* ---------------- 语言：主包全量自动注册 + 别名归一 ----------------
  * 桌面应用无网络加载成本，不维护 curated 语言清单：直接导入主包
@@ -129,7 +129,7 @@ function resolveOutcome(lang: string, code: string): Promise<HlOutcome> {
 const postMessage = (msg: HlOut): void =>
   (self as unknown as { postMessage: (m: HlOut) => void }).postMessage(msg);
 
-async function handleHl(msg: HlIn): Promise<void> {
+async function handleHl(msg: HlRequest): Promise<void> {
   try {
     let out: HlOut;
     if (msg.lang === "") {

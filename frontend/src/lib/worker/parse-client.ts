@@ -40,6 +40,8 @@ export interface ParseClient {
   restart(): void;
   /** 页面卸载时终止 */
   dispose(): void;
+  /** 重置解析器状态 */
+  reset(): void;
 }
 
 let revSeq = 0;

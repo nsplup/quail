@@ -17,7 +17,22 @@ export type ThemeId =
   | "tokyo-night"
   | "github-light"
   | "github-dark"
-  | "solarized-light";
+  | "solarized-light"
+  | "catppuccin-mocha"
+  | "catppuccin-latte"
+  | "rose-pine"
+  | "gruvbox-dark"
+  | "gruvbox-light"
+  | "night-owl"
+  | "palenight"
+  | "monokai-pro"
+  | "material-theme"
+  | "vitesse-dark"
+  | "vitesse-light"
+  | "everforest-dark"
+  | "everforest-light"
+  | "one-light"
+  | "alabaster";
 
 export type CountMode = "words" | "chars" | "auto";
 

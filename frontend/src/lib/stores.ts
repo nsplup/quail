@@ -105,7 +105,33 @@ export const defaultLayout$ = persistedEnum<DefaultLayout>(
 export const theme$ = persistedEnum<ThemeId>(
   "md.theme",
   "ayu-dark",
-  ["ayu-dark", "ayu-mirage", "ayu-light", "one-dark-pro", "dracula", "nord", "tokyo-night", "github-light", "github-dark", "solarized-light"] as const
+  [
+    "ayu-dark",
+    "ayu-mirage",
+    "ayu-light",
+    "one-dark-pro",
+    "dracula",
+    "nord",
+    "tokyo-night",
+    "github-light",
+    "github-dark",
+    "solarized-light",
+    "catppuccin-mocha",
+    "catppuccin-latte",
+    "rose-pine",
+    "gruvbox-dark",
+    "gruvbox-light",
+    "night-owl",
+    "palenight",
+    "monokai-pro",
+    "material-theme",
+    "vitesse-dark",
+    "vitesse-light",
+    "everforest-dark",
+    "everforest-light",
+    "one-light",
+    "alabaster",
+  ] as const
 );
 
 export const indent$ = persistedEnum<IndentId>("md.indent", "space2", ["tab", "space2", "space4"] as const);

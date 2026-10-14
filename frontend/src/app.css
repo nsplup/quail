@@ -422,53 +422,70 @@
 }
 
 /* ---- 组按钮（segmented）：两两分组，组内共享边框、按钮间以 1px 细线分隔 ---- */
+/* 1) 容器：不再承担描边，也不再裁剪 */
 .cm-search-panel .sp-group {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: stretch;
-  border: 1px solid var(--ui-border);
-  border-radius: 8px;
-  overflow: hidden;
-  background: var(--ui-inset);
+  border: none;              /* ← 去掉容器边框 */
+  border-radius: 0;          /* ← 不需要了 */
+  overflow: visible;         /* ← 不再裁剪圆角 */
+  background: transparent;   /* ← 背景下移到按钮 */
 }
 
+/* 2) 基础按钮：只留布局/排版，去掉容器式边框 */
 .cm-search-panel .sp-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
-  width: 28px;
-  height: 26px;
   padding: 0;
-  border: none;
-  border-radius: 0;
-  background: transparent;
-  color: var(--ui-muted);
   cursor: pointer;
-  transition: background 0.15s, color 0.15s;
+  color: var(--ui-muted);
+}
+
+/* 3) 组内按钮：自带描边，相邻边框用负 margin 折叠成 1px */
+.cm-search-panel .sp-group .sp-btn {
+  position: relative;
+  box-sizing: border-box;
+  width: 30px;                              /* 28px 内容 + 左右 1px 边框 */
+  height: 28px;                             /* 26px 内容 + 上下 1px 边框 */
+  border: 1px solid var(--ui-border);       /* ← 唯一的绘制原语 */
+  border-radius: 0;
+  background: var(--ui-inset);              /* ← 从容器搬过来 */
+  margin-left: -1px;                        /* ← 与左邻边框重叠 1px */
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.cm-search-panel .sp-group .sp-btn:first-child {
+  margin-left: 0;
+  border-radius: 8px 0 0 8px;
+}
+.cm-search-panel .sp-group .sp-btn:last-child {
+  border-radius: 0 8px 8px 0;
+}
+
+/* 4) 激活：只换颜色，不换绘制方式 —— 不再有抖动 */
+.cm-search-panel .sp-btn.on {
+  z-index: 1;                               /* 保证激活按钮的边框绘制在邻居之上 */
+  border-color: var(--ui-accent);
+  background: var(--ui-active-bg);
+  color: var(--ui-accent);
 }
 
 /* 独立按钮（关闭）保持描边样式 */
 .cm-search-panel .sp-close {
   border: 1px solid var(--ui-border);
   border-radius: 8px;
-  height: 26px;
+  height: 28px;
   align-self: center;
 }
 
-.cm-search-panel .sp-group .sp-btn + .sp-btn {
-  border-left: 1px solid var(--ui-border);
-}
-
-.cm-search-panel .sp-btn:hover {
+/* 只改这一行选择器，加 :not(.on) */
+.cm-search-panel .sp-btn:not(.on):hover {
   color: var(--ui-fg);
   background: var(--ui-hover);
 }
 
-.cm-search-panel .sp-btn.on {
-  color: var(--ui-accent);
-  background: var(--ui-active-bg);
-}
 
 .cm-search-panel .sp-btn svg {
   display: block;
