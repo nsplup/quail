@@ -9,19 +9,27 @@
    *
    * 测量与定位：
    * - 每个挂载项由 ResizeObserver 实测 border-box 高度，写入尺寸表；
-   *   未挂载项用 estimateSize（数值或按索引函数）估计；
+   *   未挂载项用 estimateSize（数值或按索引函数）估计；估计值随实测
+   *   均值自适应校准（见 estSize），未测段总高尽快逼近真实值；
+   * - RO 回调只记录原始尺寸，统一合帧到下一帧 rAF 应用（仍在绘制前）：
+   *   RO 投递发生在渲染帧内，若在投递阶段（含微任务）同步写布局——
+   *   挂载项、改定位、补偿 scrollTop——会立刻产生新的观察目标，浏览器
+   *   在同一帧内反复重投递；当测量引起的范围位移恰好又挂载新项时
+   *   级联加深，超出投递预算即报
+   *   「ResizeObserver loop completed with undelivered notifications」。
+   *   推迟到下一帧后投递循环必然收敛，警告消除；
    * - 项偏移由尺寸表前缀和实时重建（O(n)，n 为段数，量级千级可忽略）；
    * - 滚动跳动补偿：实测高度变化且项整体位于视口顶上方时，把差值同步
-   *   加回 scrollTop（微任务内执行，DOM 定位更新后、绘制前生效），
-   *   上行滚动加载新测量项时视口内容保持不动，估高漂移自愈；
-   * - 快速滚动空窗：单帧位移超过 视口高×2（拖滚动条大幅甩动）时暂停
-   *   挂载，只保留总高度占位，停止后 32ms（≈2帧）内回填——滚轮/翻页/
-   *   同步驱动的常规滚动（单帧 ≤1 视口高）永不触发，与 CM6 行为对齐；
+   *   加回 scrollTop（flush 后、绘制前执行），上行滚动加载新测量项时
+   *   视口内容保持不动，估高漂移自愈；
+   * - 快速滚动空窗：单帧位移超过 视口高×2（拖滚动条大幅甩动）时进入
+   *   空窗——视图冻结为当前快照（不卸载、不重挂载，spacer 高度一并
+   *   冻结，滚动条长度与「光标↔scrollTop」映射全程稳定），停止后
+   *   40ms（≈2帧+容差）一次性按新位置回填。期间测量只记账不渲染，
+   *   避免拖动中滚动条长度抖动与「回填→再卸载」的挂载抖动卡顿；
+   *   滚轮/翻页/同步驱动的常规滚动（单帧 ≤1 视口高）永不触发；
    * - 滚动渲染 rAF 合帧：scroll 事件只记录位置，视口重算统一在 rAF
    *   里做，同帧多次事件至多一次 flush；
-   * - ResizeObserver 卫生：亚像素（<0.5px）测量变化忽略，补偿写入
-   *   同步位移基线不参与空窗判定，避免「测量→写入→再测量」在同帧
-   *   级联为 RO loop 警告；
    * - 项的绝对定位包装自身构成 BFC，子元素的垂直 margin 计入实测高度，
    *   不存在 margin 折叠导致的定位偏差；块间距仍建议用 padding。
    *
@@ -60,8 +68,6 @@
 
   interface Props<T> extends HTMLAttributes<HTMLElement> {
     data: T[];
-    /** 单项渲染（item, index） */
-    children: Snippet<[T, number]>;
     /** 项 key（如大纲项取 line）：每块 DOM 复用 + 实测高度按 key 缓存。
      *  缺省按索引缓存（预览段索引稳定，增量补丁后由 ResizeObserver 自纠）。 */
     getKey?: (item: T, index: number) => unknown;
@@ -69,6 +75,8 @@
     estimateSize?: number | ((index: number) => number);
     /** 视口外上下各多渲染的项数 */
     overscan?: number;
+    /** 单项渲染（item, index） */
+    children: Snippet<[T, number]>;
     class?: string;
     style?: string;
   }
@@ -104,8 +112,40 @@
   const indexCache = new Map<number, number>();
   const keyCache = new Map<unknown, number>();
 
+  /* ---------------- 快速滚动空窗状态（先声明，派生与 syncData 引用） ---------------- */
+
+  let fast = $state(false);
+  let fastTimer: ReturnType<typeof setTimeout> | null = null;
+  interface RenderedItem {
+    i: number;
+    item: T;
+    key: unknown;
+    top: number;
+  }
+  /** 空窗冻结快照：进入空窗那一刻的已渲染项数组（与 DOM 一致）。
+   *  空窗期间派生原样返回该引用 → Svelte 按引用跳过 diff，零挂载/卸载；
+   *  数据更换时作废（短暂空白，回填自恢复）。 */
+  let frozen: RenderedItem[] | null = null;
+  /** 空窗冻结的总高：spacer 高度（scrollHeight）随之冻结，拖动中
+   *  滚动条长度与「光标↔scrollTop」映射保持稳定，退出时一次校正 */
+  let frozenTotal = 0;
+
+  /* ---------------- 自适应估高 ----------------
+     预览段默认估计 40px 与真实段高（常见数百 px）偏差过大：拖动滚动条
+     时 scrollHeight 随测量持续增长 → 滚动条 thumb 的长度/映射不断变化，
+     滑块跟不上光标；跳动补偿也带着系统性偏差与原生拖动竞争（定高大纲
+     项实测 ≈28.75px vs 估计 28px，逐项 0.5px+ 的偏差在快速拖动中表现为
+     滑块滞后）。以已实测项的均值校准未测项估计，总高在首屏测量后即
+     逼近真实值，偏差趋零。estimateSize 为按索引函数时调用方自带知识，
+     不覆盖。 */
+  let measuredSum = 0;
+  let measuredCount = 0;
+  const MEAN_MIN_SAMPLES = 4;
+
   function estSize(i: number): number {
-    return typeof estimateSize === "function" ? estimateSize(i) : estimateSize;
+    if (typeof estimateSize === "function") return estimateSize(i);
+    if (measuredCount >= MEAN_MIN_SAMPLES) return measuredSum / measuredCount;
+    return estimateSize;
   }
 
   /** data 引用变化 → 重建尺寸表（保留缓存中已有的实测值） */
@@ -115,7 +155,10 @@
     if (data.length === 0) {
       indexCache.clear();
       keyCache.clear();
+      measuredSum = 0;
+      measuredCount = 0;
     }
+    frozen = null; // 数据已更换，冻结快照作废（空窗中短暂空白，回填自恢复）
     const arr = new Array<number>(data.length);
     for (let i = 0; i < data.length; i++) {
       if (getKey !== undefined) {
@@ -180,9 +223,13 @@
     ensureOffsets();
     const n = data.length;
     const total = n > 0 ? offsets[n] : 0;
-    if (n === 0 || viewportH <= 0 || !el || fast) {
-      // fast：只保留总高度占位（滚动条长度稳定），内容停止后回填
+    if (n === 0 || viewportH <= 0 || !el) {
       return { start: 0, end: -1, total };
+    }
+    if (fast) {
+      // 空窗：范围与总高一并冻结（内容原位保留、scrollHeight 稳定），
+      // 停止后由 exitFast 的 version++ 一次性按新位置回填
+      return { start: 0, end: -1, total: frozenTotal };
     }
     const st = el.scrollTop;
     const first = findStart(st);
@@ -196,9 +243,10 @@
 
   const rendered = $derived.by(() => {
     void version;
+    if (fast) return frozen ?? []; // 空窗：返回快照引用，Svelte 跳过 diff
     syncData();
     ensureOffsets();
-    const out: { i: number; item: T; key: unknown; top: number }[] = [];
+    const out: RenderedItem[] = [];
     for (let i = view.start; i <= view.end; i++) {
       out.push({
         i,
@@ -210,40 +258,82 @@
     return out;
   });
 
-  /* ---------------- 测量（ResizeObserver）与跳动补偿 ---------------- */
+  /* ---------------- 测量（ResizeObserver）与跳动补偿 ----------------
+   * RO 回调只记录原始尺寸，统一合帧到下一帧 rAF 应用：RO 投递发生在
+   * 渲染帧内，投递阶段（含微任务）的任何布局写入——挂载新项、改定位、
+   * 改 spacer 高度——都会产生新的观察目标/尺寸变化，迫使浏览器在同一
+   * 帧内重投递；「测量 → 范围位移 → 挂载新项 → 再测量」级联超出投递
+   * 预算时即报 loop 警告。推迟到下一帧 rAF（其回调先于该帧布局/绘制
+   * 执行）后，投递阶段零布局写入，投递循环必然收敛，警告消除。
+   * 补偿写入随之移入 rAF 帧：flush 后、绘制前的时序不变，上行滚动
+   * 仍不跳；代价仅是定位/补偿晚一帧生效，且该帧以旧尺寸自洽绘制，
+   * 无可见跳动。 */
+
+  /** 待应用测量（idx → 最新高度），同帧多条通知合帧去重 */
+  const pendingMeasure = new Map<number, number>();
+  let measureRaf = 0;
 
   function handleResize(entries: ResizeObserverEntry[]): void {
-    const c = el;
-    if (!c || entries.length === 0) return;
-    syncData();
-    ensureOffsets();
-    const st = c.scrollTop;
-    const snap = offsets; // ensureOffsets 重建时会换新数组，旧引用即快照
-    const prevSizes = sizes.slice();
-    let delta = 0;
-    let changed = false;
     for (const entry of entries) {
       const idx = Number((entry.target as HTMLElement).dataset.index);
       if (!Number.isInteger(idx) || idx < 0 || idx >= sizes.length) continue;
       const bbs = entry.borderBoxSize?.[0];
       const h = bbs ? bbs.blockSize : (entry.target as HTMLElement).offsetHeight;
       if (!(h > 0)) continue;
-      const prev = prevSizes[idx];
-      // 亚像素抖动直接忽略：既省一轮重渲染，也避免 ResizeObserver
-      // 「测量→写入→再测量」在同帧内反复触发（loop 警告的主要来源）
+      // 亚像素抖动直接忽略：省一轮重渲染，也减少无效的待应用项。
+      // 以当前生效尺寸判断，同帧重复通知以最新为准（Map 覆盖）
+      if (sizes[idx] !== undefined && Math.abs(h - sizes[idx]) < 0.5) continue;
+      pendingMeasure.set(idx, h);
+    }
+    if (pendingMeasure.size > 0 && measureRaf === 0) {
+      measureRaf = requestAnimationFrame(applyMeasurements);
+    }
+  }
+
+  function applyMeasurements(): void {
+    measureRaf = 0;
+    const c = el;
+    if (!c || pendingMeasure.size === 0) return;
+    const batch = new Map(pendingMeasure);
+    pendingMeasure.clear();
+    syncData();
+    ensureOffsets();
+    const st = c.scrollTop;
+    const snap = offsets; // ensureOffsets 重建时会换新数组，旧引用即快照
+    let delta = 0;
+    let changed = false;
+    for (const [idx, h] of batch) {
+      if (idx >= sizes.length) continue;
+      const prev = sizes[idx];
       if (Math.abs(h - prev) < 0.5) continue;
+      // 首测计入自适应均值（重测不重复计入，避免图片加载等二次测量拉偏）
+      let firstMeasure: boolean;
+      if (getKey !== undefined) {
+        const k =
+          sizesFor && idx < sizesFor.length ? getKey(sizesFor[idx], idx) : undefined;
+        firstMeasure = !keyCache.has(k as unknown);
+      } else {
+        firstMeasure = !indexCache.has(idx);
+      }
       // 项整体在视口顶上方：其实测变化会推移下方全部内容 → 补偿滚动位置
       if (snap[idx] + prev <= st + 1) delta += h - prev;
       sizes[idx] = h;
       recordSize(idx, h);
+      if (firstMeasure) {
+        measuredSum += h;
+        measuredCount++;
+      }
       changed = true;
     }
     if (!changed) return;
     dirty = true;
+    // 空窗中只记账不渲染：spacer/滚动条长度保持冻结（拖动中映射稳定），
+    // 补偿也不写（拖动映射优先），回填时按新尺寸一次性校正
+    if (fast) return;
     version++;
-    // 微任务内执行：先等 Svelte flush 更新项定位，再补偿 scrollTop，
+    // 微任务内执行：先等本帧 flush 更新项定位，再补偿 scrollTop，
     // 保证绘制前视口内容稳定（上行滚动不跳）
-    if (delta !== 0 && !fast) {
+    if (delta !== 0) {
       queueMicrotask(() => {
         const c2 = el;
         if (!c2) return;
@@ -270,20 +360,14 @@
 
   /* ---------------- 快速滚动空窗（对齐 CM6 的行为） ----------------
    * 单帧位移超过 视口高×FAST_SCROLL_FACTOR（拖滚动条大幅甩动）才判为
-   * 快速滚动：期间不挂载内容（只保留总高度占位，视觉为短暂空白），
-   * 停止后下一帧回填。滚轮/翻页/编辑器同步驱动的常规滚动（单帧位移
-   * 通常 ≤ 1 视口高）永不触发，与 CM6 中小文档快速滚动无空窗一致；
-   * 只有重挂载成本真正压垮滚动帧率的大幅位移才让位给空窗。
-   * 关键不变量：fast 的每次状态切换都必须伴随 version++，否则派生
-   * 视图滞留旧状态——空窗到期不回填、程序跳转后白屏都源于此。 */
-
-  let fast = $state(false);
-  let fastTimer: ReturnType<typeof setTimeout> | null = null;
-  /** rAF 合帧：滚动事件只记录位置，渲染统一在 rAF 里做（每帧至多一次 flush） */
-  let pendingTop: number | null = null;
-  let rafPending = false;
-  /** 上次已应用的 scrollTop（判定单帧位移量；补偿写入后同步，避免误判快速滚动） */
-  let lastAppliedTop = 0;
+   * 快速滚动：期间视图冻结为进入空窗时的快照——不卸载、不挂载，spacer
+   * 高度同步冻结（视觉为内容短暂停驻，而非空白闪烁），滚动条长度与
+   * 「光标↔scrollTop」映射全程稳定。停止后下一帧一次性回填。
+   * 滚轮/翻页/编辑器同步驱动的常规滚动（单帧位移通常 ≤ 1 视口高）永不
+   * 触发。旧实现空窗期间卸载全部内容、每次 >40ms 停顿都整屏重挂载重型
+   * 段落（变高预览卡顿的主因之一），冻结策略下挂载/卸载只发生在进出
+   * 空窗各一次。关键不变量：fast 的每次状态切换都必须伴随 version++
+   * （冻结态本身除外——它复用当前 DOM，无需 flush）。 */
 
   /* 32ms ≈ 60Hz 下 2 帧：可容忍一次单帧卡顿（约 33ms）而不产生
      「退出→挂载→再进入」抖动；滚动真正停止后回填落在下一帧，
@@ -291,7 +375,19 @@
   const FAST_WINDOW_MS = 40; /** 预留出容差 */
   const FAST_SCROLL_FACTOR = 2;
 
+  /** rAF 合帧：滚动事件只记录位置，渲染统一在 rAF 里做（每帧至多一次 flush） */
+  let pendingTop: number | null = null;
+  let rafPending = false;
+  /** 上次已应用的 scrollTop（判定单帧位移量；补偿写入后同步，避免误判快速滚动） */
+  let lastAppliedTop = 0;
+
   function enterFast(): void {
+    if (!fast) {
+      // 快照当前派生（与 DOM 一致）；fast 仍为 false，读派生走常规分支
+      frozen = rendered;
+      ensureOffsets();
+      frozenTotal = sizes.length > 0 ? offsets[sizes.length] : 0;
+    }
     fast = true;
     if (fastTimer !== null) clearTimeout(fastTimer);
     fastTimer = setTimeout(exitFast, FAST_WINDOW_MS);
@@ -303,6 +399,7 @@
       clearTimeout(fastTimer);
       fastTimer = null;
     }
+    frozen = null;
     if (fast) {
       fast = false;
       version++;
@@ -319,9 +416,11 @@
     if (delta < 0.5) return;
     lastAppliedTop = top;
     // 达标帧续期空窗（enterFast 内重置定时器），未达标帧不打断——
-    // 停止滚动后由 48ms 定时器统一回填，避免阈值附近抖动反复挂载/卸载
+    // 停止滚动后由定时器统一回填，避免阈值附近抖动反复挂载/卸载
     if (delta > viewportH * FAST_SCROLL_FACTOR) enterFast();
-    version++;
+    // 空窗中视图/总高均冻结，重渲染只会解开冻结（拖动中滚动条长度抖动）；
+    // version++ 统一留给 exitFast，回填在新位置一次完成
+    if (!fast) version++;
   }
 
   /* ---------------- 容器视口尺寸 + 滚动监听 ---------------- */
@@ -330,8 +429,15 @@
     const c = el;
     if (!c) return;
     viewportH = c.clientHeight;
+    let vhRaf = 0;
     const vro = new ResizeObserver(() => {
-      viewportH = c.clientHeight;
+      // 视口尺寸变化同样合帧到 rAF：RO 投递阶段内不写状态（同 handleResize），
+      // 避免「状态写 → flush 改布局 → 新观察」的同帧级联
+      if (vhRaf !== 0) return;
+      vhRaf = requestAnimationFrame(() => {
+        vhRaf = 0;
+        viewportH = c.clientHeight;
+      });
     });
     vro.observe(c);
     // 外部（App 侧程序滚动）直接写 scrollTop 也会走这里触发视口重算；
@@ -347,6 +453,12 @@
     c.addEventListener("scroll", onScroll, { passive: true });
     return () => {
       exitFast();
+      if (vhRaf !== 0) cancelAnimationFrame(vhRaf);
+      if (measureRaf !== 0) {
+        cancelAnimationFrame(measureRaf);
+        measureRaf = 0;
+      }
+      pendingMeasure.clear();
       vro.disconnect();
       c.removeEventListener("scroll", onScroll);
     };
@@ -440,7 +552,8 @@
   style="display: block; width: 100%; height: 100%; overflow-y: auto; overflow-anchor: none; {style ?? ''}"
 >
   <!-- 内层定位容器：height 撑起全部内容（估计+实测），滚动条长度与
-       virtua 一致为估计语义；绝对定位项不参与流布局，由 top 精确摆放 -->
+       virtua 一致为估计语义；绝对定位项不参与流布局，由 top 精确摆放。
+       空窗期间 total 冻结为进入时的快照，保证拖动中滚动条长度/映射稳定 -->
   <div style="position: relative; width: 100%; height: {view.total}px;">
     {#each rendered as it (it.key)}
       <div
