@@ -147,6 +147,18 @@ export function createParseClient(handlers: ParseClientHandlers): ParseClient {
     worker!.postMessage({ type: "resetEmpty" });
   }
 
+  /**
+   * 全量重置（横幅「重新加载」）：增量 worker 解析基线归零（下一次解析
+   * 冷启动全量）+ 重建 worker 内容哈希缓存清空（同内容也强制重建）。
+   * fire-and-forget，不计入在途请求；worker 尚未创建时无需重置
+   * （惰性创建即干净状态），也不主动拉起。
+   */
+  function reset(): void {
+    if (disposed) return;
+    worker?.postMessage({ type: "reset" });
+    rebuildWorker?.postMessage({ type: "reset" });
+  }
+
   function dispose(): void {
     disposed = true;
     worker?.terminate();
@@ -159,6 +171,7 @@ export function createParseClient(handlers: ParseClientHandlers): ParseClient {
   return {
     request,
     resetEmpty,
+    reset,
     restart,
     dispose,
     busy: () => outstanding > 0,

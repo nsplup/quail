@@ -4,7 +4,9 @@
    * - dirty 模式：保存（软盘）/ 丢弃（垃圾桶）/ 取消（叉）三按钮；
    * - confirm 模式：确定 / 取消（叉）；
    * - deletedSave 模式：仍然保存（软盘）/ 取消（叉）。
-   * - 回车与 Esc 均映射为「取消」（安全侧默认），强调色置于取消按钮。 */
+   * - 回车与 Esc 均映射为「取消」（安全侧默认），强调色置于取消按钮；
+   *   键盘监听走 window 捕获阶段并阻断传播：弹窗期间 CM6 即使持有焦点，
+   *   Enter 也不会进入编辑器 keymap（否则会先插入换行）。 */
   import { get } from "svelte/store";
   import { confirm$, type ConfirmResult } from "../lib/confirm";
   import { t } from "../lib/i18n.svelte";
@@ -19,18 +21,23 @@
   function onKeydown(e: KeyboardEvent): void {
     if (!get(confirm$)) return;
     // 回车默认取消而非确认：防止回车误触丢弃/覆盖等不可逆操作
-    if (e.key === "Escape" || e.key === "Enter") answer("cancel");
+    if (e.key === "Escape" || e.key === "Enter") {
+      // 捕获阶段拦截（window 最先收到）并阻断传播：若放行，CM6 编辑器
+      // 持有焦点时其 keymap 会在编辑器 DOM 层先处理 Enter 插入换行
+      e.preventDefault();
+      e.stopPropagation();
+      answer("cancel");
+    }
   }
 </script>
 
-<svelte:window onkeydown={onKeydown} />
+<svelte:window onkeydowncapture={onKeydown} />
 
 {#if $confirm$}
   {@const cur = $confirm$}
   <div
     class="fixed inset-0 z-[70] flex items-center justify-center bg-black/45 p-4"
     role="presentation"
-    onkeydown={onKeydown}
     onclick={(e) => {
       if (e.target === e.currentTarget) answer("cancel");
     }}

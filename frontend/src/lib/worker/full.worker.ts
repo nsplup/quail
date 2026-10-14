@@ -62,6 +62,12 @@ function runFull(req: Extract<RebuildPortIn, { type: "fullRequest" }>): void {
 ctx.onmessage = (e: MessageEvent) => {
   const msg = e.data as { type?: string; port?: MessagePort };
   if (!msg) return;
+  if (msg.type === "reset") {
+    // 主线程全量重置（横幅「重新加载」）：清空内容哈希缓存，
+    // 下一次 fullRequest 强制重建（同内容也不再复用）
+    lastParsed = null;
+    return;
+  }
   if (msg.type === "initRebuildPort" && msg.port) {
     toIncrement = msg.port;
     toIncrement.onmessage = (ev: MessageEvent<RebuildPortIn>) => {

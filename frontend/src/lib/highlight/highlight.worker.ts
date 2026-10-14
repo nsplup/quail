@@ -150,6 +150,14 @@ async function handleHl(msg: HlIn): Promise<void> {
 
 self.onmessage = (e: MessageEvent<HlIn>) => {
   const msg = e.data;
-  if (!msg || msg.type !== "hl") return;
+  if (!msg) return;
+  if (msg.type === "reset") {
+    // 内部状态归零（横幅「重新加载」）：热缓存与 in-flight 去重表清空。
+    // 已在途的解析协程不受影响，其响应仍会正常回传主线程 pendingReq 表。
+    hot.clear();
+    inflight.clear();
+    return;
+  }
+  if (msg.type !== "hl") return;
   void handleHl(msg);
 };

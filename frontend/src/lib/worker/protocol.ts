@@ -90,6 +90,12 @@ export interface ResetEmptyMsg {
   type: "resetEmpty";
 }
 
+/** 全量重置（横幅「重新加载」）：不解析，仅把增量 worker 内部状态归零
+ * （语义与 resetEmpty 相同；独立消息类型便于日志对账与后续差异化演进，无响应） */
+export interface ResetMsg {
+  type: "reset";
+}
+
 /* ---------------- 增量 worker ↔ 全量重建 worker（MessageChannel 直连） ----------------
  * 例行全量重建（SELF_HEAL_EVERY 阈值触发）不再由增量 worker 就地执行——大文档
  * 全量解析需数百毫秒到数秒，会阻塞后续增量请求（打字偶发卡顿的根源）。
@@ -125,4 +131,10 @@ export type RebuildPortIn = RebuildRequestMsg; // 重建 worker 收
 export type RebuildPortOut = RebuildStateMsg; // 增量 worker 收
 
 export type WorkerOut = FullBatch | ParseResult | WorkerError;
-export type WorkerIn = ParseRequest | ResetEmptyMsg | InitRebuildPortMsg;
+export type WorkerIn = ParseRequest | ResetEmptyMsg | ResetMsg | InitRebuildPortMsg;
+
+/** 主线程 → 重建 worker：清空内容哈希缓存（横幅「重新加载」前的归零，
+ * 下一次 fullRequest 强制重建，无响应） */
+export interface RebuildResetMsg {
+  type: "reset";
+}

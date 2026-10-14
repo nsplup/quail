@@ -8,9 +8,9 @@
   import { applyThemeVars, buildFontChain, EDITOR_FONT_FALLBACK, PREVIEW_FONT_FALLBACK } from "./lib/themes";
   import Toast from "./components/Toast.svelte";
   import ConfirmDialog from "./components/ConfirmDialog.svelte";
+  import Banner from "./components/Banner.svelte";
   import {
     saveDocument,
-    saveDocumentAs,
     confirmQuit,
     onBackendEvent,
     reportDirty,
@@ -18,10 +18,8 @@
     openDocument,
     newInstance,
     closeWindow,
-    saveAsViaDialog,
     setTitle,
   } from "./lib/bridge";
-  import type { QuailDocState } from "./lib/bridge";
   import { confirmDialog } from "./lib/confirm";
   import {
     mode$ as mode,
@@ -49,9 +47,10 @@
     editorApi$ as editorApi,
     previewApi$ as previewApi,
     bootApp,
-    markNextParseAsOpen,
     indexOfLine,
     docState$ as docState,
+    loadOpenedDoc,
+    saveFileAs,
   } from "./lib/stores";
   import { setLang, currentLang, t } from "./lib/i18n.svelte";
   import type { Mode, OutlineItem, PreviewApi } from "./lib/types";
@@ -257,7 +256,7 @@
     }
     try {
       const state = await openDocument(path);
-      if (state) loadOpened(state); // null = 二进制文件，静默丢弃
+      if (state) loadOpenedDoc(state); // null = 二进制文件，静默丢弃
     } catch {
       toast.set({ id: Date.now(), msg: get(t)("toast.openFailed") });
     }
@@ -270,32 +269,8 @@
     await openPath(path);
   }
 
-  /** 装载已打开的文档状态（原地打开通道，仅未命名空白文档场景可达） */
-  function loadOpened(state: QuailDocState): void {
-    // 打开文档语义：指示器立即进入「解析中」（无 200ms 阈值，空白文档除外）
-    markNextParseAsOpen();
-    docState.set(state);
-    doc.set(state.content);
-    get(editorApi)?.setDoc(state.content);
-  }
-
-  /** 另存为（Wails 原生保存对话框 → FileService.SaveAs） */
-  async function saveFileAs(): Promise<void> {
-    // 对话框默认文件名跟随界面语言（后端不做 i18n）
-    const res = await saveAsViaDialog(get(doc), `${get(t)("doc.untitled")}.md`);
-    if (res?.ok) {
-      docState.set({
-        path: res.path,
-        dir: res.path.slice(0, res.path.lastIndexOf("/")) || res.path,
-        name: res.path.split("/").pop() ?? res.path,
-        content: get(doc),
-        encoding: "utf-8",
-        size: 0,
-        modTime: 0,
-      });
-      get(editorApi)?.markClean();
-    }
-  }
+  /* 装载（loadOpenedDoc）与另存为（saveFileAs）移至 lib/stores：
+     横幅「重新加载 / 另存为」动作与原地打开通道共用同一实现 */
 
   /* ---------------- 同步滚动（带程序化滚动抑制，防止回环） ---------------- */
   let editorProgrammaticUntil = 0;
@@ -412,6 +387,16 @@
       requestAnimationFrame(() => $previewApi?.setScrollTop(top));
     }
   });
+  // 文档路径变化（原地打开 / 横幅重新加载）→ 丢弃保存的预览滚动位置：
+  // 新文档从顶部开始，模式切换恢复逻辑不得把旧文档位置带回新文档
+  let pvSavedForPath: string | null = null;
+  $effect(() => {
+    const p = $docState?.path ?? null;
+    if (p !== pvSavedForPath) {
+      pvSavedForPath = p;
+      pvSavedTop = 0;
+    }
+  });
 
   /* ---------------- 分隔线拖拽（双栏比例；大纲宽度固定，不提供重布局） ---------------- */
   let dragKind = $state<"none" | "split">("none");
@@ -455,6 +440,9 @@
   data-file-drop-target
 >
   {#if $ready}
+    <!-- 顶部横幅：外部修改/删除事件响应。位于大纲、编辑、预览三者上方，
+         正常文档流挤压三者高度（背景与大纲/底栏一致，见 Banner.svelte） -->
+    <Banner />
     <main
       class="main relative flex min-h-0 flex-1 overflow-hidden"
       data-mode={$mode}

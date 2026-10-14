@@ -30,5 +30,11 @@ export interface HlSkip {
   reason: "nolang" | "toolarge" | "error";
 }
 
-export type HlIn = HlRequest;
+/** 主线程 → worker：内部状态归零（横幅「重新加载」前清空热缓存与
+ * in-flight 去重表；无响应，在途请求的响应仍会正常回传） */
+export interface HlReset {
+  type: "reset";
+}
+
+export type HlIn = HlRequest | HlReset;
 export type HlOut = HlOk | HlSkip;

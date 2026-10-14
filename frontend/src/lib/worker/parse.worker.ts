@@ -252,7 +252,9 @@ ctx.onmessage = (e: MessageEvent<WorkerIn>): void => {
     attachRebuildPort(msg.port);
     return;
   }
-  if (msg.type === "resetEmpty") {
+  if (msg.type === "resetEmpty" || msg.type === "reset") {
+    // resetEmpty：空白文档重置；reset：横幅「重新加载」前的全量归零。
+    // 两者语义一致：内部状态归零为干净空基线，下一次真实解析冷启动全量
     resetEmpty();
     return;
   }

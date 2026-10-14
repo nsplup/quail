@@ -29,7 +29,9 @@ import type { HastSegment } from "./markdown/markdown-core";
 import { createParseClient } from "./worker/parse-client";
 import { t, locale, setLang } from "./i18n.svelte";
 import { kvGet, kvSet, onConfigReplay, initSettings } from "./settings";
-import { onBackendEvent, ready as bridgeReady, startupDoc, type QuailDocState } from "./bridge";
+import { onBackendEvent, openDocument, ready as bridgeReady, saveAsViaDialog, startupDoc, type QuailDocState } from "./bridge";
+import { banner$ } from "./banner";
+import { resetHighlightWorker } from "./highlight/hl-client";
 
 /* ---------------- 持久化工厂 ---------------- */
 
@@ -455,6 +457,86 @@ export const guardDirty$ = derived(
   ([d, edited, s]) => d && (s?.path ? true : edited)
 );
 
+/* ------------- 打开 / 另存 / 横幅重新加载（App 与横幅事件共用） ------------- */
+
+/**
+ * 装载已打开的文档状态（原地打开通道：未命名空白文档打开 / 横幅重新加载）。
+ * 打开文档语义：指示器立即进入「解析中」（无 200ms 阈值，空白文档除外）。
+ */
+export function loadOpenedDoc(state: QuailDocState): void {
+  markNextParseAsOpen();
+  docState$.set(state);
+  doc$.set(state.content);
+  get(editorApi$)?.setDoc(state.content);
+}
+
+/** 另存为（Wails 原生保存对话框 → FileService.SaveAs） */
+export async function saveFileAs(): Promise<void> {
+  // 对话框默认文件名跟随界面语言（后端不做 i18n）
+  const res = await saveAsViaDialog(get(doc$), `${get(t)("doc.untitled")}.md`);
+  if (res?.ok) {
+    docState$.set({
+      path: res.path,
+      dir: res.path.slice(0, res.path.lastIndexOf("/")) || res.path,
+      name: res.path.split("/").pop() ?? res.path,
+      content: get(doc$),
+      encoding: "utf-8",
+      size: 0,
+      modTime: 0,
+    });
+    get(editorApi$)?.markClean();
+  }
+}
+
+/**
+ * 横幅「重新加载」第一步：重置编辑区、预览区、文档相关状态，并把三个
+ * worker（增量解析 / 例行重建 / 着色）内部状态归零；随后由调用方走当前
+ * 实例打开操作。大纲过滤关键词（OutlinePanel 组件内状态）与 CM6 查找
+ * 搜索面板状态保持不变（组件不卸载、面板不重配置）。
+ */
+function resetDocRuntime(): void {
+  // 文档状态清零（打开操作重新装载），脏/编辑记录复位
+  docState$.set(null);
+  dirty$.set(false);
+  edited$.set(false);
+  // 预览区：滚动位置与滚动同步状态归零（新内容从顶部开始）；
+  // 解析产物即时落空（不等防抖：重新加载应立刻清掉旧文档的预览）
+  topIndex$.set(0);
+  outlineAutoTrack$.set(true);
+  get(previewApi$)?.setScrollTop(0);
+  fullBatchBuffer = null;
+  segments$.set([]);
+  blocks$.set([]);
+  outline$.set([]);
+  counts$.set({ words: 0, hanChars: 0 });
+  // 编辑区：整体替换为空文档（setDoc 清撤销历史并记干净基线）；
+  // doc$ 调度随后走空白重置路径，与 worker 归零语义对齐
+  doc$.set("");
+  get(editorApi$)?.setDoc("");
+  // 三个 worker 内部状态归零：
+  // - 增量解析 worker：解析基线清空（下一次解析冷启动全量）
+  // - 例行重建 worker：内容哈希缓存清空（同内容也强制重建）
+  // - 着色 worker：热缓存与 in-flight 表清空
+  parseClient.reset();
+  resetHighlightWorker();
+}
+
+/**
+ * 横幅「重新加载」：重置编辑区/预览区/文档相关状态与三个 worker 内部
+ * 状态，然后走当前实例打开操作（Open 重读磁盘 + loadOpenedDoc 装载，
+ * 与空白文档打开新文档同一操作）。打开失败仅提示（重置后的空白状态
+ * 保持，可再次打开或另选文件）。
+ */
+async function reloadDocumentFromDisk(path: string): Promise<void> {
+  resetDocRuntime();
+  try {
+    const state = await openDocument(path);
+    if (state) loadOpenedDoc(state); // null = 二进制文件，静默丢弃
+  } catch {
+    toast$.set({ id: Date.now(), msg: get(t)("toast.openFailed") });
+  }
+}
+
 /** 订阅后端文档事件（外部修改 / 删除），只挂一次 */
 let fileEventsBound = false;
 function subscribeFileEvents(): void {
@@ -462,26 +544,30 @@ function subscribeFileEvents(): void {
   fileEventsBound = true;
   void onBackendEvent("file:changed", (d: { path: string; content?: string }) => {
     if (typeof d?.content !== "string") return;
-    // 文件重新出现在磁盘（如删除后又被外部恢复/重建）：解除 deleted 标记
+    // 文件重新出现在磁盘（如删除后又被外部恢复/重建）：解除 deleted 标记，
+    // 同步磁盘内容快照（展示用；重新加载以打开操作从磁盘重读为准）
     docState$.update((s) =>
       s && s.path === d.path ? { ...s, content: d.content!, deleted: false } : s
     );
-    // 未保存的本地修改不被外部改动静默覆盖：脏状态时仅提示
-    if (get(dirty$)) {
-      toast$.set({ id: Date.now(), msg: get(t)("toast.fileChangedDirty") });
-    } else {
-      // 磁盘文件重载 = 打开文档语义：指示器按 open 规则展示（无 200ms 阈值）
-      markNextParseAsOpen();
-      doc$.set(d.content!);
-      toast$.set({ id: Date.now(), msg: get(t)("toast.fileReloaded") });
-    }
+    // 外部修改 → 横幅提示：不再静默重载（会丢弃本地未保存修改），也
+    // 不再按脏状态区分 TOAST——统一由用户显式选择「重新加载 / 忽略」
+    banner$.set({
+      kind: "modified",
+      path: d.path,
+      onPrimary: () => void reloadDocumentFromDisk(d.path),
+    });
   });
   void onBackendEvent("file:deleted", (d: { path: string }) => {
     // 文件被外部移动/删除：保留路径并标记 deleted，内容与脏状态维持
     // 删除前的值（未编辑则仍可直接退出/另存；保存路由到确认重建流程）。
     // 当前未命名文档（无路径）时删除事件不适用，保持原状。
     docState$.update((s) => (s && s.path === d.path ? { ...s, deleted: true } : s));
-    toast$.set({ id: Date.now(), msg: get(t)("toast.fileDeleted") });
+    // 原 TOAST 响应取消：改为横幅提示（另存为 / 忽略）
+    banner$.set({
+      kind: "deleted",
+      path: d.path,
+      onPrimary: () => void saveFileAs(),
+    });
   });
 }
 

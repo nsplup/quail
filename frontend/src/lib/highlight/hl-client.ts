@@ -55,6 +55,14 @@ function ensureWorker(): Worker | null {
   return worker;
 }
 
+/**
+ * 重置 worker 内部状态（横幅「重新加载」）：清空热缓存与 in-flight 去重表。
+ * worker 尚未创建时无需重置（惰性创建即干净状态），也不主动拉起。
+ */
+export function resetHighlightWorker(): void {
+  worker?.postMessage({ type: "reset" } satisfies HlIn);
+}
+
 export function requestHighlight(lang: string, code: string, timeoutMs = 10_000): Promise<HlResult> {
   const w = ensureWorker();
   if (!w) return Promise.resolve(null);

@@ -71,10 +71,13 @@ export const zhMessages = {
     saveFailed: "保存失败",
     openFailed: "打开失败",
     newInstanceFailed: "无法启动新实例",
-    fileReloaded: "文件已在磁盘上更新，已重新加载",
-    fileChangedDirty: "文件已被外部修改（本地有未保存修改，未自动加载）",
-    fileDeleted: "文件已被外部删除",
     parseFailed: "预览解析出错，已自动恢复",
+  },
+  banner: {
+    modified: "文件“{path}”已在存储设备中修改。",
+    deleted: "文件“{path}”已在存储设备中移动或者删除。",
+    reload: "重新加载",
+    ignore: "忽略",
   },
   preview: {
     imageLoading: "图片加载中…",
@@ -164,10 +167,13 @@ export const enMessages = {
     saveFailed: "Save failed",
     openFailed: "Failed to open file",
     newInstanceFailed: "Failed to launch new instance",
-    fileReloaded: "File changed on disk; reloaded",
-    fileChangedDirty: "File modified externally (local changes kept, not reloaded)",
-    fileDeleted: "File deleted externally",
     parseFailed: "Preview parsing failed; recovered automatically",
+  },
+  banner: {
+    modified: 'The file "{path}" has been modified on disk.',
+    deleted: 'The file "{path}" has been moved or deleted on disk.',
+    reload: "Reload",
+    ignore: "Ignore",
   },
   preview: {
     imageLoading: "Loading image…",
