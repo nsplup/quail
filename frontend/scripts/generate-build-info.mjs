@@ -29,31 +29,46 @@ mkdirSync(outDir, { recursive: true });
 
 /* ---------------- 版本信息 ---------------- */
 
+/** 本地时区的 YYYYMMDD（非 git 环境下的兜底） */
+function localDateYYYYMMDD() {
+  const now = new Date();
+  return (
+    `${now.getFullYear()}` +
+    `${String(now.getMonth() + 1).padStart(2, "0")}` +
+    `${String(now.getDate()).padStart(2, "0")}`
+  );
+}
+
 let commit = "unknown";
+let commitDate = localDateYYYYMMDD();
 try {
   commit =
-    execFileSync("git", ["rev-parse", "--short=8", "HEAD"], {
+    execFileSync("git", ["rev-parse", "HEAD"], {
       cwd: repoRoot,
       stdio: ["ignore", "pipe", "ignore"],
     })
       .toString()
       .trim() || "unknown";
-} catch {
-  /* 非 git 环境（如直接解压源码包构建）：保持 unknown */
-}
 
-const now = new Date();
-const buildDate =
-  `${now.getFullYear()}` +
-  `${String(now.getMonth() + 1).padStart(2, "0")}` +
-  `${String(now.getDate()).padStart(2, "0")}`;
+  // 使用 committer date（%cd = committer date，--date=format 直接用
+  // committer 本地时区格式化，语义上与 date 命令的 %cd 一致）
+  const d = execFileSync(
+    "git",
+    ["show", "-s", "--date=format:%Y%m%d", "--format=%cd", "HEAD"],
+    { cwd: repoRoot, stdio: ["ignore", "pipe", "ignore"] }
+  )
+    .toString()
+    .trim();
+  if (d) commitDate = d;
+} catch {
+  /* 非 git 环境（如直接解压源码包构建）：保持兜底值 */
+}
 
 writeFileSync(
   path.join(outDir, "version.ts"),
-  `/** 构建时自动生成（frontend/scripts/generate-build-info.mjs），请勿手工修改。 */
-export const BUILD_DATE = ${JSON.stringify(buildDate)};
-export const BUILD_COMMIT = ${JSON.stringify(commit)};
-`
+  `/** 构建时自动生成（frontend/scripts/generate-build-info.mjs），请勿手工修改。 */` +
+  '\n' + `export const COMMIT_DATE = ${JSON.stringify(commitDate)};` +
+  '\n' + `export const COMMIT_HASH = ${JSON.stringify(commit)};`
 );
 
 /* ---------------- 前端依赖许可收集 ---------------- */
@@ -228,5 +243,5 @@ writeFileSync(
 );
 
 console.log(
-  `[generate-build-info] date=${buildDate} commit=${commit} frontend-deps=${deps.length}`
+  `[generate-build-info] date=${commitDate} commit=${commit} frontend-deps=${deps.length}`
 );
