@@ -93,6 +93,10 @@ tasks:
           OBFUSCATED:
             ref: .OBFUSCATED
     cmds:
+      # 构建期自动收集后端依赖许可信息（含 wails 框架本体）。
+      # 版本信息与前端依赖许可由 package.json 的 build 脚本内
+      # generate-build-info.mjs 生成。
+      - go run ../tools/licgen -out src/lib/generated/backend-deps.json
       - task: frontend:run
         vars:
           SCRIPT: '{{if eq .DEV "true"}}build:dev{{else}}build{{end}}'

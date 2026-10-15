@@ -40,7 +40,7 @@ export const zhMessages = {
   },
   settings: {
     title: "设置",
-    appearance: "外观",
+    appearance: "主题",
     general: "通用",
     defaultLayout: "启动时的默认布局",
     layoutMemory: "上次使用",
@@ -61,6 +61,9 @@ export const zhMessages = {
     indentTab: "制表符",
     indentSpace2: "2 空格",
     indentSpace4: "4 空格",
+    openSourceLicenses: "开源许可",
+    copyright: "版权归属 Luke Pan",
+    birdCredit: "美术资产 bird.svg 来自",
   },
   stats: {
     words: "词",
@@ -136,7 +139,7 @@ export const enMessages = {
   },
   settings: {
     title: "Settings",
-    appearance: "Appearance",
+    appearance: "Theme",
     general: "General",
     defaultLayout: "Default layout on startup",
     layoutMemory: "Last used",
@@ -157,6 +160,9 @@ export const enMessages = {
     indentTab: "Tabs",
     indentSpace2: "2 spaces",
     indentSpace4: "4 spaces",
+    openSourceLicenses: "Open Source Licenses",
+    copyright: "Copyright Luke Pan",
+    birdCredit: "Artwork bird.svg from",
   },
   stats: {
     words: "words",

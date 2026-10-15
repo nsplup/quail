@@ -26,6 +26,7 @@
     theme$ as theme,
     indent$ as indent,
     settingsOpen$ as settingsOpen,
+    settingsSubPage$ as settingsSubPage,
     outlineOpen$ as outlineOpen,
     outlineAutoTrack$ as outlineAutoTrack,
     topIndex$ as topIndex,
@@ -424,7 +425,22 @@
   let splitPct = $state(50);
 
   function onKeydown(e: KeyboardEvent): void {
+    // Ctrl/Cmd+S：全局保存兜底。CM6 聚焦时其 keymap（Mod-s）已处理并
+    // preventDefault，事件冒泡到 window 时 defaultPrevented 为 true，此处
+    // 跳过避免双重保存；非 CM6 聚焦状态（预览区 / 查找面板输入框 /
+    // 设置面板 / 无焦点）由此触发保存。
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "s") {
+      if (e.defaultPrevented) return;
+      e.preventDefault();
+      void save();
+      return;
+    }
     if (e.key === "Escape") {
+      // 二级页面先返回一级页面，再关闭设置面板
+      if ($settingsOpen && $settingsSubPage) {
+        settingsSubPage.set(null);
+        return;
+      }
       if ($settingsOpen) settingsOpen.set(false);
     }
   }

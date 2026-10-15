@@ -745,3 +745,171 @@ md-image[data-inline][data-status="error"] {
   z-index: 9999;
   pointer-events: none;
 }
+
+/* ---------------- 设置面板：二级页面导航 ----------------
+   面包屑（「设置」弱化 + 右向箭头 + 二级页标题）；
+   箭头与查找替换面板 ↑/↓ 按键图标同一绘制方式（feather 描边 polyline） */
+
+.crumb-root {
+  color: var(--ui-muted);
+  font-weight: 500;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: color 0.15s;
+}
+
+.crumb-root:hover {
+  color: var(--ui-fg);
+}
+
+.crumb-arrow {
+  display: inline-flex;
+  flex: none;
+  color: var(--ui-muted);
+}
+
+/* ---------------- 设置面板：主题选择器（一级页面） ----------------
+   一圈描边 + 内间隔；右侧内间隔加大并放置右向箭头；
+   内部主题卡片保持原有样式 */
+
+.theme-selector {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 6px 12px 6px 6px;
+  border: 1px solid var(--ui-border);
+  border-radius: 14px;
+  background: var(--ui-inset);
+  cursor: pointer;
+  text-align: left;
+}
+
+.theme-selector .theme-card {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}
+
+/* ---------------- 设置面板：应用信息 ---------------- */
+
+.app-info {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 16px 14px 14px;
+  border: 1px solid var(--ui-border);
+  border-radius: 14px;
+  background: var(--ui-bg);
+  text-align: center;
+}
+
+.app-info-logo {
+  width: 100px;
+  height: 100px;
+}
+
+.app-info-name {
+  margin-top: 2px;
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--ui-fg);
+}
+
+.app-info-version-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.app-info-version {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ui-fg);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+}
+
+.app-info-commit {
+  font-size: 11px;
+  color: var(--ui-muted);
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+
+.app-info-copyright {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--ui-muted);
+}
+
+.license-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 6px 16px;
+  border: 1px solid var(--ui-border);
+  border-radius: 999px;
+  background: var(--ui-inset);
+  color: var(--ui-muted);
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.license-btn:hover {
+  color: var(--ui-fg);
+  border-color: var(--ui-accent);
+}
+
+.license-btn-icon {
+  display: inline-flex;
+}
+
+/* ---------------- 设置面板：开源许可二级页面 ---------------- */
+
+.license-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--ui-border);
+  border-radius: 12px;
+  background: var(--ui-inset);
+}
+
+.license-name {
+  color: var(--ui-fg);
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+.license-name:hover {
+  color: var(--ui-accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.license-version {
+  flex: none;
+  color: var(--ui-muted);
+  font-size: 11px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+
+.license-type {
+  color: var(--ui-muted);
+  font-size: 11px;
+}
+
+.license-copyright {
+  color: var(--ui-muted);
+  font-size: 10.5px;
+  line-height: 1.5;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}

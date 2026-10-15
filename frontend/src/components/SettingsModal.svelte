@@ -4,6 +4,9 @@
   import TextInput from "./TextInput.svelte";
   import { t, locale, langSetting, setLang } from "../lib/i18n.svelte";
   import { THEMES, THEME_CARD_DESC, EDITOR_FONT_FALLBACK, PREVIEW_FONT_FALLBACK } from "../lib/themes";
+  import { licenseEntries } from "../lib/licenses";
+  import { BUILD_DATE, BUILD_COMMIT } from "../lib/generated/version";
+  import { openExternal } from "../lib/bridge";
   import {
     theme$ as theme,
     indent$ as indent,
@@ -14,6 +17,7 @@
     fontSizePv$ as fontSizePv,
     defaultLayout$ as defaultLayout,
     settingsOpen$ as settingsOpen,
+    settingsSubPage$ as settingsSubPage,
   } from "../lib/stores";
   import type { ThemeId, LangSetting, IndentId, CountMode, DefaultLayout } from "../lib/types";
 
@@ -25,6 +29,41 @@
     return a.name.localeCompare(b.name);
   });
   const desc = $derived($locale === "zh" ? THEME_CARD_DESC.zh : THEME_CARD_DESC.en);
+
+  /* 一级页面「主题」选择器内展示的当前主题卡片 */
+  const currentTheme = $derived(themeList.find((tv) => tv.id === $theme) ?? themeList[0]);
+
+  /* 二级页面标题（「设置」面包屑之后展示） */
+  const subPageTitle = $derived(
+    $settingsSubPage === "theme"
+      ? $t("settings.appearance")
+      : $settingsSubPage === "licenses"
+        ? $t("settings.openSourceLicenses")
+        : ""
+  );
+
+  /* 面板关闭时复位二级页面，下次打开回到一级 */
+  $effect(() => {
+    if (!$settingsOpen) settingsSubPage.set(null);
+  });
+
+  /* 右向箭头：与查找替换面板 ↑/↓ 按键图标同一绘制方式（feather 描边 polyline），
+     仅旋转方向不同 */
+  const crumbArrow =
+    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"></polyline></svg>';
+
+  /* Open Source Initiative 的 LOGO（keyhole 标志，官方 SVG 提取，单色填充随主题） */
+  const osiLogo =
+    '<svg width="15" height="15" viewBox="21.9 5.4 166 159.6" fill="currentColor" aria-hidden="true"><path d="M114.7,115.5c11.9-4.4,18.1-12.9,18.1-27.5c0-14.6-12.3-27.5-27.7-27.5c-16.2,0-28.5,12.9-28.3,27.5 c0.2,14.7,7.2,24.4,18.4,28l-19.8,48.8c-26.5-6.9-53.5-38.2-53.5-76.7c0-45.7,36.7-82.7,82.7-82.7c46,0,83.3,37,83.3,82.7 c0,39.2-26.7,70-53.9,76.9L114.7,115.5z"></path></svg>';
+
+  /* 链接劫持：与预览区一致——阻止默认导航，交由后端（Wails Browser）打开 */
+  function hijackLinks(e: MouseEvent): void {
+    const anchor = (e.target as HTMLElement | null)?.closest?.("a");
+    const href = anchor?.getAttribute("href");
+    if (!href) return;
+    e.preventDefault();
+    void openExternal(href);
+  }
 
   /* 语言设置：跟随系统（默认）+ 可用语言。zh/en 标签用各自语言原文展示；
      高亮依据 langSetting 原始值（而非解析后的 locale），跟随系统与手动
@@ -71,7 +110,18 @@
       class="w-[440px] max-w-[calc(100vw-48px)] overflow-hidden rounded-2xl border border-line bg-soft py-5 shadow-2xl"
     >
       <header class="mb-4 flex items-center justify-between px-5">
-        <h2 class="text-sm font-semibold text-fg">{$t("settings.title")}</h2>
+        <h2 class="flex items-center gap-1 text-sm font-semibold text-fg">
+          {#if $settingsSubPage}
+            <!-- 二级页面：弱化「设置」+ 右向箭头 + 二级页标题（面包屑） -->
+            <button class="crumb-root" onclick={() => settingsSubPage.set(null)}>
+              {$t("settings.title")}
+            </button>
+            <span class="crumb-arrow" aria-hidden="true">{@html crumbArrow}</span>
+            <span>{subPageTitle}</span>
+          {:else}
+            {$t("settings.title")}
+          {/if}
+        </h2>
         <button class="icon-btn" title={$t("common.close")} aria-label={$t("common.close")} onclick={() => settingsOpen.set(false)}>
           <Icon name="close" />
         </button>
@@ -81,9 +131,8 @@
            避开 webkitgtk overlay/classic 切换导致的抖动 -->
       <section class="settings-scroll max-h-[70vh] overflow-y-auto">
         <div class="flex flex-col gap-4 p-5 pt-0">
-        <!-- 外观：一维主题卡片（每主题一张，卡片样式即主题本身） -->
-        <div>
-          <div class="mb-2 text-xs text-muted">{$t("settings.appearance")}</div>
+        {#if $settingsSubPage === "theme"}
+          <!-- 主题二级页：卡片排布与原外观设置一致（明暗两组，组内按主题名排序） -->
           <div class="grid grid-cols-2 gap-2">
             {#each themeList as tv (tv.id)}
               {@const vars = tv.vars}
@@ -107,6 +156,56 @@
               </button>
             {/each}
           </div>
+        {:else if $settingsSubPage === "licenses"}
+          <!-- 开源许可二级页：前端 / 后端依赖（含 wails 框架）+ 美术资产，
+               按名称排序卡片陈列；链接劫持交由后端打开（与预览区一致） -->
+          <!-- svelte-ignore a11y_click_events_have_key_events -->
+          <!-- svelte-ignore a11y_no_static_element_interactions -->
+          <div class="flex flex-col gap-2" onclick={hijackLinks}>
+            {#each licenseEntries as dep (`${dep.name}@${dep.version}`)}
+              <div class="license-card">
+                <div class="flex items-baseline justify-between gap-2">
+                  <a class="license-name" href={dep.url}>{dep.name}</a>
+                  {#if dep.version}
+                    <span class="license-version">{dep.version}</span>
+                  {/if}
+                </div>
+                {#if dep.license && dep.license !== "unknown"}
+                  <div class="license-type">{dep.license}</div>
+                {/if}
+                {#if dep.copyright}
+                  <div class="license-copyright">{dep.copyright}</div>
+                {/if}
+              </div>
+            {/each}
+          </div>
+        {:else}
+        <!-- 主题：被选择器样式包裹的当前主题卡片，点击进入主题二级页面 -->
+        <div>
+          <div class="mb-2 text-xs text-muted">{$t("settings.appearance")}</div>
+          <button
+            class="theme-selector"
+            title={$t("settings.appearance")}
+            onclick={() => settingsSubPage.set("theme")}
+          >
+            <span
+              class="theme-card active !block !p-0 overflow-hidden text-left"
+              style:background={currentTheme.vars["--pv-bg"]}
+              style:color={currentTheme.vars["--pv-fg"]}
+              style:border-color="transparent"
+              style:--card-strong={currentTheme.vars["--pv-fg-strong"]}
+              style:--card-muted={currentTheme.vars["--pv-muted"]}
+              style:--card-link={currentTheme.vars["--pv-link"]}
+            >
+              <span class="block px-3 pt-2.5 text-xs font-semibold" style:color={currentTheme.vars["--card-strong"]}>
+                {currentTheme.name}
+              </span>
+              <span class="theme-desc block px-3 pb-2.5 pt-1 text-[11px] leading-snug">
+                {@html desc}
+              </span>
+            </span>
+            <span class="crumb-arrow" aria-hidden="true">{@html crumbArrow}</span>
+          </button>
         </div>
 
         <!-- 字体与字号：编辑区/预览区交替排布 -->
@@ -177,6 +276,26 @@
             {/each}
           </div>
         </div>
+
+        <!-- 应用信息：无设置项文本，固定在所有设置项末尾 -->
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div class="app-info" onclick={hijackLinks}>
+          <img class="app-info-logo" src="/bird.svg" alt="Quail" />
+          <div class="app-info-name">Quail</div>
+          <div class="app-info-version-group">
+            {#if BUILD_DATE}
+              <div class="app-info-version">Version {BUILD_DATE}</div>
+            {/if}
+            <div class="app-info-commit">{BUILD_COMMIT}</div>
+          </div>
+          <div class="app-info-copyright">{$t("settings.copyright")}</div>
+          <button class="license-btn" onclick={() => settingsSubPage.set("licenses")}>
+            <span class="license-btn-icon" aria-hidden="true">{@html osiLogo}</span>
+            <span>{$t("settings.openSourceLicenses")}</span>
+          </button>
+        </div>
+        {/if}
         </div>
       </section>
     </div>
