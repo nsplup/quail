@@ -29,7 +29,7 @@ const assetEntry: LicenseEntry = {
   version: "",
   license: "CC BY 4.0",
   copyright:
-    "bird.svg from Firefox OS Emoji\nCopyright (c) Mozilla — distributed under CC BY 4.0",
+    "Firefox OS Emoji is a colored Emoji collection designed by Sabrina Smelko and licensed under CC-BY-4.0\nCopyright (c) Mozilla Corporation and contributors",
   url: "https://github.com/mozilla/fxemoji",
 };
 

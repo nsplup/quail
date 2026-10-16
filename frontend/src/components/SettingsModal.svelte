@@ -177,7 +177,10 @@
 
       <!-- 滚动条常驻占位（scroll 而非 auto）：首帧即按 classic 布局，
            避开 webkitgtk overlay/classic 切换导致的抖动 -->
-      <section class="settings-scroll max-h-[70vh] overflow-y-auto" bind:this={scrollEl}>
+      <section
+        class="settings-scroll max-h-[70vh] overflow-y-auto"
+        bind:this={scrollEl}
+      >
         <div class="flex flex-col gap-4 p-5 pt-0">
           {#if $settingsSubPage === "theme"}
             <!-- 主题二级页：卡片排布与原外观设置一致（明暗两组，组内按主题名排序） -->
@@ -218,16 +221,25 @@
             <!-- svelte-ignore a11y_no_static_element_interactions -->
             <div class="flex flex-col gap-2" onclick={hijackLinks}>
               {#each licenseEntries as dep (`${dep.name}@${dep.version}`)}
-                <div class="license-card">
-                  <div class="flex items-baseline justify-between gap-2">
-                    <a class="license-name" href={dep.url}>{dep.name}</a>
+                <div class="license-card flex flex-col gap-1">
+                  <!-- 第一行：模块名（允许换行并防止长路径溢出） -->
+                  <a class="license-name break-all" href={dep.url}>{dep.name}</a
+                  >
+
+                  <!-- 第二行：版本号与许可证类型 -->
+                  <div
+                    class="flex items-center justify-between gap-2 text-xs font-bold"
+                  >
                     {#if dep.version}
-                      <span class="license-version">{dep.version}</span>
+                      <span class="license-version font-mono"
+                        >{dep.version}</span
+                      >
+                    {/if}
+                    {#if dep.license && dep.license !== "unknown"}
+                      <span class="license-type">{dep.license}</span>
                     {/if}
                   </div>
-                  {#if dep.license && dep.license !== "unknown"}
-                    <div class="license-type">{dep.license}</div>
-                  {/if}
+
                   {#if dep.copyright}
                     <div class="license-copyright">{dep.copyright}</div>
                   {/if}
@@ -389,7 +401,9 @@
                 {#if COMMIT_DATE}
                   <div class="app-info-version">Version {COMMIT_DATE}</div>
                 {/if}
-                <div class="app-info-commit" title="Commit hash">{COMMIT_HASH}</div>
+                <div class="app-info-commit" title="Commit hash">
+                  {COMMIT_HASH}
+                </div>
               </div>
               <div class="app-info-copyright">{$t("settings.copyright")}</div>
               <button
