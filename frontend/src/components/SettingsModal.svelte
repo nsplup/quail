@@ -61,15 +61,22 @@
 
   /* 二级页面滚动位置记忆：
      - 进入二级页面时记录一级页面的滚动位置，并把滚动条重置到顶部；
-     - 退出二级页面时，待 DOM 恢复为一级页面内容后再还原滚动位置 */
+     - 退出二级页面时，待 DOM 恢复为一级页面内容后再还原滚动位置；
+     - 面板被直接关闭（未逐级返回）时清空记忆，避免下次打开用过期状态恢复 */
   let scrollEl = $state<HTMLElement | undefined>(undefined);
   let savedScrollTop = 0;
   let prevSubPage: typeof $settingsSubPage = null;
 
   $effect(() => {
-    const subPage = $settingsSubPage;
     const el = scrollEl;
-    if (!el) return;
+    const subPage = $settingsSubPage;
+
+    if (!el) {
+      /* 面板未挂载（关闭中/已关闭）：丢弃上一次的记忆 */
+      prevSubPage = null;
+      savedScrollTop = 0;
+      return;
+    }
 
     if (subPage && prevSubPage === null) {
       /* 进入二级页面 */
@@ -79,7 +86,7 @@
       /* 退出二级页面：等下一帧内容高度已恢复后再还原 */
       const top = savedScrollTop;
       requestAnimationFrame(() => {
-        el.scrollTop = top;
+        if (el.isConnected) el.scrollTop = top;
       });
     }
     prevSubPage = subPage;
@@ -228,18 +235,15 @@
 
                   <!-- 第二行：版本号与许可证类型 -->
                   <div
-                    class="flex items-center justify-between gap-2 text-xs font-bold"
+                    class="grid grid-cols-[1fr_auto] items-center gap-2 text-xs font-bold"
                   >
-                    {#if dep.version}
-                      <span class="license-version font-mono"
-                        >{dep.version}</span
-                      >
-                    {/if}
-                    {#if dep.license && dep.license !== "unknown"}
-                      <span class="license-type">{dep.license}</span>
-                    {/if}
+                    <span class="license-version font-mono">
+                      {#if dep.version}{dep.version}{/if}
+                    </span>
+                    <span class="license-type">
+                      {#if dep.license && dep.license !== "unknown"}{dep.license}{/if}
+                    </span>
                   </div>
-
                   {#if dep.copyright}
                     <div class="license-copyright">{dep.copyright}</div>
                   {/if}
