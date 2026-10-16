@@ -18,7 +18,6 @@ export interface Theme {
 }
 
 export const THEMES: Theme[] = [
-  // 优化：--ed-muted 由 #6c7380 提到 #7f8796，注释/行号在极深底上不再"糊成一团"
   {
     id: "ayu-dark",
     dark: true,
@@ -62,7 +61,6 @@ export const THEMES: Theme[] = [
       "--pv-row-alt": "rgba(255, 255, 255, 0.02)",
     },
   },
-  // 优化：--ed-muted 由 #707a8c 提到 #8c95a6，浮层底上对比度约 5:1
   {
     id: "ayu-mirage",
     dark: true,
@@ -106,8 +104,6 @@ export const THEMES: Theme[] = [
       "--pv-row-alt": "rgba(255, 255, 255, 0.025)",
     },
   },
-  // 优化：原有浅色方案 muted 系（#8a9199 / #99a0a6）在浅底上对比度仅 ≈2.7:1，属于不可读；
-  // 统一压深到 4.5:1 以上，边框由 #e2e6ea 加深到 #d3d9e0，保证工具栏/编辑区/预览三级层次可辨。
   {
     id: "ayu-light",
     dark: false,
@@ -151,7 +147,6 @@ export const THEMES: Theme[] = [
       "--pv-row-alt": "#fafbfc",
     },
   },
-  // 优化：--ed-muted 由 #5c6370 提到 #6d7683，占位符/注释不再发灰
   {
     id: "one-dark-pro",
     dark: true,
@@ -195,7 +190,6 @@ export const THEMES: Theme[] = [
       "--pv-row-alt": "rgba(255, 255, 255, 0.025)",
     },
   },
-  // 优化：--ed-muted 由 #6272a4 提到 #7f8dc0，深底上对比度约 4.6:1
   {
     id: "dracula",
     dark: true,
@@ -239,7 +233,6 @@ export const THEMES: Theme[] = [
       "--pv-row-alt": "rgba(255, 255, 255, 0.025)",
     },
   },
-  // 优化：muted 系由 #7b88a1 提到 #93a1ba，避免低饱和底上"看不出字"
   {
     id: "nord",
     dark: true,
@@ -283,7 +276,6 @@ export const THEMES: Theme[] = [
       "--pv-row-alt": "rgba(255, 255, 255, 0.025)",
     },
   },
-  // 优化：--ed-muted 由 #565f89 提到 #7780a8，--ui-muted 同步提亮，浮层底上可读
   {
     id: "tokyo-night",
     dark: true,
@@ -413,7 +405,6 @@ export const THEMES: Theme[] = [
       "--pv-row-alt": "#10151c",
     },
   },
-  // 优化：原 muted 系 #93a1a1 在纸底上仅 ≈2.3:1，压深至 #6b7c7c 后约 4.8:1
   {
     id: "solarized-light",
     dark: false,
@@ -457,9 +448,6 @@ export const THEMES: Theme[] = [
       "--pv-row-alt": "#f6f0dc",
     },
   },
-
-  /* ---------- 以下为新增热门主题 ---------- */
-
   {
     id: "catppuccin-mocha",
     dark: true,
@@ -761,8 +749,6 @@ export const THEMES: Theme[] = [
       "--pv-row-alt": "rgba(255, 255, 255, 0.02)",
     },
   },
-  /* ---------- 本轮补充的热门主题 ---------- */
-
   {
     id: "monokai-pro",
     dark: true,
