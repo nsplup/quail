@@ -523,8 +523,8 @@ md-image {
   overflow: hidden;
 
   border-radius: 8px;
-  background: var(--ui-hover, rgba(127, 127, 127, 0.12));
-  color: var(--ui-warn);
+  background: var(--pv-code-bg, rgba(127, 127, 127, 0.12));
+  color: var(--pv-muted);
   font-size: 12px;
   vertical-align: middle;
 }
@@ -571,8 +571,8 @@ md-image[data-status="loaded"] .md-img {
      （基线/尺寸计算怪癖），display:block 强制其按普通块盒参与
      align-items: center 居中，块级/行内占位的图标与文本对齐一致 */
   display: block;
-  width: 28px;
-  height: 28px;
+  width: 80px;
+  height: 80px;
   flex: none;
 }
 
@@ -611,7 +611,7 @@ md-image[data-status="error"] {
   border: none;
   background: none;
   font: inherit;
-  color: var(--ui-accent);
+  color: var(--pv-link);
   cursor: pointer;
   text-decoration: none;
 }
@@ -632,10 +632,10 @@ md-image[data-status="error"] {
   width: 26px;
   height: 26px;
   padding: 0;
-  border: 1px solid var(--ui-border);
+  border: 1px solid var(--pv-border);
   border-radius: 6px;
-  background: var(--ui-bg, #fff);
-  color: var(--ui-fg);
+  background: var(--pv-bg, #fff);
+  color: var(--pv-fg);
   cursor: pointer;
   opacity: 0; /* 无 transition：悬停即显即隐 */
   pointer-events: none;
@@ -658,7 +658,7 @@ md-image:hover .md-img-reload-corner {
   padding: 0 10px;
   font-size: 12px;
   line-height: 1.5;
-  color: var(--ui-muted);
+  color: var(--pv-muted);
   text-align: center;
   overflow-wrap: anywhere;
 }
@@ -682,7 +682,7 @@ md-image[data-inline] {
 
   border-radius: 4px;
   /* 占位描边与背景色与块级一致（loaded 态恢复透明） */
-  background: var(--ui-hover, rgba(127, 127, 127, 0.12));
+  background: var(--pv-inline-code-bg, rgba(127, 127, 127, 0.12));
   padding: 0 2px;
   font-size: inherit;
   vertical-align: middle;

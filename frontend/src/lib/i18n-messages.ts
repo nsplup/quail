@@ -9,8 +9,6 @@ export const zhMessages = {
   common: {
     close: "关闭",
     cancel: "取消",
-    saved: "已保存",
-    dirty: "未保存",
     open: "打开",
     saveAs: "另存为",
   },
@@ -107,8 +105,6 @@ export const enMessages = {
   common: {
     close: "Close",
     cancel: "Cancel",
-    saved: "Saved",
-    dirty: "Unsaved",
     open: "Open",
     saveAs: "Save As",
   },

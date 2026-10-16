@@ -138,15 +138,18 @@
   });
 
   // 守卫脏状态上报后端（供 WindowClosing 拦截钩子与 ShouldQuit 关闭守卫
-  // 使用）：未命名空文档在无编辑操作记录时不拦截，故上报 guardDirty 而非
-  // 指示器用的 dirty
+  // 使用）：未命名空文档在无编辑操作记录时不拦截。窗口标题的星号标记
+  // 同用 guardDirty 口径，与打开/退出的脏状态守卫保持一致
   $effect(() => {
     void reportDirty($guardDirty);
   });
 
-  // 窗口标题与文档名同步
+  // 窗口标题与文档名同步：守卫脏状态（guardDirty）时在文档名前加星号
+  // （星号与文档名以空格连接）；未命名空文档无编辑记录时不加（与
+  // 打开/退出的脏状态守卫同口径，见 guardDirty$）
   $effect(() => {
-    void setTitle($docState?.name || $t("doc.untitled"));
+    const name = $docState?.name || $t("doc.untitled");
+    void setTitle($guardDirty ? `* ${name}` : name);
   });
 
   // 全局快捷键：Ctrl/Cmd+N 新实例、Ctrl/Cmd+O 新实例中打开、
@@ -403,6 +406,18 @@
   let dragKind = $state<"none" | "split">("none");
   let contentEl = $state<HTMLElement | null>(null);
 
+  /* 编辑区最小宽度（px）：查找/替换面板的网格布局（两行输入 + 按钮组 +
+     计数 + 关闭）完整排布约需 300px，取整留余量。极窄窗口下不再把面板
+     挤成一团（输入框 min-width: 60px 只是下限，网格列仍会互相挤压） */
+  const EDITOR_MIN_WIDTH_PX = 320;
+
+  /** 双栏比例钳制：编辑区宽度 ≥ EDITOR_MIN_WIDTH_PX（按内容区宽度换算
+      百分比；极窄窗口下最多占 90%，预览保底 10%），常规窗口上限仍 80% */
+  function clampSplitPct(pct: number, width: number): number {
+    const minPct = Math.min((EDITOR_MIN_WIDTH_PX / width) * 100, 90);
+    return Math.min(Math.max(80, minPct), Math.max(minPct, pct));
+  }
+
   function startSplitDrag(e: PointerEvent): void {
     e.preventDefault();
     const rect = contentEl?.getBoundingClientRect();
@@ -410,7 +425,7 @@
     dragKind = "split";
     const move = (ev: PointerEvent): void => {
       const pct = ((ev.clientX - rect.left) / rect.width) * 100;
-      splitPct = Math.min(80, Math.max(20, pct));
+      splitPct = clampSplitPct(pct, rect.width);
     };
     const up = (): void => {
       dragKind = "none";
@@ -433,6 +448,24 @@
       if (e.defaultPrevented) return;
       e.preventDefault();
       void save();
+      return;
+    }
+    // Ctrl/Cmd+F：全局打开查找替换面板。CM6 聚焦时其 keymap（Mod-f）已
+    // 处理并 preventDefault（面板已开 → 拉取 CM6 选区；未开 → 带选区打开），
+    // 事件冒泡到 window 时 defaultPrevented 为 true，此处跳过；非 CM6
+    // 聚焦状态（预览区 / 设置面板 / 无焦点）由此触发：只打开面板，不把
+    // CM6 以外的选区传入关键词框；面板已开时仅聚焦，同样不做选区拉取。
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "f") {
+      if (e.defaultPrevented) return;
+      e.preventDefault();
+      // 面板位于编辑区内（.cm-panels）：预览模式下编辑区 display:none，
+      // 先回双栏让面板可见（保留预览滚动位置），待布局生效后再打开
+      if (get(mode) === "preview") {
+        setMode("split");
+        requestAnimationFrame(() => get(editorApi)?.openSearch());
+        return;
+      }
+      get(editorApi)?.openSearch();
       return;
     }
     if (e.key === "Escape") {
@@ -495,7 +528,11 @@
             aria-orientation="vertical"
             aria-label="拖拽调整比例，双击重置等分"
             onpointerdown={startSplitDrag}
-            ondblclick={() => (splitPct = 50)}
+            ondblclick={() => {
+              // 双击重置等分（同样受最小宽度钳制：极窄窗口下等分不成立）
+              const r = contentEl?.getBoundingClientRect();
+              if (r) splitPct = clampSplitPct(50, r.width);
+            }}
           ></div>
         {/if}
 

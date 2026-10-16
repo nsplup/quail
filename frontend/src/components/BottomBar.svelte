@@ -3,7 +3,7 @@
   import ParseStatus from "./ParseStatus.svelte";
   import { t, locale } from "../lib/i18n.svelte";
   import type { Mode } from "../lib/types";
-  import { mode$ as mode, outlineOpen$ as outlineOpen, settingsOpen$ as settingsOpen, countLabel$ as countLabel, dirty$ as dirty } from "../lib/stores";
+  import { mode$ as mode, outlineOpen$ as outlineOpen, settingsOpen$ as settingsOpen, countLabel$ as countLabel } from "../lib/stores";
 
   const modes: { id: Mode; icon: string; label: string }[] = [
     { id: "source", icon: "code", label: "mode.source" },
@@ -19,7 +19,6 @@
     // 依赖 mode 与语言（标签宽度随 i18n 文本变化；读 $t 文本建立追踪）
     const m = $mode;
     void $t(modes.find((x) => x.id === m)?.label ?? "");
-    void $dirty;
     requestAnimationFrame(() => {
       const btns = groupEl?.querySelectorAll<HTMLButtonElement>(".tab");
       if (!btns || btns.length === 0) return;
@@ -79,19 +78,6 @@
           <span>{$t(m.label)}</span>
         </button>
       {/each}
-    </div>
-
-    <!-- 脏状态指示器：独立组件，与模式切换相邻；圆点在描述文本右侧 -->
-    <div
-      class="ml-2 flex flex-none items-center gap-1.5 text-xs text-muted select-none"
-      title={$dirty ? $t("common.dirty") : $t("common.saved")}
-      role="status"
-    >
-      <span>{$dirty ? $t("common.dirty") : $t("common.saved")}</span>
-      <span
-        class="h-2 w-2 flex-none rounded-full transition-colors duration-200"
-        style:background={$dirty ? "var(--ui-warn)" : "var(--ui-ok)"}
-      ></span>
     </div>
   </div>
   <!-- 右侧：字数统计 + 解析状态指示器（固定宽度，统计右侧） -->

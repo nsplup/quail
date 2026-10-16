@@ -28,7 +28,7 @@ import { markdown } from "@codemirror/lang-markdown";
 import { syntaxHighlighting, HighlightStyle, bracketMatching, indentUnit } from "@codemirror/language";
 import { tags } from "@lezer/highlight";
 import type { Command } from "@codemirror/view";
-import { createModernSearchPanel, searchPanelModF } from "./searchPanel";
+import { createModernSearchPanel, searchPanelModF, openSearchPanelExternal } from "./searchPanel";
 import { dirty$, docState$, edited$, setImeComposing } from "../stores";
 import { get } from "svelte/store";
 
@@ -62,6 +62,9 @@ export interface EditorApi {
   setPhrases(lang: string): void;
   /** 字号变化后请求重新测量布局（CSS 变量变化不会自动触发 CM 测量） */
   requestMeasure(): void;
+  /** 全局 Ctrl+F 入口（CM6 以外触发）：只打开查找面板，不把选区传入关键词框；
+      面板已开时仅聚焦（选区拉取只保留给 CM6 内的重复 Mod-f） */
+  openSearch(): void;
   /** 记录干净文档引用（初始化/保存成功后调用） */
   markClean(): void;
 }
@@ -370,6 +373,9 @@ export function createEditorApi(
     },
     requestMeasure() {
       view.requestMeasure();
+    },
+    openSearch() {
+      openSearchPanelExternal(view);
     },
     /** 记录干净文档引用（初始化/保存成功后调用），并同步脏状态 */
     markClean() {

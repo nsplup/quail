@@ -17,8 +17,30 @@ import {
   replaceNext,
   replaceAll,
   closeSearchPanel,
+  openSearchPanel,
 } from "@codemirror/search";
 import type { EditorView, Panel } from "@codemirror/view";
+
+/** 全局 Ctrl/F 入口（CM6 以外触发）的打开标记：本次 mount 不拉取编辑器选区 */
+let externalOpenPending = false;
+
+/**
+ * 外部（CM6 以外，全局 Ctrl+F）触发的打开入口：
+ * - 面板未开 → 只打开面板，不把选区带入关键词框（保留既有查询词）；
+ * - 面板已开 → 仅聚焦关键词框。CM6 内的「重复 Mod-f 拉取选区」行为
+ *   （searchPanelModF / __spPull）不在 CM6 以外的区域触发。
+ */
+export function openSearchPanelExternal(view: EditorView): void {
+  const panel = view.dom.querySelector<HTMLElement & { __spFocus?: () => void }>(
+    ".cm-search-panel"
+  );
+  if (panel?.__spFocus) {
+    panel.__spFocus();
+    return;
+  }
+  externalOpenPending = true;
+  openSearchPanel(view);
+}
 
 function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -246,7 +268,7 @@ export function createModernSearchPanel(view: EditorView): Panel {
     dom,
     top: true,
     mount() {
-      // 面板已开时再次按 Ctrl+F：从当前选区拉取内容同步给关键词输入框
+      // 面板已开时再次按 Ctrl+F（CM6 内）：从当前选区拉取内容同步给关键词输入框
       (dom as HTMLElement & { __spPull?: () => void }).__spPull = () => {
         const sel = view.state.selection.main;
         const text = sel.empty ? "" : view.state.doc.sliceString(sel.from, sel.to);
@@ -257,16 +279,25 @@ export function createModernSearchPanel(view: EditorView): Panel {
         input.focus();
         input.select();
       };
+      // 全局 Ctrl+F（CM6 以外）的已开兜底：仅聚焦，不拉取选区
+      (dom as HTMLElement & { __spFocus?: () => void }).__spFocus = () => {
+        input.focus();
+        input.select();
+      };
       caseBtn.classList.toggle("on", globalCaseSensitive);
       regexBtn.classList.toggle("on", globalRegexp);
       applyI18n();
-      // 打开时带入当前选中文本（单行才作为搜索词）。
+      // 打开时带入当前选中文本（单行才作为搜索词）；经 openSearchPanelExternal
+      // 打开（全局 Ctrl+F）时不带入选区，只保留既有查询词。
       // 注意：mount 处于 CM 更新流程内，禁止同步 dispatch（会中断面板 DOM 插入），
       // 因此 query 的写入延后到微任务。
+      const external = externalOpenPending;
+      externalOpenPending = false;
       const sel = view.state.selection.main;
       const selText = sel.empty ? "" : view.state.doc.sliceString(sel.from, sel.to);
       const existing = getSearchQuery(view.state)?.search ?? "";
-      const initial = existing || (selText && !selText.includes("\n") ? selText : "");
+      const initial =
+        existing || (!external && selText && !selText.includes("\n") ? selText : "");
       if (initial) {
         input.value = initial;
         queueMicrotask(() => {
