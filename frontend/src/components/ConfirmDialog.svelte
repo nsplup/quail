@@ -12,6 +12,8 @@
   import { t } from "../lib/i18n.svelte";
   import Icon from "./Icon.svelte";
 
+  let pressedOnOverlay = false;
+
   function answer(v: ConfirmResult): void {
     const cur = get(confirm$);
     cur?.resolve(v);
@@ -38,12 +40,18 @@
   <div
     class="fixed inset-0 z-[70] flex items-center justify-center bg-black/45 p-4"
     role="presentation"
-    onclick={(e) => {
-      if (e.target === e.currentTarget) answer("cancel");
+    onpointerdown={(e) => {
+      pressedOnOverlay = e.target === e.currentTarget;
+    }}
+    onpointerup={(e) => {
+      if (pressedOnOverlay && e.target === e.currentTarget) answer("cancel");
+      pressedOnOverlay = false;
     }}
   >
     <div class="qd-box w-full max-w-sm rounded-xl border p-4 shadow-2xl">
-      <p class="qd-msg mb-4 whitespace-pre-line text-sm leading-relaxed">{cur.msg}</p>
+      <p class="qd-msg mb-4 whitespace-pre-line text-sm leading-relaxed">
+        {cur.msg}
+      </p>
       <div class="flex justify-end gap-2">
         {#if cur.mode === "dirty"}
           <!-- 保存：先落盘当前文档，再继续被拦截的操作 -->
@@ -63,7 +71,9 @@
             <span>{$t("confirm.saveStill")}</span>
           </button>
         {:else}
-          <button class="pill" onclick={() => answer("ok")}>{$t("confirm.ok")}</button>
+          <button class="pill" onclick={() => answer("ok")}
+            >{$t("confirm.ok")}</button
+          >
         {/if}
         <!-- 取消：默认按钮（强调色），中止被拦截的操作 -->
         <button class="pill qd-btn qd-primary" onclick={() => answer("cancel")}>

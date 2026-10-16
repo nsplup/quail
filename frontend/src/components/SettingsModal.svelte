@@ -31,6 +31,8 @@
     DefaultLayout,
   } from "../lib/types";
 
+  let pressedOnOverlay = false;
+
   /* ---------- 主题：一维卡片（明暗两组，组内按主题名排序） ---------- */
   const themeList = [...THEMES].sort((a, b) => {
     if (a.dark !== b.dark) return a.dark ? 1 : -1;
@@ -148,7 +150,14 @@
     aria-modal="true"
     aria-label={$t("settings.title")}
     tabindex="-1"
-    onclick={(e) => e.target === e.currentTarget && settingsOpen.set(false)}
+    onpointerdown={(e) => {
+      pressedOnOverlay = e.target === e.currentTarget;
+    }}
+    onpointerup={(e) => {
+      if (pressedOnOverlay && e.target === e.currentTarget)
+        settingsOpen.set(false);
+      pressedOnOverlay = false;
+    }}
   >
     <div
       class="w-[440px] max-w-[calc(100vw-48px)] overflow-hidden rounded-2xl border border-line bg-soft py-5 shadow-2xl"
