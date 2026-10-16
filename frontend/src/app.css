@@ -57,7 +57,7 @@
     position: relative;
     flex: 0 0 1px;
     background: var(--ui-border);
-    cursor: col-resize;
+    cursor: ew-resize;
     z-index: 10;
     transition: background 0.15s;
   }
