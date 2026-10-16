@@ -143,8 +143,7 @@
 {#if $settingsOpen}
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <div
-    class="fixed inset-0 z-50 grid place-items-center"
-    style="background-color: rgba(0, 0, 0, 0.45);"
+    class="fixed inset-0 z-50 grid place-items-center bg-black/45"
     role="dialog"
     aria-modal="true"
     aria-label={$t("settings.title")}
