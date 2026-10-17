@@ -8,6 +8,7 @@
 
 import { AppService, FileService, ConfigService } from "@bindings";
 import { Events, Browser } from "@wailsio/runtime";
+import { withDialogMask } from "./confirm";
 
 const {
   Ready,
@@ -141,9 +142,11 @@ export async function startupDoc(): Promise<QuailDocState | null> {
   return (await StartupDoc()) as unknown as QuailDocState | null;
 }
 
-/** 弹系统打开对话框，仅返回所选路径（取消返回 null） */
+/** 弹系统打开对话框，仅返回所选路径（取消返回 null）。
+ * 弹窗期间显示空白遮罩（只有遮罩无面板，不可点击关闭），
+ * 等待弹窗得到结果后遮罩关闭。 */
 export async function pickOpenPath(): Promise<string | null> {
-  const path = await PickOpen();
+  const path = await withDialogMask<string>(() => PickOpen());
   return path || null;
 }
 
@@ -165,9 +168,11 @@ export async function saveDocumentAs(path: string, content: string): Promise<Qua
   return (await SaveAs(path, content)) as unknown as QuailSaveResult;
 }
 
-/** 弹系统另存对话框并保存（取消返回 null；defaultName 由调用方按界面语言传入） */
+/** 弹系统另存对话框并保存（取消返回 null；defaultName 由调用方按界面语言传入）。
+ * 系统弹窗存续期间显示空白遮罩（只有遮罩无面板，不可点击关闭），
+ * 等待弹窗得到结果后遮罩关闭。 */
 export async function saveAsViaDialog(content: string, defaultName = "untitled.md"): Promise<QuailSaveResult | null> {
-  const path = await PickSave(defaultName);
+  const path = await withDialogMask<string>(() => PickSave(defaultName));
   if (!path) return null;
   return (await SaveAs(path, content)) as unknown as QuailSaveResult;
 }

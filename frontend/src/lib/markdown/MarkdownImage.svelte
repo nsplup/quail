@@ -90,7 +90,7 @@
   let errorCode = $state<ImgErrorCode>(cached?.code ?? "");
   /** 缓存命中 → 同步解码（见 img.decoding；重挂载首帧即有像素，不闪空白帧） */
   let decodeSync = $state(cached?.status === "loaded");
-  /** 刷新穿透参数（query 片段）：reload() 设置，src 变化时清零 */
+  /** 刷新穿透参数（query 片段）：doReload() 设置，src 变化时清零 */
   let bust = $state("");
   /**
    * 实际请求 URL：响应式派生自 props.src + 穿透参数。
@@ -118,18 +118,48 @@
     decodeSync = hit?.status === "loaded";
   });
 
-  /** 刷新：回占位态 + 缓存穿透参数重新请求（阻止冒泡——块级图片可能在 <a> 内）；
-   *  classifySeq++ 使进行中的过期复核失效（结果落地不回跳刚设置的 loading）。
+  /** 刷新：回占位态 + 缓存穿透参数重新请求。
    *  空链接直接返回：无请求可刷新，保持失败终态（不发任何请求） */
-  function reload(ev: MouseEvent): void {
-    ev.stopPropagation();
-    ev.preventDefault();
+  function doReload(): void {
     if (emptySrc) return;
     classifySeq++;
     status = "loading";
     errorCode = "";
     bust = bustParams(src);
   }
+
+  /**
+   * 刷新按钮原生点击监听（角标 + 占位符刷新链接各一）。
+   *
+   * 不用 Svelte 的 onclick：Svelte 5 的 click 是应用根节点委托，事件先冒泡
+   * 过预览面板滚动根（链接点击委托监听所在处）才到达委托点——带链接的图片
+   * （块级图片可包在 <a> 内）点击刷新时会同时触发「打开链接 + 刷新」。
+   * 这里直接在按钮元素上挂原生监听，冒泡途中即 stopPropagation +
+   * preventDefault：点击刷新始终只触发刷新动作；点击占位符/图片的非刷新
+   * 部分才会触发链接（链接行为由预览面板委托处理）。
+   */
+  let cornerBtn = $state<HTMLButtonElement | null>(null);
+  let linkBtn = $state<HTMLButtonElement | null>(null);
+
+  function nativeReloadHandler(ev: MouseEvent): void {
+    ev.stopPropagation();
+    ev.preventDefault();
+    doReload();
+  }
+
+  $effect(() => {
+    const btn = cornerBtn;
+    if (!btn) return;
+    btn.addEventListener("click", nativeReloadHandler);
+    return () => btn.removeEventListener("click", nativeReloadHandler);
+  });
+
+  $effect(() => {
+    const btn = linkBtn;
+    if (!btn) return;
+    btn.addEventListener("click", nativeReloadHandler);
+    return () => btn.removeEventListener("click", nativeReloadHandler);
+  });
 
   /**
    * 依赖 docState.dir：目录变化（切换不同目录下的文档）时对本图执行刷新
@@ -215,7 +245,7 @@
     <button
       class="md-img-reload-corner"
       type="button"
-      onclick={reload}
+      bind:this={cornerBtn}
       aria-label={$t("preview.imageReload")}
       title={$t("preview.imageReload")}
     >
@@ -403,9 +433,10 @@
         {:else}
           {$t("preview.imageFailed")}
         {/if}
-        <!-- 刷新链接仅失败态显示：加载中不可刷新 -->
+        <!-- 刷新链接仅失败态显示：加载中不可刷新。
+             原生监听（见脚本注释）：点击刷新只触发刷新，不触发外层链接 -->
         {#if status !== "loading"}
-          <button class="md-img-reload-link" type="button" onclick={reload}>
+          <button class="md-img-reload-link" type="button" bind:this={linkBtn}>
             {$t("preview.imageReload")}
           </button>
         {/if}

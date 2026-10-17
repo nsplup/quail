@@ -9,6 +9,7 @@
   import Toast from "./components/Toast.svelte";
   import ConfirmDialog from "./components/ConfirmDialog.svelte";
   import Banner from "./components/Banner.svelte";
+  import { dialogMask$ as dialogMask } from "./lib/confirm";
   import {
     saveDocument,
     confirmQuit,
@@ -155,12 +156,16 @@
   $effect(() => {
     const onKey = (e: KeyboardEvent) => {
       const settingsOpenNow = get(settingsOpen);
-      const overlayOpen = settingsOpenNow || get(confirm$) !== null;
+      // 系统弹窗空白遮罩打开期间（Ctrl+O / Ctrl+Shift+S 等系统弹窗存续）
+      // 与设置面板 / confirm 弹窗同等对待：阻断所有界面快捷键
+      const dialogMaskOn = get(dialogMask);
+      const overlayOpen = settingsOpenNow || get(confirm$) !== null || dialogMaskOn;
 
-      /* ---- 遮罩守卫：设置面板 / confirm 弹窗打开期间 ---- */
+      /* ---- 遮罩守卫：设置面板 / confirm 弹窗 / 系统弹窗遮罩打开期间 ---- */
       if (overlayOpen) {
-        // Escape：沿用原设置面板逻辑（confirm 弹窗的 Esc 由其自身处理）
-        if (e.key === "Escape") {
+        // Escape：沿用原设置面板逻辑（confirm 弹窗的 Esc 由其自身处理；
+        // 系统弹窗遮罩的 Esc 交给系统弹窗自身，不关闭遮罩）
+        if (e.key === "Escape" && !dialogMaskOn) {
           // 二级页面先返回一级页面，再关闭设置面板
           if (settingsOpenNow && get(settingsSubPage)) {
             settingsSubPage.set(null);

@@ -24,6 +24,27 @@ interface ConfirmState {
 
 export const confirm$ = writable<ConfirmState | null>(null);
 
+/**
+ * 系统弹窗专用空白 confirm 状态：只有遮罩没有面板。
+ *
+ * 所有会调用系统弹窗的行为（Ctrl+O 打开、Ctrl+Shift+S 另存为等）在弹窗
+ * 期间置位：遮罩盖住界面，无法通过点击关闭，只能等待系统弹窗得到结果
+ * 后由 withDialogMask 在 finally 中关闭。用途：
+ * - 阻断弹窗期间对界面的进一步交互（避免叠加操作）；
+ * - 给用户「正在等待系统弹窗」的视觉反馈。
+ */
+export const dialogMask$ = writable<boolean>(false);
+
+/** 在系统弹窗存续期间显示空白遮罩（无面板、不可点击关闭），返回值透传 */
+export async function withDialogMask<T>(fn: () => Promise<T>): Promise<T> {
+  dialogMask$.set(true);
+  try {
+    return await fn();
+  } finally {
+    dialogMask$.set(false);
+  }
+}
+
 /** 弹出确认框：resolve("save")=保存后继续 / "discard"|"ok"=直接继续 / "cancel"=取消 */
 export function confirmDialog(
   msg: string,

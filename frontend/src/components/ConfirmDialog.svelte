@@ -11,7 +11,11 @@
    *   Enter / Tab 也不会进入编辑器 keymap。 */
   import { untrack } from "svelte";
   import { get } from "svelte/store";
-  import { confirm$, type ConfirmResult } from "../lib/confirm";
+  import {
+    confirm$,
+    dialogMask$ as dialogMaskStore,
+    type ConfirmResult,
+  } from "../lib/confirm";
   import { t } from "../lib/i18n.svelte";
   import Icon from "./Icon.svelte";
 
@@ -28,6 +32,16 @@
 
   // store 自动订阅在 runes 模式下仍受支持，$derived 会追踪其变化
   let cur = $derived($confirm$);
+  let dialogMask = $derived($dialogMaskStore);
+
+  /** 面板根元素：出现时把焦点交给面板本身（tabindex="-1" 仅允许程序化聚焦，
+   *  不给按钮；键盘交互由 window 捕获监听统一处理，面板持有焦点不影响） */
+  let boxEl = $state<HTMLDivElement | null>(null);
+
+  // confirm 面板出现时自动获得焦点（焦点给面板而非按钮）
+  $effect(() => {
+    if (cur) boxEl?.click();
+  });
 
   let buttons = $derived.by((): Btn[] => {
     const c = cur;
@@ -108,6 +122,13 @@
 
 <svelte:window onkeydowncapture={onKeydown} />
 
+{#if dialogMask}
+  <!-- 系统弹窗专用空白 confirm：只有遮罩没有面板。不绑定任何点击处理
+       （无法通过点击关闭），仅在系统弹窗得到结果后由 withDialogMask
+       关闭；期间阻断对界面的进一步交互。 -->
+  <div class="fixed inset-0 z-[70] bg-black/45" aria-hidden="true"></div>
+{/if}
+
 {#if cur}
   <div
     class="fixed inset-0 z-[70] flex items-center justify-center bg-black/45 p-4"
@@ -120,7 +141,11 @@
       pressedOnOverlay = false;
     }}
   >
-    <div class="qd-box w-full max-w-sm rounded-xl border p-4 shadow-2xl">
+    <div
+      class="qd-box w-full max-w-sm rounded-xl border p-4 shadow-2xl"
+      tabindex="-1"
+      bind:this={boxEl}
+    >
       <p class="qd-msg mb-4 whitespace-pre-line text-sm leading-relaxed">
         {cur.msg}
       </p>
