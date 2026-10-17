@@ -30,6 +30,7 @@ import { createParseClient } from "./worker/parse-client";
 import { t, locale, setLang } from "./i18n.svelte";
 import { kvGet, kvSet, onConfigReplay, initSettings } from "./settings";
 import { onBackendEvent, openDocument, ready as bridgeReady, saveAsViaDialog, startupDoc, type QuailDocState } from "./bridge";
+import { splitSavePath, isValidMode } from "./docpath";
 import { banner$ } from "./banner";
 import { resetHighlightWorker } from "./highlight/hl-client";
 
@@ -503,10 +504,13 @@ export async function saveFileAs(): Promise<void> {
   // 对话框默认文件名跟随界面语言（后端不做 i18n）
   const res = await saveAsViaDialog(get(doc$), `${get(t)("doc.untitled")}.md`);
   if (res?.ok) {
+    // dir/name 优先用后端按平台规范填充的字段（Windows 反斜杠路径由
+    // filepath 解析）；后端字段缺失时前端兜底按 / 与 \ 双分隔符切分
+    const parsed = splitSavePath(res.path);
     docState$.set({
       path: res.path,
-      dir: res.path.slice(0, res.path.lastIndexOf("/")) || res.path,
-      name: res.path.split("/").pop() ?? res.path,
+      dir: res.dir || parsed.dir,
+      name: res.name || parsed.name,
       content: get(doc$),
       encoding: "utf-8",
       size: 0,
@@ -602,8 +606,9 @@ function subscribeFileEvents(): void {
 /** 后端配置快照 → 各 store（boot 与 config:changed 重放共用） */
 export function applyBackendConfig(snap: Record<string, unknown>): void {
   const str = (k: string): string | undefined => (snap[k] == null ? undefined : String(snap[k]));
+  // 校验后再回放：旧配置文件可能残留非法值
   const m = str("mode");
-  if (m) mode$.set(m as Mode);
+  if (isValidMode(m)) mode$.set(m);
   const dl = str("defaultLayout");
   // 校验后再回放：旧配置文件可能残留非法值
   if (dl === "memory" || dl === "source" || dl === "split" || dl === "preview") {

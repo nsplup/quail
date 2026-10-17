@@ -45,6 +45,10 @@ type SaveResult struct {
         Ok       bool   `json:"ok"`
         Conflict bool   `json:"conflict"` // 磁盘内容已被外部修改
         Path     string `json:"path"`
+        // Dir / Name 另存成功时由后端按平台规范填充（Windows 反斜杠路径的
+        // 目录/文件名解析必须用 filepath，前端只做 / 切分会失真）。
+        Dir  string `json:"dir,omitempty"`
+        Name string `json:"name,omitempty"`
         // ExternalModTime 冲突时磁盘文件当前的修改时间（unix 毫秒）
         ExternalModTime int64 `json:"externalModTime,omitempty"`
 }
@@ -53,6 +57,7 @@ type SaveResult struct {
 type docStatus struct {
         path      string
         encoding  string
+        bom       bool        // 磁盘原文件带 UTF-8 BOM（保存写回时补写，防 BOM 丢失失真）
         lastKnown string      // 最后一次与磁盘核对一致的 sha256（hex）
         guard     *writeGuard // 自身写入抑制登记簿（Save → watch 回环，写入令牌 + 内容哈希）
 }
@@ -63,6 +68,12 @@ type FileService struct {
         doc     *docStatus
         watcher *fsnotify.Watcher
         quit    chan struct{}
+        // fireTimer 当前文档 watch 的防抖定时器（f.mu 保护）：stopWatch 时一并
+        // 停止，防止换文档/关文档后旧定时器对新文档误发 file:changed/deleted。
+        fireTimer *time.Timer
+        // watchGen watch 会话代际：startWatch 递增，stopWatch 递增并使未决的
+        // fire 失效（双保险：定时器之外的迟到 fire 也按代际丢弃）。
+        watchGen uint64
 }
 
 // NewFileService 构造。
@@ -129,7 +140,7 @@ func (f *FileService) Open(path string) (*DocState, error) {
         if !isTextFile(raw) {
                 return nil, nil // 非文本文件：静默丢弃
         }
-        content, enc, err := decodeToUTF8(raw)
+        content, enc, bom, err := decodeToUTF8(raw)
         if err != nil {
                 return nil, err
         }
@@ -144,6 +155,7 @@ func (f *FileService) Open(path string) (*DocState, error) {
         f.doc = &docStatus{
                 path:      abs,
                 encoding:  enc,
+                bom:       bom,
                 lastKnown: sha256Hex(raw),
                 guard:     newWriteGuard(),
         }
@@ -155,8 +167,10 @@ func (f *FileService) Open(path string) (*DocState, error) {
                 Name:     filepath.Base(abs),
                 Content:  content,
                 Encoding: enc,
-                Size:     info.Size(),
-                ModTime:  info.ModTime().UnixMilli(),
+                // Size 以转码后 UTF-8 内容字节数为准（磁盘原字节数与前端展示的
+                // 内容不一致，按原 size 显示会失真）
+                Size:    int64(len(content)),
+                ModTime: info.ModTime().UnixMilli(),
         }
         return st, nil
 }
@@ -176,12 +190,12 @@ func (f *FileService) Save(content string, force bool) (*SaveResult, error) {
         if force {
                 return f.writeThrough(content)
         }
-        return f.atomicWrite(f.doc.path, content, f.doc.encoding)
+        return f.atomicWrite(f.doc.path, content, f.doc.encoding, f.doc.bom)
 }
 
 // writeThrough 跳过冲突检测直接写盘（用户已在前端确认覆盖）。
 func (f *FileService) writeThrough(content string) (*SaveResult, error) {
-        raw, err := encodeFromUTF8(content, f.doc.encoding)
+        raw, err := encodeForWrite(content, f.doc.encoding, f.doc.bom)
         if err != nil {
                 return nil, fmt.Errorf("保存失败: %w", err)
         }
@@ -197,6 +211,19 @@ func (f *FileService) writeThrough(content string) (*SaveResult, error) {
         return &SaveResult{Ok: true, Path: f.doc.path}, nil
 }
 
+// encodeForWrite 编码写回字节流（含 BOM 补写）：utf-8 且原文件带 BOM 时
+// 在头部补 EF BB BF，保证 BOM 往返不丢失（文件失真防护）。
+func encodeForWrite(content, enc string, bom bool) ([]byte, error) {
+        raw, err := encodeFromUTF8(content, enc)
+        if err != nil {
+                return nil, err
+        }
+        if bom && enc == "utf-8" {
+                raw = append([]byte{0xEF, 0xBB, 0xBF}, raw...)
+        }
+        return raw, nil
+}
+
 // SaveAs 另存为新路径，并迁移监听与持有状态。
 func (f *FileService) SaveAs(path, content string) (*SaveResult, error) {
         abs, err := filepath.Abs(path)
@@ -204,12 +231,22 @@ func (f *FileService) SaveAs(path, content string) (*SaveResult, error) {
                 return nil, err
         }
         // 另存不受外部冲突检测约束（新位置没有"上次已知"）
-        // 另存统一以 UTF-8 落盘（新位置无历史编码包袱）。
-        raw := []byte(content)
+        // 另存统一以 UTF-8 落盘（新位置无历史编码包袱）；
+        // BOM 语义跟随源文件（原文件带 BOM 则新位置同样带 BOM，往返不失真）。
+        bom := false
+        f.mu.Lock()
+        if f.doc != nil {
+                bom = f.doc.bom
+        }
+        f.mu.Unlock()
+        raw, err := encodeForWrite(content, "utf-8", bom)
+        if err != nil {
+                return nil, err
+        }
         f.mu.Lock()
         defer f.mu.Unlock()
         f.stopWatchLocked()
-        doc := &docStatus{path: abs, encoding: "utf-8", lastKnown: sha256Hex(raw), guard: newWriteGuard()}
+        doc := &docStatus{path: abs, encoding: "utf-8", bom: bom, lastKnown: sha256Hex(raw), guard: newWriteGuard()}
         // 另存的 rename 同样会触发事件：登记写入令牌后再落盘
         doc.guard.begin(newWriteToken(), sha256Hex(raw))
         if err := writeFileAtomic(abs, raw, 0o644); err != nil {
@@ -217,7 +254,7 @@ func (f *FileService) SaveAs(path, content string) (*SaveResult, error) {
         }
         f.doc = doc
         _ = f.startWatchLocked(filepath.Dir(abs), filepath.Base(abs)) // 监听失败降级
-        return &SaveResult{Ok: true, Path: abs}, nil
+        return &SaveResult{Ok: true, Path: abs, Dir: filepath.Dir(abs), Name: filepath.Base(abs)}, nil
 }
 
 // PickOpen 弹出系统"打开文件"对话框，返回所选路径（取消返回空串）。
@@ -271,46 +308,67 @@ func (f *FileService) startWatchLocked(dir, base string) error {
         }
         f.watcher = w
         f.quit = make(chan struct{})
+        f.watchGen++ // 开启新会话：使上一会话可能未决的 fire 全部失效
+        gen := f.watchGen
+        watchedPath := filepath.Join(dir, base)
 
         go func() {
                 // 防抖：fsnotify 常在一次写盘里连发多个事件，300ms 窗口合并
-                var (
-                        fireTimer *time.Timer
-                        deleted   bool
-                )
+                var deleted bool
                 fire := func() {
+                        // 代际与目标校验：定时器未决期间发生 Open/SaveAs/CloseDoc
+                        // （换文档/关文档）时，本 fire 已过期，直接丢弃——否则会把
+                        // 旧文档的变动误报到新文档上（假 file:changed/deleted）
                         f.mu.Lock()
                         doc := f.doc
-                        path := ""
-                        if doc != nil {
-                                path = doc.path
-                        }
+                        stale := f.watchGen != gen || doc == nil || doc.path != watchedPath
                         f.mu.Unlock()
-                        if doc == nil {
+                        if stale {
                                 return
                         }
                         if deleted {
-                                doc.lastKnown = "" // 文件没了，清指纹
-                                emit(EventFileDeleted, FileEventData{Path: path})
+                                // 文件没了，清指纹（必须持锁：与 Save 的冲突检测并发）
+                                f.mu.Lock()
+                                if f.watchGen == gen && f.doc != nil && f.doc.path == watchedPath {
+                                        f.doc.lastKnown = ""
+                                }
+                                f.mu.Unlock()
+                                emit(EventFileDeleted, FileEventData{Path: watchedPath})
                                 return
                         }
-                        raw, err := os.ReadFile(path)
+                        raw, err := os.ReadFile(watchedPath)
                         if err != nil {
-                                emit(EventFileDeleted, FileEventData{Path: path})
+                                emit(EventFileDeleted, FileEventData{Path: watchedPath})
                                 return
                         }
                         // 磁盘内容哈希命中登记写入 → 自身写入回环，抑制广播
                         if doc.guard.claim(sha256Hex(raw)) {
                                 return
                         }
-                        content, _, err := decodeToUTF8(raw)
+                        content, _, _, err := decodeToUTF8(raw)
                         if err != nil {
                                 return
                         }
                         f.mu.Lock()
-                        doc.lastKnown = sha256Hex(raw) // 外部内容成为新基线
+                        // 新基线 = 磁盘实际字节（代际/路径再校验，防 stop 间隙写入）
+                        if f.watchGen == gen && f.doc != nil && f.doc.path == watchedPath {
+                                f.doc.lastKnown = sha256Hex(raw)
+                        }
                         f.mu.Unlock()
-                        emit(EventFileChanged, FileEventData{Path: path, Content: content})
+                        emit(EventFileChanged, FileEventData{Path: watchedPath, Content: content})
+                }
+                // 防抖调度：定时器登记到 f.fireTimer（f.mu 保护），stopWatchLocked
+                // 可同步停止，杜绝换文档后迟到 fire；会话失效后不再登记新定时器
+                schedule := func(delay time.Duration) {
+                        f.mu.Lock()
+                        defer f.mu.Unlock()
+                        if f.watchGen != gen {
+                                return
+                        }
+                        if f.fireTimer != nil {
+                                f.fireTimer.Stop()
+                        }
+                        f.fireTimer = time.AfterFunc(delay, fire)
                 }
                 for {
                         select {
@@ -325,17 +383,11 @@ func (f *FileService) startWatchLocked(dir, base string) error {
                                 }
                                 if ev.Has(fsnotify.Remove) || ev.Has(fsnotify.Rename) {
                                         deleted = true
-                                        if fireTimer != nil {
-                                                fireTimer.Stop()
-                                        }
-                                        fireTimer = time.AfterFunc(200*time.Millisecond, fire)
+                                        schedule(200 * time.Millisecond)
                                         continue
                                 }
                                 deleted = false
-                                if fireTimer != nil {
-                                        fireTimer.Stop()
-                                }
-                                fireTimer = time.AfterFunc(300*time.Millisecond, fire)
+                                schedule(300 * time.Millisecond)
                         case <-w.Errors:
                         }
                 }
@@ -352,6 +404,11 @@ func (f *FileService) stopWatch() {
 
 // stopWatchLocked 必须持 f.mu。
 func (f *FileService) stopWatchLocked() {
+        f.watchGen++ // 会话失效：未决 fire 一律丢弃
+        if f.fireTimer != nil {
+                f.fireTimer.Stop()
+                f.fireTimer = nil
+        }
         if f.quit != nil {
                 close(f.quit)
                 f.quit = nil
@@ -363,8 +420,8 @@ func (f *FileService) stopWatchLocked() {
 }
 
 // atomicWrite 带冲突检测的原子写：sha 对比 → temp+rename。
-func (f *FileService) atomicWrite(path, content, enc string) (*SaveResult, error) {
-        raw, err := encodeFromUTF8(content, enc)
+func (f *FileService) atomicWrite(path, content, enc string, bom bool) (*SaveResult, error) {
+        raw, err := encodeForWrite(content, enc, bom)
         if err != nil {
                 return nil, fmt.Errorf("编码转换失败: %w", err)
         }

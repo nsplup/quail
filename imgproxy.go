@@ -14,6 +14,7 @@ package main
 // 缓存 os.UserCacheDir()/quail/（key = sha256(url)），原子写入，命中直回。
 
 import (
+        "bytes"
         "crypto/sha256"
         "encoding/hex"
         "encoding/json"
@@ -24,6 +25,7 @@ import (
         "net/url"
         "os"
         "path/filepath"
+        "runtime"
         "strings"
         "time"
 
@@ -84,16 +86,16 @@ func serveLocal(w http.ResponseWriter, r *http.Request, fs *FileService) {
                 target = filepath.Clean(filepath.Join(docDir, raw))
         }
 
-        // 白名单：target 必须落在文档目录内（assets/ 子目录天然包含）；
-        // filepath.Clean 已消化相对段，这里再双重校验前缀与 .. 逃逸。
-        if strings.Contains(raw, "..") ||
-                (target != docDir && !strings.HasPrefix(target, docDir+string(filepath.Separator))) {
+        // 白名单：target 必须落在文档目录内（assets/ 子目录天然包含）。
+        // 用 filepath.Rel 做语义化包含判定：精确识别逃逸（../），同时不误杀
+        // 文件名本身含 ".." 的合法资源（如 my..photo.png）。
+        if !pathWithinDirOn(runtime.GOOS, docDir, target) {
                 writeProxyError(w, http.StatusForbidden, "access restricted")
                 return
         }
         // 软链接逃逸兜底：真实路径解析后仍须在白名单内
         if resolved, err := filepath.EvalSymlinks(target); err == nil && resolved != target {
-                if resolved != docDir && !strings.HasPrefix(resolved, docDir+string(filepath.Separator)) {
+                if !pathWithinDirOn(runtime.GOOS, docDir, resolved) {
                         writeProxyError(w, http.StatusForbidden, "access restricted")
                         return
                 }
@@ -132,11 +134,13 @@ func serveRemote(w http.ResponseWriter, r *http.Request) {
         }
 
         cacheDir := imgCacheDir()
-        cachePath := filepath.Join(cacheDir, "imgs", sha256HexStr(rawURL)+cacheExt(u))
+        // 缓存键 = sha256(url)（不带扩展名）：URL 扩展名与实际格式常不一致
+        // （无扩展名/伪扩展名），Content-Type 统一由内容魔数嗅探决定
+        cachePath := filepath.Join(cacheDir, "imgs", sha256HexStr(rawURL))
         // refresh=1（前端刷新按钮）：跳过缓存读取，强制重新下载并覆盖缓存
         if r.URL.Query().Get("refresh") != "1" {
                 if data, err := os.ReadFile(cachePath); err == nil {
-                        w.Header().Set("Content-Type", imageContentType(cachePath))
+                        w.Header().Set("Content-Type", sniffImageContentType(data))
                         w.Header().Set("Cache-Control", "max-age=86400")
                         _, _ = w.Write(data)
                         return
@@ -160,7 +164,7 @@ func serveRemote(w http.ResponseWriter, r *http.Request) {
                 }
                 return
         }
-        w.Header().Set("Content-Type", imageContentType(cachePath))
+        w.Header().Set("Content-Type", sniffImageContentType(v.([]byte)))
         w.Header().Set("Cache-Control", "max-age=86400")
         _, _ = w.Write(v.([]byte))
 }
@@ -216,27 +220,58 @@ func imgCacheDir() string {
         return filepath.Join(base, "quail")
 }
 
-// cacheExt 由 URL 猜缓存扩展名（serve 时据此回 Content-Type）。
-func cacheExt(u *url.URL) string {
+// pathWithinDirOn 判定 target 是否落在 dir 内（含 dir 本身）。
+// 用 filepath.Rel 做语义化包含判定：精确识别逃逸（../），不误杀文件名
+// 含 ".." 的合法资源。goos 参数便于单元测试：windows 与 darwin 的默认
+// 文件系统大小写不敏感，比较前折叠大小写与实际 FS 行为一致。
+func pathWithinDirOn(goos, dir, target string) bool {
+        if goos == "windows" || goos == "darwin" {
+                dir = strings.ToLower(dir)
+                target = strings.ToLower(target)
+        }
+        rel, err := filepath.Rel(dir, target)
+        if err != nil {
+                return false
+        }
+        return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+}
+
+// sniffImageContentType 按内容魔数判定图片 Content-Type。
+// 远程图片的 URL 扩展名与实际格式常不一致（无扩展名/伪扩展名），
+// 按扩展名回 Content-Type 会错标（如 SVG 被标成 image/jpeg 拒渲染）。
+func sniffImageContentType(data []byte) string {
         switch {
-        case strings.HasSuffix(u.Path, ".png"):
-                return ".png"
-        case strings.HasSuffix(u.Path, ".gif"):
-                return ".gif"
-        case strings.HasSuffix(u.Path, ".webp"):
-                return ".webp"
-        case strings.HasSuffix(u.Path, ".svg"):
-                return ".svg"
-        case strings.HasSuffix(u.Path, ".bmp"):
-                return ".bmp"
-        case strings.HasSuffix(u.Path, ".ico"):
-                return ".ico"
+        case len(data) >= 4 && data[0] == 0x89 && data[1] == 'P' && data[2] == 'N' && data[3] == 'G':
+                return "image/png"
+        case len(data) >= 6 && (string(data[:6]) == "GIF87a" || string(data[:6]) == "GIF89a"):
+                return "image/gif"
+        case len(data) >= 12 && string(data[:4]) == "RIFF" && string(data[8:12]) == "WEBP":
+                return "image/webp"
+        case len(data) >= 2 && data[0] == 'B' && data[1] == 'M':
+                return "image/bmp"
+        case len(data) >= 4 && data[0] == 0x00 && data[1] == 0x00 && data[2] == 0x01 && data[3] == 0x00:
+                return "image/x-icon"
+        case len(data) >= 12 && string(data[4:8]) == "ftyp" && (string(data[8:12]) == "avif" || string(data[8:12]) == "avis"):
+                return "image/avif"
+        case isSVGData(data):
+                return "image/svg+xml"
+        case len(data) >= 3 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF:
+                return "image/jpeg"
         default:
-                return ".jpg" // jpg/jpeg/未知
+                return "image/jpeg" // 兜底（jpeg 魔数较宽松，x-doom 等罕见格式不细分）
         }
 }
 
-// imageContentType 按扩展名给 Content-Type。
+// isSVGData 宽容识别 SVG 文本（允许 BOM / 前置空白 / <?xml 头）。
+func isSVGData(data []byte) bool {
+        s := bytes.TrimLeft(data, " \t\r\n")
+        if bytes.HasPrefix(s, []byte{0xEF, 0xBB, 0xBF}) {
+                s = bytes.TrimLeft(s[3:], " \t\r\n")
+        }
+        return bytes.HasPrefix(s, []byte("<svg")) || bytes.HasPrefix(s, []byte("<?xml"))
+}
+
+// imageContentType 按扩展名给 Content-Type（本地文档目录资源用）。
 func imageContentType(path string) string {
         switch strings.ToLower(filepath.Ext(path)) {
         case ".png":

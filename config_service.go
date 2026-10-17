@@ -61,6 +61,11 @@ type ConfigService struct {
         dir     string
         watcher *fsnotify.Watcher
         quit    chan struct{}
+        // fireTimer 防抖定时器（c.mu 保护）：stopWatch 时一并停止，
+        // 防止监听停止后迟到的 fire 触发读盘/广播
+        fireTimer *time.Timer
+        // watchGen watch 会话代际：startWatch/stopWatch 递增，使未决 fire 失效
+        watchGen uint64
         // guard 自身写入抑制登记簿（Save → watch 回环，写入令牌 + 内容哈希）
         guard *writeGuard
 }
@@ -90,6 +95,16 @@ func (c *ConfigService) ServiceStartup(context.Context, application.ServiceOptio
 func (c *ConfigService) ServiceShutdown() {
         c.mu.Lock()
         defer c.mu.Unlock()
+        c.stopWatchLocked()
+}
+
+// stopWatchLocked 停止监听并使未决 fire 失效。必须持 c.mu。
+func (c *ConfigService) stopWatchLocked() {
+        c.watchGen++
+        if c.fireTimer != nil {
+                c.fireTimer.Stop()
+                c.fireTimer = nil
+        }
         if c.quit != nil {
                 close(c.quit)
                 c.quit = nil
@@ -215,10 +230,18 @@ func (c *ConfigService) startWatchLocked() error {
         }
         c.watcher = w
         c.quit = make(chan struct{})
+        c.watchGen++ // 新会话：使上一会话可能未决的 fire 全部失效
+        gen := c.watchGen
 
         go func() {
-                var fireTimer *time.Timer
                 fire := func() {
+                        // 会话已失效（stopWatch 后迟到的定时器）：直接丢弃
+                        c.mu.Lock()
+                        if c.watchGen != gen {
+                                c.mu.Unlock()
+                                return
+                        }
+                        c.mu.Unlock()
                         raw, err := os.ReadFile(c.path())
                         if err != nil {
                                 return
@@ -230,9 +253,24 @@ func (c *ConfigService) startWatchLocked() error {
                         cfg := defaultConfig() // 损坏回退默认值（与 loadLocked 一致）
                         _ = json.Unmarshal(raw, &cfg)
                         c.mu.Lock()
+                        if c.watchGen != gen {
+                                c.mu.Unlock()
+                                return
+                        }
                         c.cfg = cfg // 以磁盘为准
                         c.mu.Unlock()
                         emit(EventConfigChanged, ConfigEventData{Config: cfg})
+                }
+                schedule := func(delay time.Duration) {
+                        c.mu.Lock()
+                        defer c.mu.Unlock()
+                        if c.watchGen != gen {
+                                return
+                        }
+                        if c.fireTimer != nil {
+                                c.fireTimer.Stop()
+                        }
+                        c.fireTimer = time.AfterFunc(delay, fire)
                 }
                 for {
                         select {
@@ -248,10 +286,7 @@ func (c *ConfigService) startWatchLocked() error {
                                 if ev.Has(fsnotify.Remove) || ev.Has(fsnotify.Rename) {
                                         continue // 删除/换名不广播，等待重新创建
                                 }
-                                if fireTimer != nil {
-                                        fireTimer.Stop()
-                                }
-                                fireTimer = time.AfterFunc(300*time.Millisecond, fire)
+                                schedule(300 * time.Millisecond)
                         case <-w.Errors:
                         }
                 }

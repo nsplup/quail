@@ -43,6 +43,9 @@ export interface QuailSaveResult {
   ok: boolean;
   conflict: boolean;
   path: string;
+  /** dir/name 另存成功时由后端按平台规范填充（Windows 反斜杠路径解析） */
+  dir?: string;
+  name?: string;
 }
 
 export interface QuailConfig {
