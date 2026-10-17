@@ -82,9 +82,42 @@ export async function requestClose(): Promise<void> {
   await RequestClose();
 }
 
-/** 外部链接打开：runtime 桥接 → Go 调用系统默认浏览器（与图片 /__imgproxy 同为后端转发模式） */
+/** 外部链接打开：仅放行合法的 http/https 链接交由后端转发（runtime 桥接 →
+ *  Go 调用系统默认浏览器，与图片 /__imgproxy 同为后端转发模式）。
+ *  其他协议（file: / javascript: / data: 等）一律不转发；可能合法但不携带
+ *  protocol 的链接（如 "example.com/a"、协议相对的 "//example.com/a"）按
+ *  https 补全后再次校验，仍非法则静默忽略，不调用后端。 */
 export async function openExternal(url: string): Promise<void> {
-  await Browser.OpenURL(url);
+  const target = normalizeExternalUrl(url);
+  if (!target) return;
+  await Browser.OpenURL(target);
+}
+
+/** 外链白名单校验与归一：
+ *  - 携带合法 http/https 协议且主机名非空 → 原样放行；
+ *  - 显式携带其他 scheme（file: / javascript: / mailto: / ftp: 等一律拒绝，
+ *    含 "http://" 这类缺主机名的残缺链接）→ 返回 null，不再补全；
+ *  - 未携带 protocol → 补全 https（协议相对 //host 同样归一到 https）后
+ *    复验，合法返回补全结果（转发的即校验通过的内容，不回传原始串）；
+ *  - 其余（空串 / 非法 URL / 无主机名）返回 null。 */
+function normalizeExternalUrl(raw: string): string | null {
+  const input = (raw ?? "").trim();
+  if (!input) return null;
+  if (isHttpUrl(input)) return input;
+  // 已显式携带 scheme：非 http/https（或主机名缺失）直接拒绝，不补全
+  if (/^[a-z][a-z0-9+.-]*:/i.test(input)) return null;
+  const candidate = input.startsWith("//") ? `https:${input}` : `https://${input}`;
+  return isHttpUrl(candidate) ? candidate : null;
+}
+
+/** 合法 http/https 判定：URL 可解析、协议为 http/https、主机名非空 */
+function isHttpUrl(value: string): boolean {
+  try {
+    const u = new URL(value);
+    return (u.protocol === "http:" || u.protocol === "https:") && u.hostname !== "";
+  } catch {
+    return false;
+  }
 }
 
 /** Ctrl+Q 退出：等同窗口关闭操作（无脏状态直接退出；脏状态走守卫 confirm） */

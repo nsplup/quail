@@ -11,6 +11,7 @@
     onchange,
     onsave,
     ontopline,
+    oncursorline,
     pct = null,
     lang,
   }: {
@@ -21,6 +22,8 @@
     onchange: (doc: string) => void;
     onsave: () => void;
     ontopline: (line: number) => void;
+    /** 光标行变化（选区移动/编辑，rAF 合并上报）：光标行同步用 */
+    oncursorline: (line: number) => void;
     pct?: number | null;
     /** 初始界面语言（CM6 phrases 用） */
     lang?: string;
@@ -38,6 +41,7 @@
         onchange: (doc) => onchange(doc),
         onsave: () => onsave(),
         ontopline: (line) => ontopline(line),
+        oncursorline: (line) => oncursorline(line),
       },
       initialIndent,
       lang ?? "en"

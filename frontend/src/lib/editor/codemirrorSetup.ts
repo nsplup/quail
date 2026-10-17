@@ -40,6 +40,9 @@ export interface EditorHandlers {
   onsave: () => void;
   /** 编辑器滚动：视口顶部对应源码行号（用于 编辑器→预览 同步） */
   ontopline: (line: number) => void;
+  /** 光标行变化（选区移动 / 编辑）：光标所在源码行号，rAF 合并上报
+   *  （用于 编辑器→预览 光标行同步，保障编辑行不被预览高块挤出视窗） */
+  oncursorline: (line: number) => void;
 }
 
 export interface EditorApi {
@@ -162,6 +165,9 @@ export function createEditorApi(
 ): EditorApi {
   let topLineRaf = 0;
   let programmaticUntil = 0;
+  /* 光标行上报：选区/文档更新后经 rAF 合并，同一帧内多次变化只报最终值 */
+  let cursorLineRaf = 0;
+  let pendingCursorState: EditorState | null = null;
 
   /* 缩进单位用 Compartment 动态重配置（设置切换 制表符/空格 时生效） */
   const indentCompartment = new Compartment();
@@ -232,6 +238,27 @@ export function createEditorApi(
             }
           }
         }),
+        /* 光标行上报（编辑器→预览 光标行同步的信号源）：
+           选区变化（点击/方向键）与编辑（光标头随输入前移）都会触发；
+           经 rAF 合并，连续输入只上报当帧最终光标行。setDoc（打开/外部
+           重载）触发的上报会把同步目标带回首行，与「新文档从顶部展示」
+           语义一致；程序性滚动（scrollToLine）不改变选区，不会误触发。 */
+        EditorView.updateListener.of((u) => {
+          if (!u.selectionSet && !u.docChanged) return;
+          pendingCursorState = u.state;
+          if (cursorLineRaf) return;
+          cursorLineRaf = requestAnimationFrame(() => {
+            cursorLineRaf = 0;
+            const st = pendingCursorState;
+            pendingCursorState = null;
+            if (!st) return;
+            try {
+              handlers.oncursorline(st.doc.lineAt(st.selection.main.head).number);
+            } catch {
+              /* ignore */
+            }
+          });
+        }),
         /* 输入法组合事件上报：compositionstart/end 经 setImeComposing 写入
            全局 imeComposing$，解析调度器在组合期间永不发起请求（组合中的
            临时文本不进预览，组合结束后重新起防抖统一解析最终内容）。
@@ -269,6 +296,7 @@ export function createEditorApi(
   return {
     destroy() {
       if (topLineRaf) cancelAnimationFrame(topLineRaf);
+      if (cursorLineRaf) cancelAnimationFrame(cursorLineRaf);
       view.scrollDOM.removeEventListener("scroll", onScroll);
       view.destroy();
     },

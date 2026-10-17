@@ -20,7 +20,7 @@
     closeWindow,
     setTitle,
   } from "./lib/bridge";
-  import { confirmDialog } from "./lib/confirm";
+  import { confirmDialog, confirm$ } from "./lib/confirm";
   import {
     mode$ as mode,
     theme$ as theme,
@@ -152,10 +152,40 @@
     void setTitle($guardDirty ? `* ${name}` : name);
   });
 
-  // 全局快捷键：Ctrl/Cmd+N 新实例、Ctrl/Cmd+O 新实例中打开、
-  // Ctrl/Cmd+Q 退出（等同窗口关闭，触发脏状态守卫）、Ctrl/Cmd+Shift+S 另存为
+  // 全局快捷键（合并原 window keydown 与 svelte:window 两处绑定声明）：
+  // Ctrl/Cmd+N 新实例、Ctrl/Cmd+O 新实例中打开、Ctrl/Cmd+Q 退出（等同窗口
+  // 关闭，触发脏状态守卫）、Ctrl/Cmd+Shift+S 另存为、Ctrl/Cmd+S 保存、
+  // Ctrl/Cmd+F 打开查找替换面板。
+  // 遮罩守卫：设置面板或 confirm 弹窗打开期间，以上文档/窗口级快捷键一律
+  // 不响应，防止弹窗操作期间误触底层动作；仅 Escape（关闭设置面板 /
+  // 返回一级页）与 Tab（拦截默认行为，防止焦点移出遮罩）在遮罩状态下
+  // 依旧生效。confirm 弹窗自身的 Esc/Tab/Enter 在其组件内于捕获阶段处理
+  // 并阻断传播，不会到达本监听器。
   $effect(() => {
     const onKey = (e: KeyboardEvent) => {
+      const settingsOpenNow = get(settingsOpen);
+      const overlayOpen = settingsOpenNow || get(confirm$) !== null;
+
+      /* ---- 遮罩守卫：设置面板 / confirm 弹窗打开期间 ---- */
+      if (overlayOpen) {
+        // Tab：拦截默认行为（焦点不移出遮罩、不落入底层编辑器/界面）
+        if (e.key === "Tab") {
+          e.preventDefault();
+          return;
+        }
+        // Escape：沿用原设置面板逻辑（confirm 弹窗的 Esc 由其自身处理）
+        if (e.key === "Escape") {
+          // 二级页面先返回一级页面，再关闭设置面板
+          if (settingsOpenNow && get(settingsSubPage)) {
+            settingsSubPage.set(null);
+            return;
+          }
+          if (settingsOpenNow) settingsOpen.set(false);
+        }
+        return;
+      }
+
+      /* ---- 常规状态：文档/窗口级快捷键 ---- */
       const mod = e.ctrlKey || e.metaKey;
       if (!mod) return;
       const k = e.key.toLowerCase();
@@ -171,6 +201,31 @@
       } else if (k === "s" && e.shiftKey) {
         e.preventDefault();
         void saveFileAs();
+      } else if (k === "s" && !e.altKey) {
+        // Ctrl/Cmd+S：全局保存兜底。CM6 聚焦时其 keymap（Mod-s）已处理并
+        // preventDefault，事件冒泡到 window 时 defaultPrevented 为 true，此处
+        // 跳过避免双重保存；非 CM6 聚焦状态（预览区 / 查找面板输入框 /
+        // 设置面板 / 无焦点）由此触发保存。
+        if (e.defaultPrevented) return;
+        e.preventDefault();
+        void save();
+        return;
+      } else if (k === "f" && !e.altKey) {
+        // Ctrl/Cmd+F：全局打开查找替换面板。CM6 聚焦时其 keymap（Mod-f）已
+        // 处理并 preventDefault（面板已开 → 拉取 CM6 选区；未开 → 带选区打开），
+        // 事件冒泡到 window 时 defaultPrevented 为 true，此处跳过；非 CM6
+        // 聚焦状态（预览区 / 无焦点）由此触发：只打开面板，不把
+        // CM6 以外的选区传入关键词框；面板已开时仅聚焦，同样不做选区拉取。
+        if (e.defaultPrevented) return;
+        e.preventDefault();
+        // 面板位于编辑区内（.cm-panels）：预览模式下编辑区 display:none，
+        // 先回双栏让面板可见（保留预览滚动位置），待布局生效后再打开
+        if (get(mode) === "preview") {
+          setMode("split");
+          requestAnimationFrame(() => get(editorApi)?.openSearch());
+          return;
+        }
+        get(editorApi)?.openSearch();
       }
     };
     window.addEventListener("keydown", onKey);
@@ -331,6 +386,38 @@
     previewProgrammaticUntil = performance.now() + 320;
   }
 
+  /* 编辑区光标行 → 预览区可见性同步（光标行同步）：
+     光标移动与编辑时（CM 选区/文档更新上报，rAF 合并）检查光标所在块
+     是否落在预览视窗内；被上方高块（典型场景：图片块加载后撑高，把正在
+     编辑的行的预览挤到视窗外）时按块内行进度插值滚回。光标块仍可见时
+     不干预，保留用户对预览的滚动主导权；回拉期间以 previewProgrammaticUntil
+     抑制预览→编辑器回写，防止回环。 */
+  function onEditorCursorLine(line: number): void {
+    if (performance.now() < previewProgrammaticUntil) return;
+    if (get(mode) !== "split") return;
+    const pv = $previewApi;
+    const el = pvScrollEl();
+    if (!pv || !el) return;
+    const bks = get(blocks);
+    if (bks.length === 0) return;
+    const b = indexOfLine(line);
+    const blk = bks[b];
+    if (!blk) return;
+    const off = pv.getItemOffset(b);
+    const size = Math.max(1, pv.getItemSize(b));
+    const top = pv.getScrollTop();
+    // 光标块与预览视窗有交集：视为可见，不干预
+    if (off + size > top && off < top + el.clientHeight) return;
+    // 光标块整体在视窗外：块内行进度插值滚回（与顶行同步同公式），
+    // 并同步大纲追踪目标
+    const rows = Math.max(1, blk.endLine - blk.startLine);
+    const frac = Math.min(1, Math.max(0, (line - blk.startLine) / rows));
+    outlineAutoTrack.set(true);
+    topIndex.set(b);
+    el.scrollTop = Math.max(0, off + frac * size - SYNC_OFFSET);
+    previewProgrammaticUntil = performance.now() + 320;
+  }
+
   /** 预览滚动容器（App 侧直接驱动像素同步） */
   function pvScrollEl(): HTMLElement | null {
     return document.querySelector<HTMLElement>(".preview-scroll");
@@ -439,47 +526,7 @@
   // splitPct：仅拖拽/双击重置使用的局部布局比例（不放全局 store）
   let splitPct = $state(50);
 
-  function onKeydown(e: KeyboardEvent): void {
-    // Ctrl/Cmd+S：全局保存兜底。CM6 聚焦时其 keymap（Mod-s）已处理并
-    // preventDefault，事件冒泡到 window 时 defaultPrevented 为 true，此处
-    // 跳过避免双重保存；非 CM6 聚焦状态（预览区 / 查找面板输入框 /
-    // 设置面板 / 无焦点）由此触发保存。
-    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "s") {
-      if (e.defaultPrevented) return;
-      e.preventDefault();
-      void save();
-      return;
-    }
-    // Ctrl/Cmd+F：全局打开查找替换面板。CM6 聚焦时其 keymap（Mod-f）已
-    // 处理并 preventDefault（面板已开 → 拉取 CM6 选区；未开 → 带选区打开），
-    // 事件冒泡到 window 时 defaultPrevented 为 true，此处跳过；非 CM6
-    // 聚焦状态（预览区 / 设置面板 / 无焦点）由此触发：只打开面板，不把
-    // CM6 以外的选区传入关键词框；面板已开时仅聚焦，同样不做选区拉取。
-    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "f") {
-      if (e.defaultPrevented) return;
-      e.preventDefault();
-      // 面板位于编辑区内（.cm-panels）：预览模式下编辑区 display:none，
-      // 先回双栏让面板可见（保留预览滚动位置），待布局生效后再打开
-      if (get(mode) === "preview") {
-        setMode("split");
-        requestAnimationFrame(() => get(editorApi)?.openSearch());
-        return;
-      }
-      get(editorApi)?.openSearch();
-      return;
-    }
-    if (e.key === "Escape") {
-      // 二级页面先返回一级页面，再关闭设置面板
-      if ($settingsOpen && $settingsSubPage) {
-        settingsSubPage.set(null);
-        return;
-      }
-      if ($settingsOpen) settingsOpen.set(false);
-    }
-  }
 </script>
-
-<svelte:window onkeydown={onKeydown} />
 
 <!-- 全窗口放置区（Wails File Drop）：data-file-drop-target 由 Wails 运行时识别，
      文件悬停时自动添加 file-drop-target-active 类（样式见 app.css） -->
@@ -517,6 +564,7 @@
           onchange={(v: string) => doc.set(v)}
           onsave={() => void save()}
           ontopline={onEditorTopLine}
+          oncursorline={onEditorCursorLine}
         />
 
         {#if $mode === "split"}
