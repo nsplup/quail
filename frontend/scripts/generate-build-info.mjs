@@ -2,8 +2,8 @@
  * 构建信息生成器（构建时自动执行，见 package.json 的 build / build:dev 脚本）。
  *
  * 输出（frontend/src/lib/generated/）：
- * - version.ts：构建日期（YYYYMMDD，构建机本地时区，主版本信息）+
- *   当前 commit hash 前 8 位（弱化的次版本信息，非 git 环境为 "unknown"）；
+ * - version.ts：UTC 构建时间（SemVer 兼容的 YYYY.MDD.HHMMSS）+ 显示用
+ *   ISO 风格时间戳 + 当前 commit 全长 hash（非 git 环境为 "unknown"）；
  * - frontend-deps.json：node_modules 内全部前端依赖（含传递依赖）的
  *   名称 / 版本 / 许可证标识 / 版权声明（自动从 LICENSE 类文件提取）。
  *
@@ -29,46 +29,68 @@ mkdirSync(outDir, { recursive: true });
 
 /* ---------------- 版本信息 ---------------- */
 
-/** 本地时区的 YYYYMMDD（非 git 环境下的兜底） */
-function localDateYYYYMMDD() {
-  const now = new Date();
-  return (
-    `${now.getFullYear()}` +
-    `${String(now.getMonth() + 1).padStart(2, "0")}` +
-    `${String(now.getDate()).padStart(2, "0")}`
-  );
+/**
+ * 用传入的时间戳转换为 UTC 时间字段生成 SemVer 兼容的版本号。
+ * - APP_VERSION：三段数字 `YYYY.MDD.HHMMSS`
+ */
+function makeVersion(date) {
+  const p = {
+    year: date.getUTCFullYear(),
+    month: date.getUTCMonth() + 1,
+    day: date.getUTCDate(),
+    hour: date.getUTCHours(),
+    minute: date.getUTCMinutes(),
+    second: date.getUTCSeconds(),
+  };
+  const pad = (n, w = 2) => String(n).padStart(w, "0");
+  const mdd = String(Number(`${p.month}${pad(p.day)}`));          // 1月7日 -> "107"
+  const hms = String(p.hour * 10000 + p.minute * 100 + p.second); // 00:00:00 -> "0"
+  return `${p.year}.${mdd}.${hms}`;
 }
 
 let commit = "unknown";
-let commitDate = localDateYYYYMMDD();
+let sourceDate = new Date(); // 非 git 环境兜底
+let sourceTime = sourceDate.toISOString(); // 非 git 环境兜底的时间戳
+
 try {
   commit =
-    execFileSync("git", ["rev-parse", "HEAD"], {
-      cwd: repoRoot,
-      stdio: ["ignore", "pipe", "ignore"],
-    })
-      .toString()
-      .trim() || "unknown";
+  execFileSync("git", ["rev-parse", "HEAD"], {
+    cwd: repoRoot,
+    stdio: ["ignore", "pipe", "ignore"],
+  })
+  .toString()
+  .trim() || "unknown";
 
-  // 使用 committer date（%cd = committer date，--date=format 直接用
-  // committer 本地时区格式化，语义上与 date 命令的 %cd 一致）
-  const d = execFileSync(
-    "git",
-    ["show", "-s", "--date=format:%Y%m%d", "--format=%cd", "HEAD"],
-    { cwd: repoRoot, stdio: ["ignore", "pipe", "ignore"] }
-  )
-    .toString()
-    .trim();
-  if (d) commitDate = d;
+  // %cI：committer date，ISO 8601（如 2026-10-17T14:30:12+08:00）
+  const iso = execFileSync("git", ["show", "-s", "--format=%cI", "HEAD"], {
+    cwd: repoRoot,
+    stdio: ["ignore", "pipe", "ignore"],
+  })
+  .toString()
+  .trim();
+
+  if (iso) {
+    const d = new Date(iso);
+    if (!Number.isNaN(d.getTime())) {
+      sourceDate = d;
+      sourceTime = iso; // 直接携带拿到的原始时间戳
+    }
+  }
 } catch {
   /* 非 git 环境（如直接解压源码包构建）：保持兜底值 */
 }
 
+const version = makeVersion(sourceDate);
+
 writeFileSync(
   path.join(outDir, "version.ts"),
-  `/** 构建时自动生成（frontend/scripts/generate-build-info.mjs），请勿手工修改。 */` +
-  '\n' + `export const COMMIT_DATE = ${JSON.stringify(commitDate)};` +
-  '\n' + `export const COMMIT_HASH = ${JSON.stringify(commit)};`
+              `/** 构建时自动生成（frontend/scripts/generate-build-info.mjs），请勿手工修改。 */` +
+              "\n" +
+              `export const APP_VERSION = ${JSON.stringify(version)};` +
+              "\n" +
+              `export const SOURCE_TIME = ${JSON.stringify(sourceTime)};` +
+              "\n" +
+              `export const COMMIT_HASH = ${JSON.stringify(commit)};`
 );
 
 /* ---------------- 前端依赖许可收集 ---------------- */
@@ -82,7 +104,7 @@ function findLicenseFile(pkgDir) {
     return null;
   }
   const hit = names.find((n) =>
-    /^(licen[cs]e|copying|copyright|notice|unlicense)(\..*)?$/i.test(n)
+  /^(licen[cs]e|copying|copyright|notice|unlicense)(\..*)?$/i.test(n)
   );
   return hit ? path.join(pkgDir, hit) : null;
 }
@@ -112,8 +134,8 @@ function guessLicenseType(text) {
     )
   )
     return "ISC";
-  if (/MIT License|Permission is hereby granted, free of charge/i.test(t))
-    return "MIT";
+    if (/MIT License|Permission is hereby granted, free of charge/i.test(t))
+      return "MIT";
   if (/BSD \d-Clause|Redistribution and use in source and binary forms/i.test(t))
     return "BSD";
   if (/Creative Commons/i.test(t)) {
@@ -133,7 +155,7 @@ function normalizeRepoUrl(url) {
   u = u.replace(/^www\./, "");
   u = u.replace(/\.git$/i, "");
   if (!/^https?:\/\//i.test(u)) return "";
-  return u;
+    return u;
 }
 
 function readPackage(pkgDir) {
@@ -156,7 +178,6 @@ function readPackage(pkgDir) {
     try {
       const text = readFileSync(licFile, "utf8");
       copyright = extractCopyright(text);
-      // "SEE LICENSE IN <file>" 等场景：包描述缺少标识时从文本猜测
       if (!license || /^(see license|unlicense)/i.test(license)) {
         const guessed = guessLicenseType(text);
         if (guessed !== "unknown") license = guessed;
@@ -167,7 +188,8 @@ function readPackage(pkgDir) {
   }
 
   const repo = pkg.repository;
-  const repoUrl = pkg.homepage || (typeof repo === "string" ? repo : repo?.url) || "";
+  const repoUrl =
+  pkg.homepage || (typeof repo === "string" ? repo : repo?.url) || "";
 
   return {
     name: pkg.name,
@@ -210,7 +232,6 @@ function walkNodeModules(nmDir) {
     if (!st.isDirectory()) continue;
 
     if (name.startsWith("@")) {
-      // scoped 包：node_modules/@scope/pkg
       let scoped;
       try {
         scoped = readdirSync(full);
@@ -234,14 +255,14 @@ function walkNodeModules(nmDir) {
 
 walkNodeModules(path.join(frontendRoot, "node_modules"));
 deps.sort((a, b) =>
-  a.name.localeCompare(b.name, undefined, { sensitivity: "base" })
+a.name.localeCompare(b.name, undefined, { sensitivity: "base" })
 );
 
 writeFileSync(
   path.join(outDir, "frontend-deps.json"),
-  JSON.stringify(deps, null, 2) + "\n"
+              JSON.stringify(deps, null, 2) + "\n"
 );
 
 console.log(
-  `[generate-build-info] date=${commitDate} commit=${commit} frontend-deps=${deps.length}`
+  `[generate-build-info] version=${version} sourceTime=${sourceTime} commit=${commit} frontend-deps=${deps.length}`
 );

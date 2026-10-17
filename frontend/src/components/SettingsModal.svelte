@@ -11,7 +11,7 @@
     PREVIEW_FONT_FALLBACK,
   } from "../lib/themes";
   import { licenseEntries } from "../lib/licenses";
-  import { COMMIT_DATE, COMMIT_HASH } from "../lib/generated/version";
+  import { APP_VERSION, COMMIT_HASH, SOURCE_TIME } from "../lib/generated/version";
   import { openExternal } from "../lib/bridge";
   import {
     theme$ as theme,
@@ -319,8 +319,8 @@
                 <img class="app-info-logo" src="/bird.svg" alt="Quail" />
                 <div class="app-info-name">Quail</div>
                 <div class="app-info-version-group">
-                  {#if COMMIT_DATE}
-                    <div class="app-info-version">Version {COMMIT_DATE}</div>
+                  {#if APP_VERSION}
+                    <div class="app-info-version" title={new Date(SOURCE_TIME).toLocaleString()}>Version {APP_VERSION}</div>
                   {/if}
                   <div class="app-info-commit" title="Commit hash">
                     {COMMIT_HASH}
