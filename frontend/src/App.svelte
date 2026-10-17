@@ -152,31 +152,15 @@
     void setTitle($guardDirty ? `* ${name}` : name);
   });
 
-  // 全局快捷键（合并原 window keydown 与 svelte:window 两处绑定声明）：
-  // Ctrl/Cmd+N 新实例、Ctrl/Cmd+O 新实例中打开、Ctrl/Cmd+Q 退出（等同窗口
-  // 关闭，触发脏状态守卫）、Ctrl/Cmd+Shift+S 另存为、Ctrl/Cmd+S 保存、
-  // Ctrl/Cmd+F 打开查找替换面板。
-  // 遮罩守卫：设置面板或 confirm 弹窗打开期间，以上文档/窗口级快捷键一律
-  // 不响应，防止弹窗操作期间误触底层动作；仅 Escape（关闭设置面板 /
-  // 返回一级页）与 Tab（拦截默认行为，防止焦点移出遮罩）在遮罩状态下
-  // 依旧生效。confirm 弹窗自身的 Esc/Tab/Enter 在其组件内于捕获阶段处理
-  // 并阻断传播，不会到达本监听器。
   $effect(() => {
     const onKey = (e: KeyboardEvent) => {
       const settingsOpenNow = get(settingsOpen);
       const overlayOpen = settingsOpenNow || get(confirm$) !== null;
 
-      // Tab：拦截默认行为（焦点不移出遮罩、不落入底层编辑器/界面）
-      if (e.key === "Tab") {
-        e.preventDefault();
-        (document.activeElement as HTMLElement)?.blur(); // 让当前聚焦的元素失焦
-        return;
-      }
       /* ---- 遮罩守卫：设置面板 / confirm 弹窗打开期间 ---- */
       if (overlayOpen) {
         // Escape：沿用原设置面板逻辑（confirm 弹窗的 Esc 由其自身处理）
         if (e.key === "Escape") {
-          (document.activeElement as HTMLElement)?.blur(); // 让当前聚焦的元素失焦
           // 二级页面先返回一级页面，再关闭设置面板
           if (settingsOpenNow && get(settingsSubPage)) {
             settingsSubPage.set(null);
