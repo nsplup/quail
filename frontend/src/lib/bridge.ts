@@ -6,7 +6,10 @@
  * - 仅面向 Wails 环境（不再做浏览器降级判断）。
  */
 
-import {
+import { AppService, FileService, ConfigService } from "@bindings";
+import { Events, Browser } from "@wailsio/runtime";
+
+const {
   Ready,
   HasUnsavedChanges,
   RequestClose,
@@ -14,8 +17,9 @@ import {
   SetTitle,
   CloseWindow,
   NewInstance,
-} from "../../bindings/quail/appservice";
-import {
+} = AppService;
+
+const {
   PickOpen,
   PickSave,
   Open,
@@ -23,9 +27,9 @@ import {
   Save,
   CloseDoc,
   StartupDoc,
-} from "../../bindings/quail/fileservice";
-import { Get as ConfigGet, SaveFields as ConfigSaveFields } from "../../bindings/quail/configservice";
-import { Events, Browser } from "@wailsio/runtime";
+} = FileService;
+
+const { Get: ConfigGet, SaveFields: ConfigSaveFields } = ConfigService;
 
 export interface QuailDocState {
   path: string;
