@@ -1,10 +1,10 @@
 /* ============================================================
-   全局样式：Tailwind CSS v4
-   - 主题色板仍由 themes.css 的 .theme-* 类提供 CSS 变量（--ui-* / --ed-* / --pv-*），
-     这里通过 @theme inline 把它们映射为 Tailwind 颜色 token，
-     组件里即可使用 bg-soft / text-muted / border-line 等工具类。
-   - 仅保留少量无法用工具类表达的样式（伪元素、伪类、滚动条、内容排版）。
-   ============================================================ */
+ *  全局样式：Tailwind CSS v4
+ *  - 主题色板仍由 themes.css 的 .theme-* 类提供 CSS 变量（--ui-* / --ed-* / --pv-*），
+ *    这里通过 @theme inline 把它们映射为 Tailwind 颜色 token，
+ *    组件里即可使用 bg-soft / text-muted / border-line 等工具类。
+ *  - 仅保留少量无法用工具类表达的样式（伪元素、伪类、滚动条、内容排版）。
+ *  ============================================================ */
 @import "tailwindcss";
 
 @theme inline {
@@ -19,8 +19,8 @@
   --color-active: var(--ui-active-bg);
 
   --font-sans:
-    system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC",
-    "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC",
+  "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
 }
 
 @layer base {
@@ -39,7 +39,7 @@
   }
 
   #app {
-    height: 100vh;
+  height: 100vh;
   }
 
   button {
@@ -72,8 +72,8 @@
   }
 
   /* 悬停手柄：圆角矩形 + 竖排三个圆点。
-     描边与未激活分隔线一致（1px border），圆点为激活色（accent），
-     内部填充与底栏/大纲栏同色（bg-soft）。仅 hover/drag 显现，无阴影。 */
+   *    描边与未激活分隔线一致（1px border），圆点为激活色（accent），
+   *    内部填充与底栏/大纲栏同色（bg-soft）。仅 hover/drag 显现，无阴影。 */
   .divider::before {
     content: "";
     position: absolute;
@@ -217,15 +217,15 @@
   }
 
   /* webkit 引擎（webkitgtk/Chrome）用 ::-webkit-scrollbar 自定义样式；
-     scrollbar-width/scrollbar-color（Firefox 专属）仅在引擎不支持
-     ::-webkit-scrollbar 时应用——Chrome 121+/WebKitGTK 2.44+ 同时认识两套，
-     一旦 scrollbar-width 非 auto，::-webkit-scrollbar 自定义样式会被禁用。 */
+   *    scrollbar-width/scrollbar-color（Firefox 专属）仅在引擎不支持
+   *    ::-webkit-scrollbar 时应用——Chrome 121+/WebKitGTK 2.44+ 同时认识两套，
+   *    一旦 scrollbar-width 非 auto，::-webkit-scrollbar 自定义样式会被禁用。 */
   @supports not selector(::-webkit-scrollbar) {
     @supports (scrollbar-width: thin) {
-    * {
-      scrollbar-width: thin;
-      scrollbar-color: var(--ui-border) transparent;
-    }
+      * {
+        scrollbar-width: thin;
+        scrollbar-color: var(--ui-border) transparent;
+      }
     }
   }
 
@@ -354,9 +354,9 @@
 }
 
 /* ============================================================
-   CM6 自定义查找/替换面板（DOM 由 searchPanel.ts 创建，样式集中于此）
-   —— 扁平化：无阴影，与分栏布局一致的边框语言
-   ============================================================ */
+ *  CM6 自定义查找/替换面板（DOM 由 searchPanel.ts 创建，样式集中于此）
+ *  —— 扁平化：无阴影，与分栏布局一致的边框语言
+ *  ============================================================ */
 .cm-panels {
   background: var(--ui-bg-soft) !important;
   border-bottom: 1px solid var(--ui-border) !important;
@@ -364,8 +364,8 @@
 
 .cm-search-panel {
   /* 四列网格（共享于两行）：第 1 列输入框 1fr；
-     第 2/3 列取两行同列的最大内容宽 → 上下天然对齐；
-     第 4 列固定 30px = 关闭按钮宽（第二行放等宽占位）→ 两行输入框齐宽 */
+   *    第 2/3 列取两行同列的最大内容宽 → 上下天然对齐；
+   *    第 4 列固定 30px = 关闭按钮宽（第二行放等宽占位）→ 两行输入框齐宽 */
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto 30px;
   gap: 6px;
@@ -515,8 +515,8 @@ md-image {
   align-items: center;
   justify-content: center;
   /* 不设 gap：占位态（loading/error）img 整体退出布局（见 .md-img 规则），
-     容器内只有占位层一个 flex 子项；loaded 态 img 与 caption 的间距
-     由 .md-img-cap 的 margin-top 提供 */
+   *    容器内只有占位层一个 flex 子项；loaded 态 img 与 caption 的间距
+   *    由 .md-img-cap 的 margin-top 提供 */
 
   width: 100%;
   height: var(--md-image-height);
@@ -537,12 +537,12 @@ md-image .md-img {
 }
 
 /* 非 loaded 态（loading / error）：img 整体退出布局（display:none）。
-   旧实现用 visibility:hidden「保留布局空间」——img 仍是 flex 子项；
-   点击刷新回 loading 时换 src 不会清空旧位图，浏览器保留上一次加载的
-   固有尺寸，不可见 img 以旧宽高参与 flex 布局，把居中的占位层顶偏：
-   块级下占位层被推出容器可视区（overflow:hidden 裁剪），行内下占位行
-   被推出容器右侧。display:none 与 error 态行为统一，占位态容器内
-   永远只有占位层一个布局子项。 */
+ *  旧实现用 visibility:hidden「保留布局空间」——img 仍是 flex 子项；
+ *  点击刷新回 loading 时换 src 不会清空旧位图，浏览器保留上一次加载的
+ *  固有尺寸，不可见 img 以旧宽高参与 flex 布局，把居中的占位层顶偏：
+ *  块级下占位层被推出容器可视区（overflow:hidden 裁剪），行内下占位行
+ *  被推出容器右侧。display:none 与 error 态行为统一，占位态容器内
+ *  永远只有占位层一个布局子项。 */
 md-image:not([data-status="loaded"]) .md-img {
   display: none;
 }
@@ -568,8 +568,8 @@ md-image[data-status="loaded"] .md-img {
 
 .md-img-ic {
   /* 显式块级化：SVG 作为 flex 子项时 webkitgtk 不按标准 flex item 对齐
-     （基线/尺寸计算怪癖），display:block 强制其按普通块盒参与
-     align-items: center 居中，块级/行内占位的图标与文本对齐一致 */
+   *    （基线/尺寸计算怪癖），display:block 强制其按普通块盒参与
+   *    align-items: center 居中，块级/行内占位的图标与文本对齐一致 */
   display: block;
   width: 80px;
   height: 80px;
@@ -579,9 +579,7 @@ md-image[data-status="loaded"] .md-img {
 .md-img-ph-t {
   line-height: 1.4;
   white-space: nowrap;
-  /* 链接内图片：悬停下划线不作用于占位说明文本 */
   display: inline-block;
-  text-decoration: none;
 }
 
 /* 加载中：描边与失败态占位一致（虚线边框）；图标为加载环旋转动画（无透明度动画） */
@@ -598,7 +596,7 @@ md-image[data-status="loading"] .md-img-ic {
 }
 
 /* 加载失败：受限（401/403）或网络错误，虚线边框区分
-   （img 的 display:none 已由上方非 loaded 态统一规则覆盖，error 态不单独处理） */
+ *  （img 的 display:none 已由上方非 loaded 态统一规则覆盖，error 态不单独处理） */
 md-image[data-status="error"] {
   border: 1px dashed var(--ui-border);
 }
@@ -673,8 +671,8 @@ md-image[data-inline] {
   flex-direction: row;
   align-items: center;
   /* 不设 gap：行内占位态 img 整体退出布局（见 .md-img 规则），容器内
-     只有占位行一个 flex 子项；图标与说明文本的间距由 .md-img-ph
-     （row gap: 0.35em）提供 */
+   *    只有占位行一个 flex 子项；图标与说明文本的间距由 .md-img-ph
+   *    （row gap: 0.35em）提供 */
 
   width: auto;
   height: auto;
@@ -703,7 +701,7 @@ md-image[data-inline] .md-img {
 md-image[data-inline] .md-img-ph {
   flex-direction: row;
   /* 显式声明（覆盖继承自块级 column 版的 align-items:center）：
-     行内横排下图标与说明文本沿同一水平中线对齐 */
+   *    行内横排下图标与说明文本沿同一水平中线对齐 */
   align-items: center;
   gap: 0.35em;
 }
@@ -723,11 +721,11 @@ md-image[data-inline][data-status="error"] {
   border: 1px dashed var(--ui-border);
 }
 
-/* 链接内图片：悬停下划线不影响占位说明文本（atomic inline 本就不受
-   祖先 decoration 传播影响，这里显式声明意图） */
-.md-block a .md-img-ph-t,
-.md-block a:hover .md-img-ph-t {
-  text-decoration: none;
+/* 链接内图片：链接本体不绘制下划线。
+ *  text-decoration 由祖先绘制、无法由后代取消（Text Decoration L3 §2.2），
+ *  只能让绘制者（<a>）自身关闭；否则 hover 时下划线会横穿图片/占位层。 */
+.md-block a:has(md-image) {
+  text-decoration: none !important;
 }
 
 @keyframes mdimg-spin {
@@ -735,20 +733,20 @@ md-image[data-inline][data-status="error"] {
 }
 
 /* ---------------- 拖拽打开：全窗口放置区遮罩（Wails File Drop） ----------------
-   文件悬停时 Wails 运行时给 data-file-drop-target 元素添加
-   file-drop-target-active 类；仅保留覆盖全窗口的透明遮罩
-   （无任何视觉样式），pointer-events:none 不拦截拖拽事件。 */
+ *  文件悬停时 Wails 运行时给 data-file-drop-target 元素添加
+ *  file-drop-target-active 类；仅保留覆盖全窗口的透明遮罩
+ *  （无任何视觉样式），pointer-events:none 不拦截拖拽事件。 */
 #app-root.file-drop-target-active::after {
-  content: "";
-  position: fixed;
-  inset: 0;
-  z-index: 9999;
-  pointer-events: none;
+content: "";
+position: fixed;
+inset: 0;
+z-index: 9999;
+pointer-events: none;
 }
 
 /* ---------------- 设置面板：二级页面导航 ----------------
-   面包屑（「设置」弱化 + 右向箭头 + 二级页标题）；
-   箭头与查找替换面板 ↑/↓ 按键图标同一绘制方式（feather 描边 polyline） */
+ *  面包屑（「设置」弱化 + 右向箭头 + 二级页标题）；
+ *  箭头与查找替换面板 ↑/↓ 按键图标同一绘制方式（feather 描边 polyline） */
 
 .crumb-root {
   color: var(--ui-muted);
@@ -769,8 +767,8 @@ md-image[data-inline][data-status="error"] {
 }
 
 /* ---------------- 设置面板：主题选择器（一级页面） ----------------
-   一圈描边 + 内间隔；右侧内间隔加大并放置右向箭头；
-   内部主题卡片保持原有样式 */
+ *  一圈描边 + 内间隔；右侧内间隔加大并放置右向箭头；
+ *  内部主题卡片保持原有样式 */
 
 .theme-selector {
   display: flex;
