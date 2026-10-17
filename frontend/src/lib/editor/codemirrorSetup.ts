@@ -29,6 +29,7 @@ import { syntaxHighlighting, HighlightStyle, bracketMatching, indentUnit } from 
 import { tags } from "@lezer/highlight";
 import type { Command } from "@codemirror/view";
 import { createModernSearchPanel, searchPanelModF, openSearchPanelExternal } from "./searchPanel";
+import { markdownEmphasis } from "./emphasis"
 import { dirty$, docState$, edited$, setImeComposing } from "../stores";
 import { get } from "svelte/store";
 
@@ -185,6 +186,7 @@ export function createEditorApi(
         crosshairCursor(),
         bracketMatching(),
         highlightSelectionMatches(),
+        markdownEmphasis(),
         /* 禁用多光标：false 时状态层把任何新选区 asSingle() 折叠，
          Ctrl/Cmd+Click、矩形拖拽、Ctrl-Alt-↑/↓ 等所有入口一并失效 */
       EditorState.allowMultipleSelections.of(false),
