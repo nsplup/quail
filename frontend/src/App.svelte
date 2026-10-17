@@ -166,15 +166,17 @@
       const settingsOpenNow = get(settingsOpen);
       const overlayOpen = settingsOpenNow || get(confirm$) !== null;
 
+      // Tab：拦截默认行为（焦点不移出遮罩、不落入底层编辑器/界面）
+      if (e.key === "Tab") {
+        e.preventDefault();
+        (document.activeElement as HTMLElement)?.blur(); // 让当前聚焦的元素失焦
+        return;
+      }
       /* ---- 遮罩守卫：设置面板 / confirm 弹窗打开期间 ---- */
       if (overlayOpen) {
-        // Tab：拦截默认行为（焦点不移出遮罩、不落入底层编辑器/界面）
-        if (e.key === "Tab") {
-          e.preventDefault();
-          return;
-        }
         // Escape：沿用原设置面板逻辑（confirm 弹窗的 Esc 由其自身处理）
         if (e.key === "Escape") {
+          (document.activeElement as HTMLElement)?.blur(); // 让当前聚焦的元素失焦
           // 二级页面先返回一级页面，再关闭设置面板
           if (settingsOpenNow && get(settingsSubPage)) {
             settingsSubPage.set(null);
