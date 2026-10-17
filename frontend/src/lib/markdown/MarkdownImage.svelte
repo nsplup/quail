@@ -219,18 +219,37 @@
       aria-label={$t("preview.imageReload")}
       title={$t("preview.imageReload")}
     >
-      <svg
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="2"
-        stroke-linecap="round"
-        stroke-linejoin="round"
-        aria-hidden="true"
-      >
-        <path d="M21 12a9 9 0 1 1-2.64-6.36" />
-        <path d="M21 3v6h-6" />
-      </svg>
+      {#if inline}
+        <!-- 行内刷新：1em，粗线圆弧 + 短箭头，缩小后仍可读 -->
+        <svg
+          viewBox="0 0 16 16"
+          width="1em"
+          height="1em"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.5"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9" />
+          <path d="M13.5 3.5v3.5H10" />
+        </svg>
+      {:else}
+        <!-- 块级刷新：24px，开环 + 折角箭头 -->
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+          <path d="M21 3v6h-6" />
+        </svg>
+      {/if}
     </button>
     {#if !inline && alt}
       <!-- 块级图片的 alt 描述文本（caption，DOM 位于 img 之后 → 显示在底部）；
@@ -240,67 +259,139 @@
   {:else}
     <!-- 占位态：[SVG 图标][状态文本][刷新链接]（块级纵向居中、行内横排） -->
     <span class="md-img-ph">
-      {#if errorCode === "notfound"}
-        <!-- 图片框 + 问号：有权访问但目标图片不存在 -->
-        <svg
-          class="md-img-ic"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.7"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          aria-hidden="true"
-        >
-          <rect x="3.5" y="4.5" width="17" height="15" rx="2.5" />
-          <path d="M9.7 9.3a2.3 2.3 0 1 1 3.3 2.1c-.7.35-1 .85-1 1.7" />
-          <circle cx="12" cy="16" r="0.55" fill="currentColor" stroke="none" />
-        </svg>
-      {:else if errorCode === "restricted"}
-        <!-- 锁：代理白名单拒绝（403）或上游防盗链/禁止外链（401/403） -->
-        <svg
-          class="md-img-ic"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.7"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          aria-hidden="true"
-        >
-          <rect x="4" y="10.5" width="16" height="9.5" rx="2" />
-          <path d="M8 10.5V7a4 4 0 0 1 8 0v3.5" />
-        </svg>
-      {:else if status === "loading"}
-        <!-- 加载环：旋转动画表达加载中（无透明度/呼吸动画） -->
-        <svg
-          class="md-img-ic"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.7"
-          stroke-linecap="round"
-          aria-hidden="true"
-        >
-          <circle cx="12" cy="12" r="8.5" stroke-dasharray="40 13.4" />
-        </svg>
+      {#if inline}
+        <!-- 行内占位符：16×16，width/height=1em，只保留核心符号并加粗，保证小尺寸可辨 -->
+        {#if errorCode === "notfound"}
+          <!-- 仅问号：目标图片不存在 -->
+          <svg
+            class="md-img-ic"
+            viewBox="0 0 16 16"
+            width="1em"
+            height="1em"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.9"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M5.7 6.2a2.7 2.7 0 1 1 3.9 2.4c-.7.35-1 .85-1 1.6" />
+            <circle cx="8.6" cy="13" r="1" fill="currentColor" stroke="none" />
+          </svg>
+        {:else if errorCode === "restricted"}
+          <!-- 锁：访问受限（简化锁梁 + 锁体） -->
+          <svg
+            class="md-img-ic"
+            viewBox="0 0 16 16"
+            width="1em"
+            height="1em"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.5"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <rect x="2.5" y="6" width="11" height="6.5" rx="1.5" />
+            <path d="M5 6V4a3 3 0 0 1 6 0v2" />
+          </svg>
+        {:else if status === "loading"}
+          <!-- 加载环：开口圆环，由 CSS 负责旋转 -->
+          <svg
+            class="md-img-ic"
+            viewBox="0 0 16 16"
+            width="1em"
+            height="1em"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.6"
+            stroke-linecap="round"
+            aria-hidden="true"
+          >
+            <circle cx="8" cy="8" r="5.5" stroke-dasharray="24 10.6" />
+          </svg>
+        {:else}
+          <!-- 仅叉号：通用加载失败 -->
+          <svg
+            class="md-img-ic"
+            viewBox="0 0 16 16"
+            width="1em"
+            height="1em"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            aria-hidden="true"
+          >
+            <path d="M4.5 4.5l7 7" />
+            <path d="M11.5 4.5l-7 7" />
+          </svg>
+        {/if}
       {:else}
-        <!-- 图片图标：加载失败（网络/上游等通用错误） -->
-        <svg
-          class="md-img-ic"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.7"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          aria-hidden="true"
-        >
-          <rect x="3.5" y="4.5" width="17" height="15" rx="2.5" />
-          <circle cx="9" cy="10" r="1.6" />
-          <path d="M4.5 17.5l4.4-4.4a1.5 1.5 0 0 1 2.1 0l5.5 5.4" />
-          <path d="M14.5 15.5l1.9-1.9a1.5 1.5 0 0 1 2.1 0l2 2" />
-        </svg>
+        <!-- 块级占位符：24×24，精细线稿，语义清晰 -->
+        {#if errorCode === "notfound"}
+          <!-- 圆形 + 问号：有权访问但目标图片不存在 -->
+          <svg
+            class="md-img-ic"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <circle cx="12" cy="12" r="9" />
+            <path d="M9.7 9.5a2.3 2.3 0 1 1 3.3 2.1c-.7.35-1 .85-1 1.7" />
+            <circle cx="12" cy="16.2" r="0.8" fill="currentColor" stroke="none" />
+          </svg>
+        {:else if errorCode === "restricted"}
+          <!-- 锁：代理白名单拒绝（403）或上游防盗链/禁止外链（401/403） -->
+          <svg
+            class="md-img-ic"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <rect x="4" y="9" width="16" height="9.5" rx="2" />
+            <path d="M8 9V5.5a4 4 0 0 1 8 0V9" />
+            <circle cx="12" cy="13.5" r="1.4" />
+            <path d="M12 14.9v1.2" />
+          </svg>
+        {:else if status === "loading"}
+          <!-- 加载环：开口圆环，由 CSS 负责旋转 -->
+          <svg
+            class="md-img-ic"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            aria-hidden="true"
+          >
+            <circle cx="12" cy="12" r="8.5" stroke-dasharray="40 13.4" />
+          </svg>
+        {:else}
+          <!-- 八边形 + 感叹号：通用加载失败（不可用） -->
+          <svg
+            class="md-img-ic"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M20.32 15.44 15.44 20.32H8.56L3.68 15.44V8.56L8.56 3.68H15.44L20.32 8.56Z" />
+            <path d="M12 7.5v6" />
+            <circle cx="12" cy="16.5" r="0.8" fill="currentColor" stroke="none" />
+          </svg>
+        {/if}
       {/if}
       <span class="md-img-ph-t">
         {#if status === "loading"}
