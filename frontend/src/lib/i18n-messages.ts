@@ -80,14 +80,14 @@ export const zhMessages = {
     ignore: "忽略",
   },
   preview: {
-    imageLoading: "图片加载中…",
+    imageLoading: "图片加载中",
     imageRestricted: "图片访问受限",
     imageNotFound: "图片不存在",
     imageFailed: "图片加载失败",
     imageReload: "刷新",
     copyCode: "复制代码",
     codeCopied: "已复制",
-    parsing: "解析中…",
+    parsing: "解析中",
     rendering: "渲染中",
   },
   parse: {
@@ -176,14 +176,14 @@ export const enMessages = {
     ignore: "Ignore",
   },
   preview: {
-    imageLoading: "Loading image…",
+    imageLoading: "Loading image",
     imageRestricted: "Image access restricted",
     imageNotFound: "Image not found",
     imageFailed: "Failed to load image",
     imageReload: "Reload",
     copyCode: "Copy code",
     codeCopied: "Copied",
-    parsing: "Parsing…",
+    parsing: "Parsing",
     rendering: "Rendering",
   },
   parse: {
