@@ -1,8 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { get } from "svelte/store";
   import { createEditorApi, type EditorApi } from "./codemirrorSetup";
-  import { dirty$, docState$ } from "../stores";
 
   let {
     initialDoc,
@@ -47,11 +45,6 @@
       lang ?? "en"
     );
     api.markClean(); // 初始化：记录干净文档引用
-    // 空文档初始脏状态：未命名（无路径）的空文档视为未保存，提示需要落盘；
-    // 打开自磁盘的文档（含空文件）保持干净
-    if (initialDoc === "" && !get(docState$)?.path) {
-      dirty$.set(true);
-    }
     onready(api);
     return () => api.destroy();
   });

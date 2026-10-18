@@ -11,6 +11,11 @@
    * - 每个挂载项由 ResizeObserver 实测 border-box 高度，写入尺寸表；
    *   未挂载项用 estimateSize（数值或按索引函数）估计；估计值随实测
    *   均值自适应校准（见 estSize），未测段总高尽快逼近真实值；
+   * - 布局前默认不可见：项在首次实测落地前以 visibility:hidden 渲染
+   *   （仍参与布局、可被 RO 观察）。若首屏直接可见，未测项只能按
+   *   默认估计（40px 级）摆放，真实段高数百 px 时会在测量落地前的
+   *   一帧内出现块堆叠在一起的闪现；隐藏到实测后即可见，代价仅是
+   *   每个新挂载项晚一帧显示（虚拟化本身即按需挂载，无额外感知）；
    * - RO 回调只记录原始尺寸，统一合帧到下一帧 rAF 应用（仍在绘制前）：
    *   RO 投递发生在渲染帧内，若在投递阶段（含微任务）同步写布局——
    *   挂载项、改定位、补偿 scrollTop——会立刻产生新的观察目标，浏览器
@@ -128,6 +133,8 @@
     item: T;
     key: unknown;
     top: number;
+    /** 是否已完成实测（未实测项布局前不可见，见模块头注释） */
+    measured: boolean;
   }
   /** 空窗冻结快照：进入空窗那一刻的已渲染项数组（与 DOM 一致）。
    *  空窗期间派生原样返回该引用 → Svelte 按引用跳过 diff，零挂载/卸载；
@@ -220,6 +227,19 @@
     }
   }
 
+  /** 第 i 项是否已完成实测（可见性判定依据；无 RO 环境一律视为已测） */
+  function isMeasured(i: number): boolean {
+    if (ro === null) return true;
+    if (getKey !== undefined) {
+      return (
+        sizesFor !== null &&
+        i < sizesFor.length &&
+        keyCache.has(getKey(sizesFor[i], i))
+      );
+    }
+    return indexCache.has(i);
+  }
+
   /* ---------------- 视口计算（渲染范围） ---------------- */
 
   const view = $derived.by(() => {
@@ -260,6 +280,7 @@
         item: data[i],
         key: getKey !== undefined ? getKey(data[i], i) : i,
         top: offsets[i],
+        measured: isMeasured(i),
       });
     }
     return out;
@@ -289,9 +310,11 @@
         ? bbs.blockSize
         : (entry.target as HTMLElement).offsetHeight;
       if (!(h > 0)) continue;
-      // 亚像素抖动直接忽略：省一轮重渲染，也减少无效的待应用项。
-      // 以当前生效尺寸判断，同帧重复通知以最新为准（Map 覆盖）
-      if (sizes[idx] !== undefined && Math.abs(h - sizes[idx]) < 0.5) continue;
+      // 已实测项的亚像素抖动直接忽略：省一轮重渲染，也减少无效的待
+      // 应用项（以当前生效尺寸判断，同帧重复通知以最新为准，Map 覆盖）。
+      // 首次实测即使与估计一致也必须入队：可见性翻转（隐藏→可见）
+      // 与首测记账依赖这次应用，跳过会让项永久不可见
+      if (isMeasured(idx) && Math.abs(h - sizes[idx]) < 0.5) continue;
       pendingMeasure.set(idx, h);
     }
     if (pendingMeasure.size > 0 && measureRaf === 0) {
@@ -314,20 +337,13 @@
     for (const [idx, h] of batch) {
       if (idx >= sizes.length) continue;
       const prev = sizes[idx];
-      if (Math.abs(h - prev) < 0.5) continue;
       // 首测计入自适应均值（重测不重复计入，避免图片加载等二次测量拉偏）
-      let firstMeasure: boolean;
-      if (getKey !== undefined) {
-        const k =
-          sizesFor && idx < sizesFor.length
-            ? getKey(sizesFor[idx], idx)
-            : undefined;
-        firstMeasure = !keyCache.has(k as unknown);
-      } else {
-        firstMeasure = !indexCache.has(idx);
-      }
+      const firstMeasure = !isMeasured(idx);
+      if (!firstMeasure && Math.abs(h - prev) < 0.5) continue;
       // 项整体在视口顶上方：其实测变化会推移下方全部内容 → 补偿滚动位置
-      if (snap[idx] + prev <= st + 1) delta += h - prev;
+      if (Math.abs(h - prev) >= 0.5 && snap[idx] + prev <= st + 1) {
+        delta += h - prev;
+      }
       sizes[idx] = h;
       recordSize(idx, h);
       if (firstMeasure) {
@@ -574,10 +590,13 @@
        空窗期间 total 冻结为进入时的快照，保证拖动中滚动条长度/映射稳定 -->
   <div style="position: relative; width: 100%; height: {view.total}px;">
     {#each rendered as it (it.key)}
+      <!-- visibility:hidden 仍保留布局盒（absolute 定位不受影响），
+           RO 照常回报尺寸；实测落地后由 rendered.measured 翻转为可见，
+           消除「布局前按估计值堆叠一帧」的闪现 -->
       <div
         use:measure
         data-index={it.i}
-        style="position: absolute; top: {it.top}px; left: 0; width: 100%;"
+        style="position: absolute; top: {it.top}px; left: 0; width: 100%; visibility: {it.measured ? 'visible' : 'hidden'};"
       >
         {@render children(it.item, it.i)}
       </div>

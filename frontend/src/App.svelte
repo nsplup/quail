@@ -131,6 +131,16 @@
     // 后端 WindowFilesDropped 转发文件绝对路径 → 与对话框打开同一分流：
     // 当前实例为未命名空白文档且无编辑记录 → 原地装载；否则新实例装载。
     void onBackendEvent("file:dropped", async (d: { files?: string[] }) => {
+      // 遮罩开启期间（设置面板 / confirm 弹窗 / 系统弹窗空白遮罩，与
+      // 快捷键的 overlayOpen 同口径）：停止响应拖拽打开，避免遮罩交互
+      // 流程未结束时装载新文档、遮罩结果与拖拽装载相互覆盖
+      if (
+        get(settingsOpen) ||
+        get(confirm$) !== null ||
+        get(dialogMask)
+      ) {
+        return;
+      }
       const path = d?.files?.find((p) => !!p);
       if (!path) return;
       await openPath(path);
@@ -139,15 +149,14 @@
   });
 
   // 守卫脏状态上报后端（供 WindowClosing 拦截钩子与 ShouldQuit 关闭守卫
-  // 使用）：未命名空文档在无编辑操作记录时不拦截。窗口标题的星号标记
+  // 使用）：内容与干净基线不一致即拦截。窗口标题的星号标记
   // 同用 guardDirty 口径，与打开/退出的脏状态守卫保持一致
   $effect(() => {
     void reportDirty($guardDirty);
   });
 
   // 窗口标题与文档名同步：守卫脏状态（guardDirty）时在文档名前加星号
-  // （星号与文档名以空格连接）；未命名空文档无编辑记录时不加（与
-  // 打开/退出的脏状态守卫同口径，见 guardDirty$）
+  // （星号与文档名以空格连接；与打开/退出的脏状态守卫同口径，见 guardDirty$）
   $effect(() => {
     const name = $docState?.name || $t("doc.untitled");
     void setTitle($guardDirty ? `* ${name}` : name);
@@ -230,11 +239,13 @@
       await saveDeletedDoc();
       return;
     }
-    if (!get(dirty) && !force) return; // 非脏状态静默：无修改不写后端、不弹提示
+    // 无路径文档（含未命名空白文档）：保存即另存为，不做脏状态静默
+    // 返回——空白文档 Ctrl+S 也始终弹出另存为，保证能主动落盘
     if (!get(docState)?.path) {
-      await saveFileAs(); // 未命名文档：保存即另存为，落盘后标题随文档名更新
+      await saveFileAs();
       return;
     }
+    if (!get(dirty) && !force) return; // 非脏状态静默：无修改不写后端、不弹提示
     try {
       const res = await saveDocument(get(doc), force);
       if (res.ok) {

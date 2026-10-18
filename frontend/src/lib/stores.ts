@@ -202,8 +202,8 @@ export const dirty$ = writable(false);
 /**
  * 自打开/保存基线以来是否存在用户编辑操作记录。
  * 撤销回原内容也不会复位（操作记录仍在）；setDoc（打开/外部重载）与
- * markClean（保存成功）重置为 false。未命名空文档等「默认脏」场景下，
- * 关闭/打开守卫据此失效：没有任何操作记录时不拦截。
+ * markClean（保存成功）重置为 false。守卫已统一按 dirty$ 判定，
+ * edited$ 仅用于未命名空白文档的原地打开决策（无操作记录才可原地装载）。
  */
 export const edited$ = writable(false);
 export const previewApi$ = writable<PreviewApi | null>(null);
@@ -476,15 +476,11 @@ export const docState$ = writable<QuailDocState | null>(null);
 
 /**
  * 守卫用脏状态：退出/打开替换等确认拦截的实际依据。
- * - 有路径的文档（含 deleted）：内容对比的脏状态即拦截依据
- *   （文件被删除后未编辑则内容仍与基线一致 → 不拦截，可直接退出/另存）；
- * - 未命名文档：默认脏，但仅在存在编辑操作记录时才拦截
- *   （无操作记录的空文档可直接退出/打开替换）。
+ * 与所有文档统一口径：内容与干净基线不一致即拦截（文件被删除后未编辑
+ * 则内容仍与基线一致 → 不拦截，可直接退出/另存；未命名文档不再特殊
+ * 处理，其唯一差异保留在保存路径——无路径文档保存始终走另存为）。
  */
-export const guardDirty$ = derived(
-  [dirty$, edited$, docState$],
-  ([d, edited, s]) => d && (s?.path ? true : edited)
-);
+export const guardDirty$ = derived(dirty$, (d) => d);
 
 /* ------------- 打开 / 另存 / 横幅重新加载（App 与横幅事件共用） ------------- */
 

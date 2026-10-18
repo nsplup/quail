@@ -30,7 +30,8 @@ import { tags } from "@lezer/highlight";
 import type { Command } from "@codemirror/view";
 import { createModernSearchPanel, searchPanelModF, openSearchPanelExternal } from "./searchPanel";
 import { markdownEmphasis } from "./emphasis"
-import { dirty$, docState$, edited$, setImeComposing } from "../stores";
+import { dirty$, edited$, setImeComposing, settingsOpen$ } from "../stores";
+import { confirm$, dialogMask$ } from "../confirm";
 import { get } from "svelte/store";
 
 export interface EditorHandlers {
@@ -176,6 +177,10 @@ export function createEditorApi(
   /* 输入停顿多久后合并为新的撤销组（CM6 默认 500ms，收紧为 200ms） */
   const HISTORY_NEW_GROUP_DELAY = 200;
   const phrasesCompartment = new Compartment();
+  /* 可编辑性 Compartment：任一遮罩（设置面板 / confirm 弹窗 / 系统弹窗
+     空白遮罩）开启期间切换为不可编辑，全部关闭后恢复
+     （响应 settingsOpen$ / confirm$ / dialogMask$ 开关状态） */
+  const editableCompartment = new Compartment();
   /* 干净文档引用：初始化或保存后记录 state.doc，用 Text.eq 判定脏状态 */
   let cleanDoc: Text | null = null;
   const phrasesFor = (lang: string) =>
@@ -203,6 +208,7 @@ export function createEditorApi(
         markdown(),
         indentCompartment.of(indentUnit.of(initialIndent)),
         phrasesCompartment.of(phrasesFor(initialLang)),
+        editableCompartment.of(EditorView.editable.of(true)),
         editorTheme,
         syntaxHighlighting(mdHighlight),
         search({
@@ -229,12 +235,10 @@ export function createEditorApi(
             // setDoc（打开/外部重载）与 markClean（保存成功）重置
             edited$.set(true);
             if (cleanDoc) {
-              // 未命名文档（无路径）始终视为脏：内容即使撤销回基线，
-              // 也仍是一份未落盘的文档（空文档同理）。
-              // 注意守卫是否拦截由 guardDirty$（dirty ∧ 操作记录）决定，
-              // 无任何操作记录的未命名空文档不会被关闭/打开确认拦截。
-              const untitled = !get(docState$)?.path;
-              dirty$.set(untitled || !cleanDoc.eq(u.state.doc));
+              // 脏状态对所有文档统一口径：内容与干净基线不一致即脏
+              //（未命名文档不再特殊处理，其差异仅保留在保存路径——
+              // 无路径文档保存始终走另存为，见 App 的 save()）
+              dirty$.set(!cleanDoc.eq(u.state.doc));
             }
           }
         }),
@@ -293,8 +297,30 @@ export function createEditorApi(
   };
   view.scrollDOM.addEventListener("scroll", onScroll, { passive: true });
 
+  /* 遮罩联动：任一遮罩（设置面板 / confirm 弹窗 / 系统弹窗空白遮罩，
+     与 App 快捷键的 overlayOpen 同口径）开启期间编辑器切换为不可编辑
+     （CM6 会同步移除 contenteditable 并拒绝输入），全部关闭后恢复。
+     三个源订阅同一同步函数，状态变化经去重后才 dispatch，
+     避免创建期与同值切换产生无谓的重配置事务。 */
+  let overlayOn = false;
+  const syncEditable = () => {
+    const on =
+      get(settingsOpen$) || get(confirm$) !== null || get(dialogMask$);
+    if (on === overlayOn) return;
+    overlayOn = on;
+    view.dispatch({
+      effects: editableCompartment.reconfigure(EditorView.editable.of(!on)),
+    });
+  };
+  const unsubOverlays = [
+    settingsOpen$.subscribe(syncEditable),
+    confirm$.subscribe(syncEditable),
+    dialogMask$.subscribe(syncEditable),
+  ];
+
   return {
     destroy() {
+      for (const unsub of unsubOverlays) unsub();
       if (topLineRaf) cancelAnimationFrame(topLineRaf);
       if (cursorLineRaf) cancelAnimationFrame(cursorLineRaf);
       view.scrollDOM.removeEventListener("scroll", onScroll);
