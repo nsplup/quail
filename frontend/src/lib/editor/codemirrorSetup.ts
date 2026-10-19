@@ -6,10 +6,11 @@
  * 主题通过 CSS 变量注入（--ed-*，由 themes.css 的主题类提供），因此
  * 切换预览主题时编辑器配色同步变化，无需重新 configure。
  */
-import { EditorState, Compartment, type Text } from "@codemirror/state";
+import { EditorState, EditorSelection, Compartment, type Text } from "@codemirror/state";
 import { cmPhrases } from "../i18n-messages";
 import {
   EditorView,
+  ViewPlugin,
   keymap,
   crosshairCursor,
   highlightSpecialChars,
@@ -105,6 +106,7 @@ const editorTheme = EditorView.theme({
     lineHeight: "1.75",
     padding: "10px 0 45vh",
     overflow: "auto",
+    cursor: "text",
   },
   ".cm-content": {
     caretColor: "var(--ed-accent)",
@@ -273,6 +275,65 @@ export function createEditorApi(
             setImeComposing(false);
             return false;
           },
+        }),
+        /**
+         * CodeMirror 6 扩展：点击编辑器底部 padding 区域时，将光标定位到文档末尾。
+         *
+         * 背景：
+         * - CodeMirror 默认在点击 cm-scroller 的 padding-bottom 空白区域时，
+         *   可能把光标定位到可视区域中间，而不是文档末尾。
+         * - 本插件在 cm-scroller 上以捕获阶段监听 mousedown，
+         *   在 CodeMirror 内部选区逻辑之前拦截该点击。
+         *
+         * 判断方式：
+         * - 用 lineBlockAt(lastLine.from) 获取最后一行行块在文档坐标系中的 bottom；
+         * - 加上 view.documentTop 转成屏幕坐标；
+         * - 若 event.clientY > 最后一行底部，则视为点击底部空白。
+         *
+         * 处理方式：
+         * - preventDefault + stopPropagation 阻止默认跳转；
+         * - 下一帧 dispatch 将 selection 设为 EditorSelection.cursor(doc.length)；
+         * - 调用 view.focus() 确保光标可见。
+         *
+         * 注意：
+         * - 文档以换行结尾时，doc.length 会落在最后一个空行；
+         * - 当前不处理在 padding 区域拖拽选择的复杂情况；
+         * - 必须在 destroy 中移除捕获阶段监听器，避免泄漏。
+         */
+        ViewPlugin.fromClass(class {
+          constructor(view) {
+            this.view = view;
+            this.scroller = view.scrollDOM;
+            this.handler = (event) => {
+              const doc = this.view.state.doc;
+              const lastLine = doc.lineAt(doc.length);
+              const lastLineBlock = this.view.lineBlockAt(lastLine.from);
+              if (!lastLineBlock) return;
+
+              const lastLineBottomScreen = this.view.documentTop + lastLineBlock.bottom;
+
+              if (event.clientY > lastLineBottomScreen) {
+                // 1. 先阻止默认行为，避免光标跳到中间
+                event.preventDefault();
+                event.stopPropagation();
+
+                // 2. 延迟到下一帧派发，避开 mousedown 的后续内部处理
+                requestAnimationFrame(() => {
+                  this.view.dispatch({
+                    selection: EditorSelection.cursor(doc.length),
+                                     userEvent: "select.pointer",
+                  });
+                  // 3. 确保编辑器获得焦点，光标才会显示
+                  this.view.focus();
+                });
+              }
+            };
+            this.scroller.addEventListener('mousedown', this.handler, true);
+          }
+
+          destroy() {
+            this.scroller.removeEventListener('mousedown', this.handler, true);
+          }
         }),
       ],
     }),
