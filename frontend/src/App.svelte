@@ -333,9 +333,44 @@
   /* 装载（loadOpenedDoc）与另存为（saveFileAs）移至 lib/stores：
      横幅「重新加载 / 另存为」动作与原地打开通道共用同一实现 */
 
-  /* ---------------- 同步滚动（带程序化滚动抑制，防止回环） ---------------- */
+  /* ---------------- 同步滚动（带程序化滚动抑制 + 光标同步待办，防止回环与丢事件） ----------------
+     两个抑制标记按"方向"拆分：
+       editorProgrammaticUntil  —— 编辑器被程序化滚动（预览→编辑器回写 / 大纲跳转 /
+                                   底部同步）时写；供 onEditorTopLine 与 trySyncCursor 使用，
+                                   表示"编辑器滚动不是用户滚动"。
+       previewProgrammaticUntil —— 预览被程序化滚动（编辑器→预览同步）时写；供
+                                   onPreviewVisible 使用，表示"预览可见性变化不是用户滚动"。
+     光标同步改成"pending 待办 + 幂等 trySyncCursor + 多点重试"：
+       - onEditorCursorLine 只记录 + 调度 rAF，不直接做重活；
+       - trySyncCursor 条件不具备时保留 pending，不丢事件；被编辑器程序化滚动
+         抑制时延迟重试（340ms，覆盖 320ms 抑制窗口）；
+       - blocks 更新 / previewApi 就绪 / 切回 split 均会重试，覆盖 500ms 解析滞后。
+     两条路径的锚点冲突（"跳转后又跳回去"）：
+       编辑中（近期有光标活动）blocks 重建后用光标行重新对齐，而不是顶行——
+       顶行锚定在视窗顶部，光标锚定在 35%/65%，若 blocks 重建用顶行对齐会把
+       预览从光标位置拉回顶部。非编辑（滚动查看）才用顶行对齐。
+     lastSyncedBlock / lastSyncedY 用于两条同步路径的目标去重，防止互相打架抖动。 */
   let editorProgrammaticUntil = 0;
   let previewProgrammaticUntil = 0;
+
+  // 光标同步待办（null 表示无待办）。rAF 合并：仅保留最后一次光标行
+  let pendingCursorLine: number | null = null;
+  let cursorSyncRaf = 0;
+  let cursorRetryTimer = 0;
+
+  // 最近光标活动（行 + 时间戳）：供 blocks 重建后判断是否处于编辑中，
+  // 编辑中改用光标行重新对齐（避免顶行对齐造成"跳回去"）
+  let lastCursorLine = 0;
+  let lastCursorActivityAt = 0;
+
+  // 最近一次同步滚动目标（块索引 + 块内像素 y），供两条路径去重
+  let lastSyncedBlock = -1;
+  let lastSyncedY = -1;
+
+  // 可见性滞回带：视窗上下边缘 15%（上限 48px）内视为已可见，不干预
+  function visibleMargin(vh: number): number {
+    return Math.min(48, vh * 0.15);
+  }
 
   function scrollToPreview(index: number): void {
     previewProgrammaticUntil = performance.now() + 320;
@@ -349,10 +384,153 @@
     $editorApi?.scrollToLine(line);
   }
 
+  /* ---------------- 光标同步：pending + 幂等重试 ---------------- */
+
+  /** 记录光标行并调度一次 rAF 同步（不做重活，合并快速连续移动） */
+  function onEditorCursorLine(line: number): void {
+    lastCursorLine = line;
+    lastCursorActivityAt = performance.now();
+    pendingCursorLine = line;
+    scheduleCursorSync();
+  }
+
+  function scheduleCursorSync(): void {
+    if (cursorSyncRaf) return;
+    cursorSyncRaf = requestAnimationFrame(() => {
+      cursorSyncRaf = 0;
+      trySyncCursor();
+    });
+  }
+
+  function cancelCursorSync(): void {
+    pendingCursorLine = null;
+    if (cursorSyncRaf) {
+      cancelAnimationFrame(cursorSyncRaf);
+      cursorSyncRaf = 0;
+    }
+    if (cursorRetryTimer) {
+      clearTimeout(cursorRetryTimer);
+      cursorRetryTimer = 0;
+    }
+  }
+
+  /**
+   * 尝试把 pendingCursorLine 同步到预览（幂等）：
+   *   - 成功 / 判定已可见 → 清空 pending；
+   *   - 条件不具备（非 split、api 未就绪、blocks 未覆盖该行）→ 保留 pending，
+   *     等外部触发（blocks 更新 / api 就绪 / 切回 split）再试；
+   *   - 编辑器程序化滚动抑制中 → 保留 pending，延迟 340ms 重试（覆盖 320ms
+   *     抑制窗口，避免抑制期间的光标同步永久丢失）。
+   * 用"光标行在预览中的估计像素 y"判可见（而非块交集），长块内光标
+   * 走到块底时也会触发；可见判定带滞回带（visibleMargin）避免边缘抖动。
+   */
+  function trySyncCursor(): void {
+    const line = pendingCursorLine;
+    if (line == null) return;
+    if (get(mode) !== "split") return;                       // 保留：切回 split 再试
+    // 编辑器被程序化滚动期间（预览→编辑器回写 / 大纲跳转）光标事件让位；
+    // 延迟重试，等抑制过期后再评估，避免 pending 卡住
+    if (performance.now() < editorProgrammaticUntil) {
+      if (!cursorRetryTimer) {
+        cursorRetryTimer = window.setTimeout(() => {
+          cursorRetryTimer = 0;
+          scheduleCursorSync();
+        }, 340);
+      }
+      return;
+    }
+
+    const pv = $previewApi;
+    const el = pvScrollEl();
+    if (!pv || !el || el.clientHeight === 0) return;         // 保留：等 ready / 布局
+    const bks = get(blocks);
+    if (bks.length === 0) return;                            // 保留：等首次解析
+    const lastBlk = bks[bks.length - 1];
+    if (!lastBlk || line > lastBlk.endLine) return;          // 保留：blocks 尚未覆盖新行
+
+    const b = indexOfLine(line);
+    if (b < 0 || b >= bks.length) return;
+    const blk = bks[b];
+    if (!blk) return;
+
+    const off = pv.getItemOffset(b);
+    const size = Math.max(1, pv.getItemSize(b));
+    const rows = Math.max(1, blk.endLine - blk.startLine);
+    const frac = Math.min(1, Math.max(0, (line - blk.startLine) / rows));
+    const y = off + frac * size;                             // 光标行估计 y
+
+    // 与上次同步目标相近 → 视为已完成（避免两条路径互相覆盖抖动）
+    if (b === lastSyncedBlock && Math.abs(y - lastSyncedY) < 8) {
+      pendingCursorLine = null;
+      return;
+    }
+
+    const top = pv.getScrollTop();
+    const vh = el.clientHeight;
+    const margin = visibleMargin(vh);
+
+    // 光标行已在视窗内（扣除滞回带）→ 完成，不干预用户滚动
+    if (y >= top + margin && y <= top + vh - margin) {
+      pendingCursorLine = null;
+      return;
+    }
+
+    // 目标位置：从上方进入 → 落在视窗 35%；从下方进入 → 落在 65%
+    // （比 SYNC_OFFSET 更稳：长块内滚动后光标行不贴边，下次可见判定更宽松）
+    const targetY = y < top + margin
+      ? y - vh * 0.35
+      : y - vh * 0.65;
+    const target = Math.max(0, targetY);
+
+    outlineAutoTrack.set(true);
+    topIndex.set(b);
+    el.scrollTop = target;
+    previewProgrammaticUntil = performance.now() + 320;      // 抑制预览回写
+    lastSyncedBlock = b;
+    lastSyncedY = y;
+    pendingCursorLine = null;                                // 完成
+  }
+
+  /* ---------------- 顶行同步（编辑器滚动 → 预览） ---------------- */
+  function onEditorTopLine(line: number): void {
+    if (performance.now() < editorProgrammaticUntil) return;
+    const bks = get(blocks);
+    if (get(mode) === "source" || bks.length === 0) return;
+    const pv = $previewApi;
+    if (!pv) return;
+    // 编辑器是滚动源：顶行 L → 所在块 b + 块内行进度 frac →
+    // 预览 scrollTop = offset(b) + frac×size(b) - SYNC_OFFSET（块内线性插值）
+    const b = indexOfLine(line);
+    const blk = bks[b];
+    if (!blk) return;
+    const rows = Math.max(1, blk.endLine - blk.startLine);
+    const frac = Math.min(1, Math.max(0, (line - blk.startLine) / rows));
+    const y = pv.getItemOffset(b) + frac * pv.getItemSize(b);
+    const target = Math.max(0, y - SYNC_OFFSET);
+
+    // 与上次同步目标相近 → 跳过（避免光标同步 / 顶行同步互相覆盖抖动）
+    if (b === lastSyncedBlock && Math.abs(y - lastSyncedY) < 8) return;
+
+    outlineAutoTrack.set(true);
+    topIndex.set(b);
+    const el = pvScrollEl();
+    if (el) el.scrollTop = target;
+    previewProgrammaticUntil = performance.now() + 320;
+    lastSyncedBlock = b;
+    lastSyncedY = y;
+  }
+
   /* 编辑区内容变化 → blocks 重建（500ms 防抖解析后）→ 块偏移可能整体
-     变化，按编辑器当前顶行重新对齐预览。不回环：此处只写预览滚动位置，
-     预览侧回写被 previewProgrammaticUntil 抑制；且必须等 blocks 就绪，
-     过早执行会按旧块数据算偏移。 */
+     变化，需要重新对齐预览。不回环：此处只写预览滚动位置，预览侧回写
+     被 previewProgrammaticUntil 抑制；且必须等 blocks 就绪，过早执行
+     会按旧块数据算偏移。
+
+     锚点选择（修复"跳转后又跳回去"）：
+       - 编辑中（近期有光标活动）：用光标行重新对齐。光标是编辑意图锚点，
+         锚定在视窗 35%/65%；若此处改用顶行对齐（锚定在视窗顶部），预览
+         会从光标位置向上跳回顶部——打字时反复"跳过去又跳回来"。
+       - 非编辑（滚动查看）：按编辑器当前顶行对齐（块偏移变化后重新对齐），
+         保持与用户滚动一致的顶行锚定。 */
   let blocksSeen = false;
   $effect(() => {
     const bks = $blocks;
@@ -363,62 +541,32 @@
     if (bks.length === 0 || get(mode) === "source") return;
     const api = $editorApi;
     if (!api) return;
+
+    const now = performance.now();
+    if (now - lastCursorActivityAt < 1200 && lastCursorActivityAt > 0) {
+      // 编辑中：用光标行重新对齐（trySyncCursor 内部处理抑制重试与可见性判定）
+      if (pendingCursorLine == null) {
+        pendingCursorLine = lastCursorLine;
+      }
+      trySyncCursor();
+      return;
+    }
+
+    // 非编辑：抑制中跳过顶行对齐（避免程序化滚动期间覆盖回写结果）
     if (performance.now() < editorProgrammaticUntil) return;
+
+    // 优先处理 pending 光标同步（编辑意图比滚动锚更精确）
+    if (pendingCursorLine != null) {
+      trySyncCursor();
+      if (pendingCursorLine == null) return; // 已处理完，不再顶行对齐
+    }
     onEditorTopLine(api.getTopLine());
   });
 
-  function onEditorTopLine(line: number): void {
-    if (performance.now() < editorProgrammaticUntil) return;
-    const bks = get(blocks);
-    if (get(mode) === "source" || bks.length === 0) return;
-    const pv = $previewApi;
-    if (!pv) return;
-    // 编辑器是滚动源：顶行 L → 所在块 b + 块内行进度 frac →
-    // 预览 scrollTop = offset(b) + frac×size(b) - SYNC_OFFSET（块内线性插值）
-    const b = indexOfLine(line);
-    const blk = get(blocks)[b];
-    if (!blk) return;
-    const rows = Math.max(1, blk.endLine - blk.startLine);
-    const frac = Math.min(1, Math.max(0, (line - blk.startLine) / rows));
-    const target = pv.getItemOffset(b) + frac * pv.getItemSize(b) - SYNC_OFFSET;
-    outlineAutoTrack.set(true);
-    topIndex.set(b);
-    const el = pvScrollEl();
-    if (el) el.scrollTop = Math.max(0, target);
-    previewProgrammaticUntil = performance.now() + 320;
-  }
-
-  /* 编辑区光标行 → 预览区可见性同步（光标行同步）：
-     光标移动与编辑时（CM 选区/文档更新上报，rAF 合并）检查光标所在块
-     是否落在预览视窗内；被上方高块（典型场景：图片块加载后撑高，把正在
-     编辑的行的预览挤到视窗外）时按块内行进度插值滚回。光标块仍可见时
-     不干预，保留用户对预览的滚动主导权；回拉期间以 previewProgrammaticUntil
-     抑制预览→编辑器回写，防止回环。 */
-  function onEditorCursorLine(line: number): void {
-    if (performance.now() < previewProgrammaticUntil) return;
-    if (get(mode) !== "split") return;
-    const pv = $previewApi;
-    const el = pvScrollEl();
-    if (!pv || !el) return;
-    const bks = get(blocks);
-    if (bks.length === 0) return;
-    const b = indexOfLine(line);
-    const blk = bks[b];
-    if (!blk) return;
-    const off = pv.getItemOffset(b);
-    const size = Math.max(1, pv.getItemSize(b));
-    const top = pv.getScrollTop();
-    // 光标块与预览视窗有交集：视为可见，不干预
-    if (off + size > top && off < top + el.clientHeight) return;
-    // 光标块整体在视窗外：块内行进度插值滚回（与顶行同步同公式），
-    // 并同步大纲追踪目标
-    const rows = Math.max(1, blk.endLine - blk.startLine);
-    const frac = Math.min(1, Math.max(0, (line - blk.startLine) / rows));
-    outlineAutoTrack.set(true);
-    topIndex.set(b);
-    el.scrollTop = Math.max(0, off + frac * size - SYNC_OFFSET);
-    previewProgrammaticUntil = performance.now() + 320;
-  }
+  /* previewApi 就绪 → 补做 pending 光标同步（首屏 / 重载后 api 晚到时兜底） */
+  $effect(() => {
+    if ($previewApi) scheduleCursorSync();
+  });
 
   /** 预览滚动容器（App 侧直接驱动像素同步） */
   function pvScrollEl(): HTMLElement | null {
@@ -428,7 +576,12 @@
   function onPreviewVisible(index: number, atBottom: boolean): void {
     // 程序滚动（编辑器→预览 / 大纲跳转）期间不回写
     if (performance.now() < previewProgrammaticUntil) return;
+    // 非抑制状态下的滚动是用户滚动：清空 pending 光标同步，避免紧随的
+    // 光标事件把预览从用户滚动位置拉回
+    cancelCursorSync();
+
     const bks = get(blocks);
+
     // 预览已到底：编辑器同步到底（块对齐会让编辑器停在末块顶部）
     if (atBottom) {
       outlineAutoTrack.set(true);
@@ -461,6 +614,8 @@
   function jumpTo(item: OutlineItem): void {
     outlineAutoTrack.set(false); // 手动点击：大纲不追踪（该项本就在视野内）
     topIndex.set(item.blockIndex);
+    // 手动跳转优先：清空 pending 光标同步，避免把预览从大纲目标拉回光标处
+    cancelCursorSync();
     scrollToEditor(item.line);
     scrollToPreview(item.blockIndex);
   }
@@ -475,6 +630,12 @@
   }
   $effect(() => {
     const m = $mode;
+    // 切回 split 且存在未完成的光标同步：优先补做（用户编辑意图优先于
+    // 滚动位置恢复）
+    if (m === "split" && pendingCursorLine != null) {
+      scheduleCursorSync();
+      return;
+    }
     if ((m === "split" || m === "preview") && pvSavedTop > 0) {
       const top = pvSavedTop;
       requestAnimationFrame(() => $previewApi?.setScrollTop(top));
@@ -488,6 +649,12 @@
     if (p !== pvSavedForPath) {
       pvSavedForPath = p;
       pvSavedTop = 0;
+      // 新文档：清空上一文档残留的光标同步待办、重试计时与去重目标
+      cancelCursorSync();
+      lastSyncedBlock = -1;
+      lastSyncedY = -1;
+      lastCursorLine = 0;
+      lastCursorActivityAt = 0;
     }
   });
 
