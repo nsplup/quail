@@ -34,15 +34,6 @@
   let cur = $derived($confirm$);
   let dialogMask = $derived($dialogMaskStore);
 
-  /** 面板根元素：出现时把焦点交给面板本身（tabindex="-1" 仅允许程序化聚焦，
-   *  不给按钮；键盘交互由 window 捕获监听统一处理，面板持有焦点不影响） */
-  let boxEl = $state<HTMLDivElement | null>(null);
-
-  // confirm 面板出现时自动获得焦点（焦点给面板而非按钮）
-  $effect(() => {
-    if (cur) boxEl?.click();
-  });
-
   let buttons = $derived.by((): Btn[] => {
     const c = cur;
     if (!c) return [];
@@ -143,8 +134,6 @@
   >
     <div
       class="qd-box w-full max-w-sm rounded-xl border p-4 shadow-2xl"
-      tabindex="-1"
-      bind:this={boxEl}
     >
       <p class="qd-msg mb-4 whitespace-pre-line text-sm leading-relaxed">
         {cur.msg}

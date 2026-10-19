@@ -34,20 +34,6 @@
 
   let pressedOnOverlay = false;
 
-  /** 一级 / 二级页面根元素：面板打开与页面切换时程序化聚焦。
-   *  两级页面均声明 tabindex="-1"：不参与 Tab 焦点序、点击不获焦
-   *  （配合全局焦点守卫），仅允许 .focus() 程序化聚焦。 */
-  let mainPageEl = $state<HTMLElement | null>(null);
-  let subPageEl = $state<HTMLElement | null>(null);
-
-  // 设置面板出现时自动获得焦点：打开 → 一级页面；进入二级 → 二级页面；
-  // 返回一级 → 一级页面（preventScroll 避免聚焦引发滚动跳动）
-  $effect(() => {
-    if (!$settingsOpen) return;
-    if ($settingsSubPage) subPageEl?.focus({ preventScroll: true });
-    else mainPageEl?.focus({ preventScroll: true });
-  });
-
   const themeList = [...THEMES].sort((a, b) => {
     if (a.dark !== b.dark) return a.dark ? 1 : -1;
     return a.name.localeCompare(b.name);
@@ -181,8 +167,6 @@
                tabindex="-1"：面板打开时由 $effect 聚焦本页 -->
           <section
             class="settings-scroll h-full w-full shrink-0 overflow-y-auto"
-            tabindex="-1"
-            bind:this={mainPageEl}
           >
             <div class="flex flex-col gap-4 p-5 pt-0">
               <!-- 主题：被选择器样式包裹的当前主题卡片 -->
@@ -367,7 +351,7 @@
             两者互斥，同一时刻只有一个滚动容器存在。
             tabindex="-1"：进入二级页面时由 $effect 聚焦本页。
           -->
-          <div class="relative h-full w-full shrink-0" tabindex="-1" bind:this={subPageEl}>
+          <div class="relative h-full w-full shrink-0">
             {#if $settingsSubPage === "theme"}
               <div class="settings-scroll h-full w-full overflow-y-auto">
                 <div class="grid grid-cols-2 gap-2 p-5 pt-0">
