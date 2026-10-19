@@ -377,11 +377,17 @@ export function splitSegments(hast: HastRoot): HastSegment[] {
  * HAST 顶层节点 → 预览块（行号来自顶层锚点 comment；区间无缝覆盖全部源行，
  * 满足增量解析对块边界的连续性要求）。
  * 块只承载行界/类型映射，不再生成 HTML（渲染交给 Svelte 组件树）。
+ * @param claimLead 首块是否认领锚前空行：全量路径（文档首块）为 true，
+ *   与 emit(a-1) 的「空行归上一块」语义在文档开头处衔接；增量局部 chunk
+ *   且存在上一块（head）时必须为 false——空行改由 head 末块吸收，
+ *   否则首块 startLine 回拉到 chunk 起点，块行界相对真实锚点永久前移
+ *   （行数变化型编辑后无法自愈，且逐次放大）。
  */
 function blocksFromHast(
   hast: HastRoot,
   totalLines: number,
-  baseLine = 0
+  baseLine = 0,
+  claimLead = true
 ): { blocks: PreviewBlock[]; unmapped: boolean } {
   const top = hast.children as HastContent[];
   // 锚跟随其后的首个内容节点；行号区间 = 本锚 start .. 下一锚 start - 1（无缝覆盖）
@@ -400,7 +406,13 @@ function blocksFromHast(
     blocks.push({
       index: blocks.length,
       type: hastType(pendingNode),
-      startLine: Math.min(pending.start, lastEnd + 1) + baseLine,
+      /* 首块且不允许认领前导空行（增量 chunk 且存在上一块）时，
+         startLine 取锚自身行；其余场景与全量一致（min 回拉吞间隙：
+         首块吃文档前导空行，后续块 lastEnd+1 恒等于锚行，min 为空操作） */
+      startLine:
+        (blocks.length === 0 && !claimLead
+          ? pending.start
+          : Math.min(pending.start, lastEnd + 1)) + baseLine,
       endLine: endLine + baseLine,
     });
     lastEnd = endLine;
@@ -526,7 +538,8 @@ export const SELF_HEAL_EVERY = 25;
 
 /** 可能与前一顶层块延续成同一容器的行首特征 */
 const CONT_RE = /^\s*(?:[-*+]|\d{1,9}[.)]|>|(?:```+|~~~+))\s*/;
-const FENCE_RE = /^\s{0,3}(```+|~~~+)/;
+/** 围栏标记行：捕获标记与行内剩余部分（剩余部分用于闭合判定） */
+const FENCE_RE = /^\s{0,3}(```+|~~~+)(.*)$/;
 
 /** 第一个 endLine >= line 的块下标（blocks 按 startLine 升序；找不到 = length） */
 function firstBlockEndingAtOrAfter(blocks: PreviewBlock[], line: number): number {
@@ -552,20 +565,38 @@ function lastBlockStartingAtOrBefore(blocks: PreviewBlock[], line: number): numb
   return lo;
 }
 
-/** lines[0..end) 的未闭合围栏 → 返回开启行（1-based）或 -1 */
+/**
+ * lines[0..end) 的未闭合围栏 → 返回开启行（1-based）或 -1。
+ * 按 CommonMark 判定闭合：同字符、长度不小于开启标记、且不得携带
+ * info string（`​```ini` 是开启行而非闭合行）。此前把任何 FENCE_RE
+ * 命中行都当开/关切换，`​```ini` 会被误判为闭合行 → 围栏状态错乱 →
+ * chunk 起点落入围栏内部，局部解析与全量结构性分叉（块行界漂移，
+ * 补丁区间错位传导到段列表）。
+ */
 function openFenceLine(lines: string[], end: number): number {
   let openLine = -1;
   let fence = "";
+  let fenceLen = 0;
   for (let i = 0; i < end && i < lines.length; i++) {
     const m = lines[i].match(FENCE_RE);
-    if (m) {
-      if (openLine === -1) {
-        openLine = i + 1;
-        fence = m[1][0];
-      } else if (m[1][0] === fence) {
-        openLine = -1;
-        fence = "";
-      }
+    if (!m) continue;
+    const marker = m[1];
+    const rest = m[2] ?? "";
+    if (openLine === -1) {
+      // 开启行：反引号围栏的 info string 不得含反引号（否则是段落文本）
+      if (marker[0] === "`" && rest.includes("`")) continue;
+      openLine = i + 1;
+      fence = marker[0];
+      fenceLen = marker.length;
+    } else if (
+      marker[0] === fence &&
+      marker.length >= fenceLen &&
+      rest.trim() === ""
+    ) {
+      // 闭合行：仅同字符 + 长度足够 + 标记后只允许空白
+      openLine = -1;
+      fence = "";
+      fenceLen = 0;
     }
   }
   return openLine;
@@ -576,7 +607,8 @@ function parseRange(
   lines: string[],
   fromLine: number,
   toLine: number,
-  baseLine: number
+  baseLine: number,
+  claimLead = true
 ): { children: MdastContent[]; hast: HastRoot; blocks: PreviewBlock[] | null } {
   const chunk = lines.slice(fromLine - 1, toLine).join("\n");
   // 与 parseMarkdown 同链路：runSync 执行 remark 转换（remark-slug 注入标题 id）
@@ -585,7 +617,7 @@ function parseRange(
   // 局部 chunk 含 raw HTML（rehype-raw 融合）时块边界可能跨越区间外 → 保守全量
   const { blocks, unmapped } = parsed.hasRaw
     ? { blocks: null as PreviewBlock[] | null, unmapped: false }
-    : blocksFromHast(parsed.hast, toLine - fromLine + 1, baseLine);
+    : blocksFromHast(parsed.hast, toLine - fromLine + 1, baseLine, claimLead);
   // 无法可靠映射 → 调用方保守全量
   return {
     children: root.children,
@@ -720,11 +752,22 @@ export function buildBlocksIncremental(
 
   // ---- 局部 parse + 拼接 ----
   const baseLine = nextStart - 1;
-  const local = parseRange(nextSrc, nextLines, nextStart, nextEnd, baseLine);
+  // i0 > 0：chunk 之上有可复用块（head）→ 前导空行由 head 末块吸收
+  //（与全量 emit(a-1) 语义对齐）；i0 === 0：chunk 起始于文档首行，
+  // 无 head 可吸收 → 保持首块自补（与全量路径文档首块行为一致）
+  const local = parseRange(nextSrc, nextLines, nextStart, nextEnd, baseLine, i0 === 0);
   if (!local.blocks) return runFull(); // 局部含 raw 融合，无法可靠映射 → 全量
 
   const headBlocks = prev.blocks.slice(0, i0);
   const tailBlocks = prev.blocks.slice(i1 + 1);
+
+  /* 前导空行归属对齐：chunk 首块不再回拉认领锚前空行（claimLead=false），
+     改由 head 末块把 endLine 延到首块锚前一行为止。此前首块 startLine
+     被拉回 chunk 起点，行数变化型编辑后块行界相对真实锚点永久前移
+     （滚动同步/光标定位按行界选块随之错位，且无法自愈）。 */
+  if (local.blocks.length > 0 && headBlocks.length > 0) {
+    headBlocks[headBlocks.length - 1].endLine = local.blocks[0].startLine - 1;
+  }
 
   // 行号平移（尾部块整体 +delta）+ 位置重排
   const blocks: PreviewBlock[] = [...headBlocks, ...local.blocks, ...tailBlocks];
