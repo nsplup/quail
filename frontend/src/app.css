@@ -442,6 +442,8 @@
   padding: 0;
   cursor: pointer;
   color: var(--ui-muted);
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 /* 3) 组内按钮：自带描边，相邻边框用负 margin 折叠成 1px */
