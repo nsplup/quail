@@ -199,13 +199,6 @@ export const parseContext$ = writable<ParseContext>("edit");
 export const editorApi$ = writable<EditorApi | null>(null);
 /** 脏状态：当前文档与最近一次干净引用（初始化/保存时记录）不一致 */
 export const dirty$ = writable(false);
-/**
- * 自打开/保存基线以来是否存在用户编辑操作记录。
- * 撤销回原内容也不会复位（操作记录仍在）；setDoc（打开/外部重载）与
- * markClean（保存成功）重置为 false。守卫已统一按 dirty$ 判定，
- * edited$ 仅用于未命名空白文档的原地打开决策（无操作记录才可原地装载）。
- */
-export const edited$ = writable(false);
 export const previewApi$ = writable<PreviewApi | null>(null);
 
 /* ---------------- 解析调度：200ms 防抖 + IME 组合闸门 + worker 背压 ----------------
@@ -526,7 +519,6 @@ function resetDocRuntime(): void {
   // 文档状态清零（打开操作重新装载），脏/编辑记录复位
   docState$.set(null);
   dirty$.set(false);
-  edited$.set(false);
   // 预览区：滚动位置与滚动同步状态归零（新内容从顶部开始）；
   // 解析产物即时落空（不等防抖：重新加载应立刻清掉旧文档的预览）
   topIndex$.set(0);

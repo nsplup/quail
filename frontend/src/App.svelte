@@ -44,7 +44,6 @@
     activeHeading$ as activeHeading,
     countLabel$ as countLabel,
     dirty$ as dirty,
-    edited$ as edited,
     guardDirty$ as guardDirty,
     editorApi$ as editorApi,
     previewApi$ as previewApi,
@@ -298,12 +297,12 @@
 
   /**
    * 原地装载判定：当前实例为未命名空白文档且无编辑操作记录
-   * （docState 无路径 + 内容 trim 为空 + edited 基线干净）。此状态下打开
+   * （docState 无路径 + 内容 trim 为空）。此状态下打开
    * 不会覆盖任何内容，无需确认弹窗，直接在当前实例装载。
    */
   function canOpenInPlace(): boolean {
     const s = get(docState);
-    return (!s || !s.path) && get(doc).trim() === "" && !get(edited);
+    return (!s || !s.path) && get(doc).trim() === "";
   }
 
   /**

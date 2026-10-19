@@ -30,7 +30,7 @@ import { tags } from "@lezer/highlight";
 import type { Command } from "@codemirror/view";
 import { createModernSearchPanel, searchPanelModF, openSearchPanelExternal } from "./searchPanel";
 import { markdownEmphasis } from "./emphasis"
-import { dirty$, edited$, setImeComposing, settingsOpen$ } from "../stores";
+import { dirty$, setImeComposing, settingsOpen$ } from "../stores";
 import { confirm$, dialogMask$ } from "../confirm";
 import { get } from "svelte/store";
 
@@ -231,9 +231,6 @@ export function createEditorApi(
         EditorView.updateListener.of((u) => {
           if (u.docChanged) {
             handlers.onchange(u.state.doc.toString());
-            // 记录编辑操作痕迹（守卫用）：撤销回原内容也不复位，
-            // setDoc（打开/外部重载）与 markClean（保存成功）重置
-            edited$.set(true);
             if (cleanDoc) {
               // 脏状态对所有文档统一口径：内容与干净基线不一致即脏
               //（未命名文档不再特殊处理，其差异仅保留在保存路径——
@@ -408,7 +405,6 @@ export function createEditorApi(
       });
       cleanDoc = view.state.doc;
       dirty$.set(false);
-      edited$.set(false); // 装载新文档：操作记录清零
       /* 限定撤销历史只包含打开后的记录：卸载再重装 history（重装即全新
          空历史），同时抹掉上面全量替换自身产生的那条撤销记录 */
       view.dispatch({ effects: historyCompartment.reconfigure([]) });
@@ -437,7 +433,6 @@ export function createEditorApi(
     markClean() {
       cleanDoc = view.state.doc;
       dirty$.set(false);
-      edited$.set(false); // 落盘成功：操作记录清零
     },
     setPhrases(lang: string) {
       view.dispatch({
