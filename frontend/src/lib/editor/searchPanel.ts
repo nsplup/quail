@@ -21,24 +21,61 @@ import {
 } from "@codemirror/search";
 import type { EditorView, Panel } from "@codemirror/view";
 
-/** 全局 Ctrl/F 入口（CM6 以外触发）的打开标记：本次 mount 不拉取编辑器选区 */
-let externalOpenPending = false;
+/** 面板 DOM 上的扩展钩子 */
+interface SearchPanelDom extends HTMLElement {
+  /** CM6 内重复 Mod-f：从编辑器选区拉取并聚焦 */
+  __spPull?: () => void;
+  /** 外部入口：按需填入给定文本后聚焦（null 表示仅聚焦、保留既有查询词） */
+  __spActivate?: (text: string | null) => void;
+}
+
+/**
+ * 全局 Ctrl/F 入口（CM6 以外触发）的挂起状态：
+ * - 面板未开 → 打开面板；`pull` 为预览区单行选区文本（或无）。
+ * - 面板已开 → 直接 __spActivate，不用此变量。
+ * null 表示非外部打开。
+ */
+let pendingExternal: { pull: string | null } | null = null;
+
+/**
+ * 从 window 选区取文本；仅当：
+ * - 选区非空；
+ * - 选区公共祖先落在 .pane-preview 内；
+ * - 文本非空且为单行。
+ * 否则返回 null。同步抓取（供 openSearchPanelExternal 在 focus 前调用）。
+ */
+function getPreviewSelectionText(): string | null {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
+  const range = sel.getRangeAt(0);
+  const node = range.commonAncestorContainer;
+  const el =
+  node.nodeType === Node.ELEMENT_NODE
+  ? (node as Element)
+  : node.parentElement;
+  if (!el || !el.closest(".pane-preview")) return null;
+  // 排除预览区内的可编辑控件，避免误取输入框选区
+  if (el.closest("input, textarea")) return null;
+  const text = sel.toString().trim();
+  if (!text || text.includes("\n")) return null;
+  return text;
+}
 
 /**
  * 外部（CM6 以外，全局 Ctrl+F）触发的打开入口：
- * - 面板未开 → 只打开面板，不把选区带入关键词框（保留既有查询词）；
- * - 面板已开 → 仅聚焦关键词框。CM6 内的「重复 Mod-f 拉取选区」行为
- *   （searchPanelModF / __spPull）不在 CM6 以外的区域触发。
+ * - 面板未开 → 打开面板；若预览区有单行选区则填入关键词框，否则保留既有查询词；
+ * - 面板已开 → 同上（预览区有选区则填入，否则仅聚焦）。
+ * CM6 内的「重复 Mod-f 拉取编辑器选区」行为（searchPanelModF / __spPull）
+ * 不在 CM6 以外的区域触发。
  */
 export function openSearchPanelExternal(view: EditorView): void {
-  const panel = view.dom.querySelector<HTMLElement & { __spFocus?: () => void }>(
-    ".cm-search-panel"
-  );
-  if (panel?.__spFocus) {
-    panel.__spFocus();
+  const panel = view.dom.querySelector<SearchPanelDom>(".cm-search-panel");
+  const pull = getPreviewSelectionText();
+  if (panel?.__spActivate) {
+    panel.__spActivate(pull);
     return;
   }
-  externalOpenPending = true;
+  pendingExternal = { pull };
   openSearchPanel(view);
 }
 
@@ -87,14 +124,12 @@ const ICONS = {
 };
 
 /**
- * Mod-f 拦截：面板已开 → 从当前选区拉取内容填入关键词框（并聚焦选中）；
+ * Mod-f 拦截：面板已开 → 从编辑器选区拉取内容填入关键词框（并聚焦选中）；
  * 面板未开 → 返回 false 落回 searchKeymap 的 openSearchPanel 正常打开。
  * 需排在 ...searchKeymap 之前。
  */
 export function searchPanelModF(view: EditorView): boolean {
-  const dom = view.dom.querySelector<HTMLElement & { __spPull?: () => void }>(
-    ".cm-search-panel"
-  );
+  const dom = view.dom.querySelector<SearchPanelDom>(".cm-search-panel");
   if (dom?.__spPull) {
     dom.__spPull();
     return true;
@@ -103,7 +138,7 @@ export function searchPanelModF(view: EditorView): boolean {
 }
 
 /* 匹配条件（区分大小写 / 正则）全局状态：跨面板实例保留，
-   不随面板关闭重开或语言切换（phrases 重配）而重置 */
+ *  不随面板关闭重开或语言切换（phrases 重配）而重置 */
 let globalCaseSensitive = false;
 let globalRegexp = false;
 
@@ -161,7 +196,7 @@ export function createModernSearchPanel(view: EditorView): Panel {
   row2.append(replaceInput, replaceGroup, matchGroup, row2Tail);
 
   /* ---- 文案：经 CM6 phrases（EditorState.phrases 由 i18n-messages 的 cmPhrases 注入，
-         语言切换时 reconfigure 后本函数在 update 中重跑即生效） ---- */
+   *        语言切换时 reconfigure 后本函数在 update 中重跑即生效） ---- */
   const ph = (s: string): string => view.state.phrase(s) ?? s;
 
   let caseSensitive = globalCaseSensitive;
@@ -182,12 +217,12 @@ export function createModernSearchPanel(view: EditorView): Panel {
 
   /* ---- 行为 ---- */
   const buildQuery = () =>
-    new SearchQuery({
-      search: input.value,
-      replace: replaceInput.value,
-      caseSensitive,
-      regexp,
-    });
+  new SearchQuery({
+    search: input.value,
+    replace: replaceInput.value,
+    caseSensitive,
+    regexp,
+  });
 
   function updateCount(): void {
     const q = getSearchQuery(view.state);
@@ -268,36 +303,51 @@ export function createModernSearchPanel(view: EditorView): Panel {
     dom,
     top: true,
     mount() {
-      // 面板已开时再次按 Ctrl+F（CM6 内）：从当前选区拉取内容同步给关键词输入框
-      (dom as HTMLElement & { __spPull?: () => void }).__spPull = () => {
+      const d = dom as SearchPanelDom;
+      const focusInput = (): void => {
+        input.focus();
+        input.select();
+      };
+
+      // 面板已开时再次按 Ctrl+F（CM6 内）：从当前编辑器选区拉取内容同步给关键词输入框。
+      // 在键盘事件回调里执行，同步 dispatch 合法。
+      d.__spPull = () => {
         const sel = view.state.selection.main;
         const text = sel.empty ? "" : view.state.doc.sliceString(sel.from, sel.to);
         if (text) {
           input.value = text;
           applyQuery();
         }
-        input.focus();
-        input.select();
+        focusInput();
       };
-      // 全局 Ctrl+F（CM6 以外）的已开兜底：仅聚焦，不拉取选区
-      (dom as HTMLElement & { __spFocus?: () => void }).__spFocus = () => {
-        input.focus();
-        input.select();
+
+      // 外部入口（全局 Ctrl+F 等）已开兜底：预览区有选区则填入，否则仅聚焦。
+      // pull 已由 openSearchPanelExternal 同步取好（此时 window 选区尚未被 focus 清掉）。
+      d.__spActivate = (text) => {
+        if (text) {
+          input.value = text;
+          applyQuery();
+        }
+        focusInput();
       };
+
       caseBtn.classList.toggle("on", globalCaseSensitive);
       regexBtn.classList.toggle("on", globalRegexp);
       applyI18n();
-      // 打开时带入当前选中文本（单行才作为搜索词）；经 openSearchPanelExternal
-      // 打开（全局 Ctrl+F）时不带入选区，只保留既有查询词。
+
+      // 打开时带入搜索词：
+      // - 外部打开：预览区单行选区优先，否则保留既有查询词；
+      // - 内部打开：既有查询词优先，否则用编辑器单行选区。
       // 注意：mount 处于 CM 更新流程内，禁止同步 dispatch（会中断面板 DOM 插入），
       // 因此 query 的写入延后到微任务。
-      const external = externalOpenPending;
-      externalOpenPending = false;
+      const ext = pendingExternal;
+      pendingExternal = null;
       const sel = view.state.selection.main;
       const selText = sel.empty ? "" : view.state.doc.sliceString(sel.from, sel.to);
       const existing = getSearchQuery(view.state)?.search ?? "";
-      const initial =
-        existing || (!external && selText && !selText.includes("\n") ? selText : "");
+      const initial = ext
+      ? ext.pull ?? existing
+      : existing || (selText && !selText.includes("\n") ? selText : "");
       if (initial) {
         input.value = initial;
         queueMicrotask(() => {
