@@ -52,10 +52,12 @@ export function kvGet(key: string): string | null {
 
 /** 同步写；记录脏字段，防抖后增量回写后端 */
 export function kvSet(key: string, value: string): void {
-  if (!ready) return; // 快照未加载，丢弃 store 初始化期的兜底回写
+  if (!ready) return;
   const field = KEY_MAP[key] ?? key.slice(LS_PREFIX.length);
-  snapshot[field] = value === "1" && typeof snapshot[field] === "boolean" ? true : coerce(field, value);
-  if (replaying) return; // 远端重放触发的 store 回声，不视为本地修改
+  const next = value === "1" && typeof snapshot[field] === "boolean" ? true : coerce(field, value);
+  if (Object.is(snapshot[field], next)) return; // 与快照一致：不记脏、不写回
+  snapshot[field] = next;
+  if (replaying) return;
   dirtyFields.add(field);
   scheduleSave();
 }

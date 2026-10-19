@@ -433,12 +433,17 @@ export async function bootApp(): Promise<void> {
     // 重放一次，各 store 才能在启动时拿到真实设置（而非兜底默认值）
     onConfigReplay(applyBackendConfig);
     await initSettings();
-    // 启动时应用「默认布局」设置：
-    // - memory（默认）：沿用 mode 持久化（initSettings 重放已恢复上次布局）；
-    // - 指定布局：覆盖 mode，每次启动固定使用（不影响运行中的自由切换）。
+    // 启动时应用布局：
+    // - defaultLayout 指定具体布局 → 固定使用该布局；
+    // - memory（默认）→ 读取持久化的 mode（上次布局）。
+    // 运行中其他窗口保存的 mode 不实时重放（见 applyBackendConfig），
+    // 只有新打开的窗口才会读到。
     const layout = kvGet("md.defaultLayout");
     if (layout === "source" || layout === "split" || layout === "preview") {
       mode$.set(layout as Mode);
+    } else {
+      const savedMode = kvGet("md.mode");
+      if (savedMode != null && isValidMode(savedMode)) mode$.set(savedMode);
     }
     subscribeFileEvents();
     // 启动文档由后端直接提交（命令行路径或空文档），前端不弹对话框
@@ -594,9 +599,12 @@ function subscribeFileEvents(): void {
 /** 后端配置快照 → 各 store（boot 与 config:changed 重放共用） */
 export function applyBackendConfig(snap: Record<string, unknown>): void {
   const str = (k: string): string | undefined => (snap[k] == null ? undefined : String(snap[k]));
-  // 校验后再回放：旧配置文件可能残留非法值
-  const m = str("mode");
-  if (isValidMode(m)) mode$.set(m);
+  // mode 不在运行时重放：布局是窗口本地状态，其他窗口保存的 mode
+  // 只作为启动默认值（见 bootApp），不回推正在运行的窗口。
+  // 注意 snapshot 仍会同步该字段（settings.ts 的 config:changed），
+  // 以保持事实源一致与脏字段比较正确。
+  // const m = str("mode");
+  // if (isValidMode(m)) mode$.set(m);
   const dl = str("defaultLayout");
   // 校验后再回放：旧配置文件可能残留非法值
   if (dl === "memory" || dl === "source" || dl === "split" || dl === "preview") {
