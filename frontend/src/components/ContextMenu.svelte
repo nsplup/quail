@@ -14,7 +14,7 @@
   import Icon from "./Icon.svelte";
   import { contextMenu$, closeContextMenu, type ContextMenuItem } from "../lib/contextmenu";
 
-  const state = $derived($contextMenu$);
+  const contextMenuState = $derived($contextMenu$);
 
   let menuEl = $state<HTMLDivElement | null>(null);
   /** 收敛后的实际渲染位置（首帧用光标坐标渲染，实测后更新） */
@@ -22,8 +22,8 @@
 
   // 打开后：先落到光标坐标，实测尺寸后向视口内收敛并聚焦首个可用项
   $effect(() => {
-    if (!state) return;
-    const raw = state;
+    if (!contextMenuState) return;
+    const raw = contextMenuState;
     pos = { x: raw.x, y: raw.y };
     tick().then(() => {
       const el = menuEl;
@@ -39,7 +39,7 @@
 
   // 打开期间的全局监听（关闭时机见组件头注释）
   $effect(() => {
-    if (!state) return;
+    if (!contextMenuState) return;
     const onKeydown = (ev: KeyboardEvent) => {
       if (ev.key === "Escape") {
         ev.preventDefault();
@@ -77,7 +77,7 @@
   }
 </script>
 
-{#if state}
+{#if contextMenuState}
   <!-- 浮层与主题 token 对齐全局：bg-soft 底、line 描边、12px 圆角、
        text-xs 字号（与 Toast / 设置面板同级密度）；z 层压过 Toast(60) -->
   <!-- svelte-ignore a11y_interactive_supports_focus -->
@@ -93,7 +93,7 @@
       ev.stopPropagation();
     }}
   >
-    {#each state.items as item, i (i)}
+    {#each contextMenuState.items as item, i (i)}
       {#if item.kind === "separator"}
         <!-- 分组分隔线：非交互项，不关闭菜单 -->
         <div class="ctx-separator my-1 border-t border-line" role="separator"></div>
