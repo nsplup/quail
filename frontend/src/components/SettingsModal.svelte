@@ -3,6 +3,7 @@
   import NumberInput from "./NumberInput.svelte";
   import TextInput from "./TextInput.svelte";
   import VirtualList from "../lib/virtual/VirtualList.svelte";
+  import { focusTrap } from "../lib/focusTrap";
   import { t, locale, langSetting, setLang } from "../lib/i18n.svelte";
   import {
     THEMES,
@@ -56,6 +57,19 @@
   /* 面板关闭时复位二级页面，下次打开回到一级（右栏从右侧滑回） */
   $effect(() => {
     if (!$settingsOpen) settingsSubPage.set(null);
+  });
+
+  /* 焦点圈定交给 focus-trap（lib/focusTrap.ts 的 attachment 包装）：
+   * - allowOutsideClick：放行 trap 外的点击 —— 遮罩点击关闭由 overlay 的
+   *   pointerdown/pointerup 处理；二级页打开时头部按钮（返回面包屑 / 关闭）
+   *   位于二级页 trap 容器之外，也依赖此项才能点击；
+   * - escapeDeactivates 关闭：Esc 返回一级 / 关闭面板由 App 的全局键盘
+   *   守卫处理，不交给 focus-trap。
+   * 同一个 attachment 工厂同时用于一级卡片与二级页面：每处元素挂载时
+   * 各自创建独立的 trap 实例。 */
+  const trap = focusTrap({
+    allowOutsideClick: true,
+    escapeDeactivates: false,
   });
 
   const crumbArrow =
@@ -120,9 +134,13 @@
       - 固定高度是「左右两栏滑动切换」的前提，否则切换时高度会跳；
       - header 单独占位，不随滑动移动；
       - flex-1 min-h-0 的滑动视窗裁掉溢出，保证只显示一屏。
+      一级 trap 挂在卡片上（含 header 与一级页面）：面板打开（卡片挂载）
+      时激活，是本面板 trap 队列的第一个；二级页 trap 后激活入栈时本
+      trap 自动暂停，二级页销毁后自动恢复。
     -->
     <div
       class="flex h-[70vh] w-[440px] max-w-[calc(100vw-48px)] flex-col overflow-hidden rounded-2xl border border-line bg-soft shadow-2xl"
+      {@attach trap}
     >
       <header class="flex items-center justify-between px-5 py-4">
         <h2 class="flex items-center gap-1 text-sm font-semibold text-fg">
@@ -164,7 +182,7 @@
         >
           <!-- ============ 一级页面（左栏） ============ -->
           <!-- w-full + shrink-0：各自占满一屏且不被压缩；
-               tabindex="-1"：面板打开时由 $effect 聚焦本页 -->
+               打开面板时由一级 trap 聚焦卡片内首个可聚焦元素 -->
           <section
             class="settings-scroll h-full w-full shrink-0 overflow-y-auto"
           >
@@ -349,12 +367,16 @@
             - theme 子页面：普通 overflow-y-auto 的 div；
             - licenses 子页面：VirtualList 直接作为滚动容器（height:100%）。
             两者互斥，同一时刻只有一个滚动容器存在。
-            tabindex="-1"：进入二级页面时由 $effect 聚焦本页。
+            二级页面根节点嵌套在右栏容器内（不与一级页面同级），并且只在
+            进入二级页时才创建：其 attachment 在元素挂载时才激活 trap，
+            晚于一级 trap 入栈 —— focus-trap 按激活顺序维护队列，二级 trap
+            激活时一级 trap 自动暂停，二级页销毁（返回一级）时自动恢复。
           -->
           <div class="relative h-full w-full shrink-0">
             {#if $settingsSubPage === "theme"}
-              <div class="settings-scroll h-full w-full overflow-y-auto">
-                <div class="grid grid-cols-2 gap-2 p-5 pt-0">
+              <div class="h-full w-full" {@attach trap}>
+                <div class="settings-scroll h-full w-full overflow-y-auto">
+                  <div class="grid grid-cols-2 gap-2 p-5">
                   {#each themeList as tv (tv.id)}
                     {@const vars = tv.vars}
                     <button
@@ -383,6 +405,7 @@
                       </span>
                     </button>
                   {/each}
+                  </div>
                 </div>
               </div>
             {:else if $settingsSubPage === "licenses"}
@@ -391,39 +414,42 @@
                 - style 追加在组件内联样式之后，用于覆盖视觉留白；
                 - padding 用左右/底部，让首项与顶部留白和左栏对齐；
                 - getKey 用 name@version：重排/过滤后按 key 保留实测高度缓存。
+                外层包裹二级页根节点并挂 trap（与 theme 子页面同口径）。
               -->
-              <VirtualList
-                data={licenseEntries}
-                getKey={(dep) => `${dep.name}@${dep.version}`}
-                estimateSize={80}
-                style="padding: 0 20px 20px 20px;"
-                onclick={hijackLinks}
-              >
-                {#snippet children(dep)}
-                  <div
-                    class="license-card flex flex-col gap-1"
-                    style="margin-bottom: 8px;"
-                  >
-                    <a class="license-name break-all" href={dep.url}
-                      >{dep.name}</a
-                    >
-
+              <div class="h-full w-full" {@attach trap}>
+                <VirtualList
+                  data={licenseEntries}
+                  getKey={(dep) => `${dep.name}@${dep.version}`}
+                  estimateSize={80}
+                  style="padding: 0 20px 20px 20px;"
+                  onclick={hijackLinks}
+                >
+                  {#snippet children(dep)}
                     <div
-                      class="grid grid-cols-[1fr_auto] items-center gap-2 text-xs font-bold"
+                      class="license-card flex flex-col gap-1"
+                      style="margin-bottom: 8px;"
                     >
-                      <span class="license-version font-mono">
-                        {#if dep.version}{dep.version}{/if}
-                      </span>
-                      <span class="license-type">
-                        {#if dep.license && dep.license !== "unknown"}{dep.license}{/if}
-                      </span>
+                      <a class="license-name break-all" href={dep.url}
+                        >{dep.name}</a
+                      >
+
+                      <div
+                        class="grid grid-cols-[1fr_auto] items-center gap-2 text-xs font-bold"
+                      >
+                        <span class="license-version font-mono">
+                          {#if dep.version}{dep.version}{/if}
+                        </span>
+                        <span class="license-type">
+                          {#if dep.license && dep.license !== "unknown"}{dep.license}{/if}
+                        </span>
+                      </div>
+                      {#if dep.copyright}
+                        <div class="license-copyright">{dep.copyright}</div>
+                      {/if}
                     </div>
-                    {#if dep.copyright}
-                      <div class="license-copyright">{dep.copyright}</div>
-                    {/if}
-                  </div>
-                {/snippet}
-              </VirtualList>
+                  {/snippet}
+                </VirtualList>
+              </div>
             {/if}
           </div>
         </div>

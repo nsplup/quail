@@ -7,8 +7,10 @@
  * - deletedSave 模式：仍然保存 / 取消，用于「文件已被外部删除仍要保存」
  *   的确认（仍然保存会覆盖重建原路径文件）。
  *
- * 回车与 Esc 统一映射为「取消」（安全侧，防止回车误触丢失修改），
- * 键盘映射、按钮图标与强调色位置由 ConfirmDialog 组件实现。
+ * Esc 映射为「取消」（安全侧，防止误触丢失修改），焦点圈定与 Tab 循环
+ * 由 focus-trap 接管（ConfirmDialog 内通过 lib/focusTrap.ts 的 attachment
+ * 包装使用），按钮使用浏览器默认 focus outline；
+ * 键盘映射、按钮图标由 ConfirmDialog 组件实现。
  */
 import { writable } from "svelte/store";
 
