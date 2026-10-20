@@ -25,7 +25,7 @@ import {
   indentLess,
 } from "@codemirror/commands";
 import { search, searchKeymap, highlightSelectionMatches } from "@codemirror/search";
-import { markdown } from "@codemirror/lang-markdown";
+import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { syntaxHighlighting, HighlightStyle, bracketMatching, indentUnit } from "@codemirror/language";
 import { tags } from "@lezer/highlight";
 import type { Command } from "@codemirror/view";
@@ -34,6 +34,12 @@ import { markdownEmphasis } from "./emphasis"
 import { dirty$, setImeComposing, settingsOpen$ } from "../stores";
 import { confirm$, dialogMask$ } from "../confirm";
 import { get } from "svelte/store";
+
+import {
+  markdownTables,
+  TableTheme,
+  TableStyle,
+} from "codemirror-markdown-tables"
 
 export interface EditorHandlers {
   /** 文档内容变化（编辑器是源码的唯一编辑入口） */
@@ -138,6 +144,11 @@ const editorTheme = EditorView.theme({
     zIndex: "2",
   },
   ".cm-panels.cm-panels-top": { borderBottom: "1px solid var(--ui-border)" },
+  ".tbl-table-widget": {
+    cursor: "auto",
+    marginLeft: "0",
+    padding: "18px",
+  },
 });
 
 const mdHighlight = HighlightStyle.define([
@@ -202,12 +213,12 @@ export function createEditorApi(
         markdownEmphasis(),
         /* 禁用多光标：false 时状态层把任何新选区 asSingle() 折叠，
          Ctrl/Cmd+Click、矩形拖拽、Ctrl-Alt-↑/↓ 等所有入口一并失效 */
-      EditorState.allowMultipleSelections.of(false),
-      /* 拖拽永远视为“移动”而非“添加”：Alt/Ctrl+左键拖拽不再产生
-         选区/光标扩展（矩形选区扩展已移除，此为兜底） */
-      EditorView.dragMovesSelection.of(() => true),
+        EditorState.allowMultipleSelections.of(false),
+        /* 拖拽永远视为“移动”而非“添加”：Alt/Ctrl+左键拖拽不再产生
+           选区/光标扩展（矩形选区扩展已移除，此为兜底） */
+        EditorView.dragMovesSelection.of(() => true),
         EditorView.lineWrapping,
-        markdown(),
+        markdown({ base: markdownLanguage }),
         indentCompartment.of(indentUnit.of(initialIndent)),
         phrasesCompartment.of(phrasesFor(initialLang)),
         editableCompartment.of(EditorView.editable.of(true)),
@@ -217,6 +228,10 @@ export function createEditorApi(
           // 用自研面板替代原生查找面板
           createPanel: createModernSearchPanel,
           top: true,
+        }),
+        markdownTables({
+          selectionType: "native",
+          
         }),
         keymap.of([
           // 面板已开时 Mod-f 拉取选区到关键词框（须在 searchKeymap 之前拦截）
@@ -321,7 +336,7 @@ export function createEditorApi(
                 requestAnimationFrame(() => {
                   this.view.dispatch({
                     selection: EditorSelection.cursor(doc.length),
-                                     userEvent: "select.pointer",
+                    userEvent: "select.pointer",
                   });
                   // 3. 确保编辑器获得焦点，光标才会显示
                   this.view.focus();
