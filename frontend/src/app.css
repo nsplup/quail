@@ -917,34 +917,3 @@ pointer-events: none;
   white-space: pre-line;
   overflow-wrap: anywhere;
 }
-
-/* 表格主题 */
-#app-root {
-  --tbl-theme-row-background:        var(--ed-bg);
-  --tbl-theme-odd-row-background:    var(--ed-activeline);
-  --tbl-theme-even-row-background:   var(--ed-bg);
-  --tbl-theme-header-row-background: var(--ed-activeline);
-
-  --tbl-theme-border-color:          var(--ui-border);
-  --tbl-theme-border-hover-color:    var(--ed-accent);
-  --tbl-theme-border-active-color:   var(--ed-accent);
-  --tbl-theme-outline-color:         var(--ed-accent);
-
-  --tbl-theme-text-color:            var(--ed-fg);
-
-  --tbl-theme-menu-border-color:     var(--ui-border);
-  --tbl-theme-menu-background:       var(--ui-bg-soft);
-  --tbl-theme-menu-hover-background: var(--ui-hover);
-  --tbl-theme-menu-text-color:       var(--ui-fg);
-  --tbl-theme-menu-hover-text-color: var(--ed-accent);
-
-  --tbl-theme-select-all-focus-overlay: var(--ed-selection);
-  --tbl-theme-select-all-blur-overlay:  var(--ui-hover);
-
-  /* 样式 */
-  --tbl-style-font-family: var(--ed-font-family);
-  --tbl-style-font-size: inherit;
-  --tbl-style-menu-font-family: "system-ui";
-  --tbl-style-menu-font-size: inherit;
-  --tbl-style-default-header-alignment: left;
-}

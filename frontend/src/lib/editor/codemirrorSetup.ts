@@ -25,7 +25,7 @@ import {
   indentLess,
 } from "@codemirror/commands";
 import { search, searchKeymap, highlightSelectionMatches } from "@codemirror/search";
-import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
+import { markdown } from "@codemirror/lang-markdown";
 import { syntaxHighlighting, HighlightStyle, bracketMatching, indentUnit } from "@codemirror/language";
 import { tags } from "@lezer/highlight";
 import type { Command } from "@codemirror/view";
@@ -34,12 +34,6 @@ import { markdownEmphasis } from "./emphasis"
 import { dirty$, setImeComposing, settingsOpen$ } from "../stores";
 import { confirm$, dialogMask$ } from "../confirm";
 import { get } from "svelte/store";
-
-import {
-  markdownTables,
-  TableTheme,
-  TableStyle,
-} from "codemirror-markdown-tables"
 
 export interface EditorHandlers {
   /** 文档内容变化（编辑器是源码的唯一编辑入口） */
@@ -144,11 +138,6 @@ const editorTheme = EditorView.theme({
     zIndex: "2",
   },
   ".cm-panels.cm-panels-top": { borderBottom: "1px solid var(--ui-border)" },
-  ".tbl-table-widget": {
-    cursor: "auto",
-    marginLeft: "0",
-    padding: "18px",
-  },
 });
 
 const mdHighlight = HighlightStyle.define([
@@ -218,7 +207,7 @@ export function createEditorApi(
            选区/光标扩展（矩形选区扩展已移除，此为兜底） */
         EditorView.dragMovesSelection.of(() => true),
         EditorView.lineWrapping,
-        markdown({ base: markdownLanguage }),
+        markdown(),
         indentCompartment.of(indentUnit.of(initialIndent)),
         phrasesCompartment.of(phrasesFor(initialLang)),
         editableCompartment.of(EditorView.editable.of(true)),
@@ -228,10 +217,6 @@ export function createEditorApi(
           // 用自研面板替代原生查找面板
           createPanel: createModernSearchPanel,
           top: true,
-        }),
-        markdownTables({
-          selectionType: "native",
-
         }),
         keymap.of([
           // 面板已开时 Mod-f 拉取选区到关键词框（须在 searchKeymap 之前拦截）
