@@ -105,6 +105,22 @@
   const trap = focusTrap({
     allowOutsideClick: true,
     escapeDeactivates: false,
+    /** 给虚拟滚动使用的延迟启动 */
+    checkCanFocusTrap: (containers) =>
+      new Promise<void>((resolve) => {
+        const c = containers[0]!;
+        const tryResolve = () => {
+          // 容器里出现可聚焦内容（license 卡片的链接）就激活
+          if (
+            c.querySelector('a[href], button, [tabindex]:not([tabindex="-1"])')
+          ) {
+            resolve();
+          } else {
+            requestAnimationFrame(tryResolve);
+          }
+        };
+        tryResolve();
+      }),
   });
 
   const crumbArrow =
@@ -161,8 +177,7 @@
       pressedOnOverlay = e.target === e.currentTarget;
     }}
     onpointerup={(e) => {
-      if (pressedOnOverlay && e.target === e.currentTarget)
-        closeSettings();
+      if (pressedOnOverlay && e.target === e.currentTarget) closeSettings();
       pressedOnOverlay = false;
     }}
   >
