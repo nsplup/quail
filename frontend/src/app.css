@@ -52,6 +52,9 @@
 }
 
 @layer components {
+  :focus-visible {
+    outline: 2px solid var(--ui-accent);
+  }
   /* ---------- 可拖拽分隔线：1px 视觉线（与底栏描边同权重），伪元素扩大热区 ---------- */
   .divider {
     position: relative;
