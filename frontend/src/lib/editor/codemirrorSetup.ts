@@ -231,7 +231,7 @@ export function createEditorApi(
         }),
         markdownTables({
           selectionType: "native",
-          
+
         }),
         keymap.of([
           // 面板已开时 Mod-f 拉取选区到关键词框（须在 searchKeymap 之前拦截）
@@ -316,10 +316,15 @@ export function createEditorApi(
          * - 必须在 destroy 中移除捕获阶段监听器，避免泄漏。
          */
         ViewPlugin.fromClass(class {
-          constructor(view) {
+          view: EditorView;
+          scroller: HTMLElement;
+          handler: (event: MouseEvent) => void;
+
+          constructor(view: EditorView) {
             this.view = view;
             this.scroller = view.scrollDOM;
-            this.handler = (event) => {
+
+            this.handler = (event: MouseEvent) => {
               const doc = this.view.state.doc;
               const lastLine = doc.lineAt(doc.length);
               const lastLineBlock = this.view.lineBlockAt(lastLine.from);
@@ -343,6 +348,7 @@ export function createEditorApi(
                 });
               }
             };
+
             this.scroller.addEventListener('mousedown', this.handler, true);
           }
 
