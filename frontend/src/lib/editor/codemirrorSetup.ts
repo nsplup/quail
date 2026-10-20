@@ -60,6 +60,13 @@ export interface EditorApi {
   getDoc(): string;
   /** 整体替换文档内容（后端 file:changed 外部修改事件） */
   setDoc(text: string): void;
+  /** 在当前光标处插入文本（有选区时替换选区）。cursorOffset 可选：插入后
+   *  光标落点相对插入文本起点的偏移（缺省 = 文本末尾）。用于底栏表格
+   *  插入（光标落进首个表头单元格）。 */
+  insertText(text: string, cursorOffset?: number): void;
+  /** 替换指定行区间（1-based，含端点）为给定文本。用于预览区可编辑表格
+   *  的反向更新（整表源码替换，行数可增减，undo 可整体回退）。 */
+  replaceLines(startLine: number, endLine: number, text: string): void;
   /** 隐藏后重新显示时请求重新测量几何信息 */
   measure(): void;
   /** 切换缩进单位（设置里选择制表符 / 空格），动态重配置无需重建编辑器 */
@@ -456,6 +463,28 @@ export function createEditorApi(
     },
     getDoc() {
       return view.state.doc.toString();
+    },
+    /** 光标处插入文本（选区替换）。光标按 cursorOffset 落位，滚动可见并聚焦 */
+    insertText(text: string, cursorOffset?: number) {
+      const sel = view.state.selection.main;
+      const off = cursorOffset == null ? text.length : Math.max(0, Math.min(cursorOffset, text.length));
+      view.dispatch({
+        changes: { from: sel.from, to: sel.to, insert: text },
+        selection: { anchor: sel.from + off },
+        userEvent: "input.insert",
+      });
+      view.focus();
+    },
+    /** 行区间替换（1-based，含端点；区间外越界按文档边界收敛） */
+    replaceLines(startLine: number, endLine: number, text: string) {
+      const doc = view.state.doc;
+      if (doc.lines === 0) return;
+      const a = Math.max(1, Math.min(startLine, doc.lines));
+      const b = Math.max(a, Math.min(endLine, doc.lines));
+      view.dispatch({
+        changes: { from: doc.line(a).from, to: doc.line(b).to, insert: text },
+        userEvent: "input.replace",
+      });
     },
     getTopLine() {
       try {

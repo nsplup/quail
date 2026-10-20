@@ -9,12 +9,19 @@
  */
 import { writable } from "svelte/store";
 
-/** 菜单项：icon 为 Icon.svelte 手写图标名；disabled 项仅置灰不可触发 */
+/**
+ * 菜单项：icon 为 Icon.svelte 手写图标名；disabled 项仅置灰不可触发。
+ * kind（可选）扩展非交互项：
+ * - "header"：分组标题（小号加粗标签，不可点击、不关闭菜单）；
+ * - "separator"：分组分隔线。
+ * 二者无需 action；缺省视为普通可点项。
+ */
 export interface ContextMenuItem {
   icon?: string;
   label: string;
   disabled?: boolean;
-  action: () => void;
+  action?: () => void;
+  kind?: "item" | "header" | "separator";
 }
 
 interface ContextMenuState {

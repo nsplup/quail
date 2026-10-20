@@ -5,6 +5,8 @@
    * - element → svelte:element 动态标签（属性经 hastAttrs 映射 className→class 等）；
    * - md-image（编译期 image handler 的产物）→ MarkdownImage 组件
    *   （三态 / 懒加载 / restricted 判定，行为等价旧自定义元素）；
+   * - table（markdown / raw HTML，来源经 data-*-table 标记）→ EditableTable
+   *   可编辑表格组件（HAST 显示 + 反向更新编辑区，见组件头注释）；
    * - text → 文本节点（值原样输出，空格/换行由 CSS white-space 控制）；
    * - comment / doctype → 不渲染；
    * - raw → 显式忽略并 warn（指南方案 B 兜底；管线 rehype-raw 融合后不应出现）。
@@ -16,10 +18,11 @@
   import type { Element, RootContent, Text } from "hast";
   import MarkdownImage from "./MarkdownImage.svelte";
   import MarkdownNode from "./MarkdownNode.svelte"; // 自导入实现递归（Svelte 5 不支持隐式自引用）
+  import EditableTable from "./EditableTable.svelte";
   import CodeBlock from "../highlight/CodeBlock.svelte";
   import { hastAttrs } from "./hast-attrs";
 
-  let { node }: { node: RootContent } = $props();
+  let { node, blockIndex = null }: { node: RootContent; blockIndex?: number | null } = $props();
 
   /** HTML void 元素：无内容模型。hast 中它们 children 恒为空，但若仍走
    *  带 {#each} 子内容的 svelte:element 分支，Svelte 5 运行时会因
@@ -61,6 +64,12 @@
         "") as string}
       inline={(node as Element).properties?.["data-inline"] === "1"}
     />
+  {:else if (node as Element).tagName === "table"}
+    <!-- 所有来源的表格 → 可编辑表格组件（参考 imgToMdImage 的全量替换思路，
+         markdown / raw HTML 表格统一走 EditableTable；来源经 data-*-table
+         标记在组件内区分反向更新的输出格式）。blockIndex = 段下标（与
+         blocks 一一对应），供反向更新时定位源码行区间 -->
+    <EditableTable node={node as Element} blockIndex={blockIndex} />
   {:else if (node as Element).tagName === "pre" &&
       (node as Element).children.some((c) => c.type === "element" && c.tagName === "code")}
     <!-- 围栏代码块（pre>code）→ CodeBlock（着色 worker + 内容寻址缓存）；
@@ -72,7 +81,7 @@
   {:else}
     <svelte:element this={(node as Element).tagName} {...hastAttrs(node as Element)}>
       {#each (node as Element).children as child}
-        <MarkdownNode node={child} />
+        <MarkdownNode node={child} blockIndex={blockIndex} />
       {/each}
     </svelte:element>
   {/if}

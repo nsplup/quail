@@ -73,7 +73,7 @@
   function itemClick(item: ContextMenuItem): void {
     if (item.disabled) return;
     closeContextMenu();
-    item.action();
+    item.action?.();
   }
 </script>
 
@@ -93,20 +93,30 @@
       ev.stopPropagation();
     }}
   >
-    {#each state.items as item (item.label)}
-      <button
-        class="ctx-item flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-fg transition-colors duration-150 hover:bg-hover focus:bg-hover focus:outline-none disabled:pointer-events-none disabled:opacity-40"
-        type="button"
-        role="menuitem"
-        tabindex="-1"
-        disabled={item.disabled ?? false}
-        onclick={() => itemClick(item)}
-      >
-        {#if item.icon}
-          <span class="flex-none text-muted"><Icon name={item.icon} size={14} /></span>
-        {/if}
-        <span class="truncate">{item.label}</span>
-      </button>
+    {#each state.items as item, i (i)}
+      {#if item.kind === "separator"}
+        <!-- 分组分隔线：非交互项，不关闭菜单 -->
+        <div class="ctx-separator my-1 border-t border-line" role="separator"></div>
+      {:else if item.kind === "header"}
+        <!-- 分组标题：非交互项，不关闭菜单 -->
+        <div class="ctx-header px-3 pb-1 pt-1.5 text-[10.5px] font-semibold uppercase tracking-wide text-muted" role="presentation">
+          {item.label}
+        </div>
+      {:else}
+        <button
+          class="ctx-item flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-fg transition-colors duration-150 hover:bg-hover focus:bg-hover focus:outline-none disabled:pointer-events-none disabled:opacity-40"
+          type="button"
+          role="menuitem"
+          tabindex="-1"
+          disabled={item.disabled ?? false}
+          onclick={() => itemClick(item)}
+        >
+          {#if item.icon}
+            <span class="flex-none text-muted"><Icon name={item.icon} size={14} /></span>
+          {/if}
+          <span class="truncate">{item.label}</span>
+        </button>
+      {/if}
     {/each}
   </div>
 {/if}

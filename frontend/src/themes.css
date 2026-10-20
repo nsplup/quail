@@ -278,6 +278,51 @@
   background: var(--pv-row-alt);
 }
 
+/* ---------- 可编辑表格（EditableTable）交互态 ---------- */
+
+.md-block table.md-editable-table th,
+.md-block table.md-editable-table td {
+  cursor: cell;
+  transition: box-shadow 0.1s;
+}
+
+/* 悬停单元格：主题色描边提示可编辑 */
+.md-block table.md-editable-table th:hover,
+.md-block table.md-editable-table td:hover {
+  box-shadow: inset 0 0 0 1.5px var(--pv-accent);
+}
+
+/* 源码定位失败的静态表格（不可编辑）：不给可编辑光标与悬停提示 */
+.md-block table.md-table-static th,
+.md-block table.md-table-static td {
+  cursor: default;
+}
+
+.md-block table.md-table-static th:hover,
+.md-block table.md-table-static td:hover {
+  box-shadow: none;
+}
+
+/* 单元格原码编辑器：等宽、占满单元格、随内容增高 */
+.md-block .md-cell-editor {
+  display: block;
+  width: 100%;
+  min-width: 6ch;
+  min-height: 1.1em;
+  padding: 0;
+  margin: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--pv-fg);
+  font-family: var(--ed-font-family, ui-monospace, monospace);
+  font-size: 0.92em;
+  line-height: inherit;
+  resize: none;
+  overflow: hidden;
+  white-space: pre;
+}
+
 .md-block hr {
   margin: 1.6em 0;
   border: none;

@@ -284,6 +284,46 @@
     color: var(--ui-accent);
   }
 
+  /* ---------- 表格插入浮窗（底栏） ---------- */
+  .ti-pop {
+    position: absolute;
+    bottom: calc(100% + 10px);
+    left: 0;
+    z-index: 60;
+    padding: 10px;
+    border: 1px solid var(--ui-border);
+    border-radius: 12px;
+    background: var(--ui-bg-soft);
+    box-shadow: 0 8px 28px rgb(0 0 0 / 22%);
+  }
+
+  .ti-grid {
+    display: grid;
+    grid-template-columns: repeat(9, 17px);
+    gap: 3px;
+  }
+
+  .ti-cell {
+    width: 17px;
+    height: 17px;
+    padding: 0;
+    border: 1px solid var(--ui-border);
+    border-radius: 3.5px;
+    background: var(--ui-inset);
+    cursor: pointer;
+    transition: background 0.08s, border-color 0.08s;
+  }
+
+  .ti-cell:hover {
+    border-color: var(--ui-accent);
+  }
+
+  /* 悬停矩形到第一个矩形之间全部主题色高亮 */
+  .ti-cell.on {
+    border-color: var(--ui-accent);
+    background: var(--ui-accent);
+  }
+
   /* ---------- 大纲项 ---------- */
   .outline-item {
     display: flex;

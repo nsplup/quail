@@ -1,9 +1,11 @@
 <script lang="ts">
   import Icon from "./Icon.svelte";
   import ParseStatus from "./ParseStatus.svelte";
+  import TableInsertPopover from "./TableInsertPopover.svelte";
   import { t, locale } from "../lib/i18n.svelte";
   import type { Mode } from "../lib/types";
-  import { mode$ as mode, outlineOpen$ as outlineOpen, settingsOpen$ as settingsOpen, countLabel$ as countLabel } from "../lib/stores";
+  import { mode$ as mode, outlineOpen$ as outlineOpen, settingsOpen$ as settingsOpen, countLabel$ as countLabel, editorApi$ as editorApi } from "../lib/stores";
+  import { emptyMarkdownTable } from "../lib/markdown/table-source";
 
   const modes: { id: Mode; icon: string; label: string }[] = [
     { id: "source", icon: "code", label: "mode.source" },
@@ -14,6 +16,9 @@
   /* ---- 滑动高亮滑块：测量当前激活 tab 的几何位置，平滑跟随模式切换 ---- */
   let groupEl = $state<HTMLDivElement | null>(null);
   let thumb = $state({ left: 0, width: 0, ready: false });
+
+  /* 表格插入浮窗开关 */
+  let tableInsertOpen = $state(false);
 
   $effect(() => {
     // 依赖 mode 与语言（标签宽度随 i18n 文本变化；读 $t 文本建立追踪）
@@ -78,6 +83,32 @@
           <span>{$t(m.label)}</span>
         </button>
       {/each}
+    </div>
+    <!-- 表格插入：布局切换组件右侧（与左侧的设置 / 大纲按钮对称）。
+         点击弹出 9×9 行列选择浮窗，点选后在 CM6 当前光标处插入格式化的
+         MARKDOWN 表格（光标落在首个表头单元格） -->
+    <div class="relative flex flex-none items-center">
+      <button
+        class="icon-btn"
+        class:active={tableInsertOpen}
+        data-table-insert-toggle
+        title={$t("table.insert")}
+        aria-label={$t("table.insert")}
+        aria-expanded={tableInsertOpen}
+        onclick={() => (tableInsertOpen = !tableInsertOpen)}
+      >
+        <Icon name="table" size={15} />
+      </button>
+      {#if tableInsertOpen}
+        <TableInsertPopover
+          oninsert={(rows, cols) => {
+            const text = emptyMarkdownTable(rows, cols);
+            /* 光标落在首个表头单元格内（"| " 之后） */
+            $editorApi?.insertText(text, 2);
+          }}
+          onclose={() => (tableInsertOpen = false)}
+        />
+      {/if}
     </div>
   </div>
   <!-- 右侧：字数统计 + 解析状态指示器（固定宽度，统计右侧） -->

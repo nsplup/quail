@@ -186,6 +186,15 @@ function mdastToHastRaw(root: Root): RawResult {
       }) as never,
     } as never,
   }) as HastRoot;
+  /* 表格来源标记（Markdown vs raw HTML）：
+   * - Markdown（GFM）表格在 toHast 产物上先打 data-md-table，再进入
+   *   rehype-raw 融合 / sanitize。实测（hast-util-raw 9）融合保留既有元素的
+   *   properties（md-image 的 data-src 同理），且 'data*' 在 sanitize 白名单，
+   *   属性键会被规范化为 dataMdTable（消费方需兼容两种键名）；
+   * - 融合后无该标记的 <table> 即 raw HTML 来源，补打 data-html-table。
+   * 可编辑表格组件（EditableTable）按此标记决定反向更新时输出格式化后的
+   * Markdown 源码还是 HTML RAW。 */
+  markMarkdownTables(hast);
   const hasRaw = (hast.children as HastContent[]).some(treeHasRaw);
   // 在每个顶层节点前注入 mdast 行号锚：rehype-raw 的整树重解析会丢弃 position，
   // 但 HTML 注释会被 parse5 原样保留，从而在融合后的树上恢复行号。
@@ -212,6 +221,9 @@ function mdastToHastRaw(root: Root): RawResult {
   // 管不到 raw 路径。这里把融合树中的 <img> 归一化为 md-image 容器，
   // 与 Markdown 语法图片走同一 MarkdownImage 组件（ImgProxy 重写 / 三态占位）。
   if (hasRaw) convertHtmlImgToMdImage(sanitized);
+  // 融合后仍无 data-md-table 标记的 <table> 即 raw HTML 来源（融合会原样
+  // 保留 markdown 侧属性，见 markMarkdownTables 注释）→ 补打 html 来源标记
+  markHtmlTables(sanitized);
   // 剥除 HAST position：渲染层只消费结构/文本，不读行号（行号在锚 comment 与
   // mdast root 上）；统一剥除后增量（局部转换、position 为 chunk 行号）与全量
   // （全文行号）的 HAST 结构完全一致，渲染层引用对比/快照测试不受干扰。
@@ -226,6 +238,50 @@ function stripHastPosition(node: HastContent): void {
   delete n.position;
   const kids = (node as { children?: HastContent[] }).children;
   if (Array.isArray(kids)) for (const k of kids) stripHastPosition(k);
+}
+
+/* ---------------- 表格来源标记（Markdown vs raw HTML） ---------------- */
+
+/** mdast → hast 产物上的 GFM 表格标记（sanitize 后属性键规范化为 dataMdTable） */
+const MD_TABLE_FLAG = "data-md-table";
+/** raw HTML 表格标记（融合 + sanitize 之后补打） */
+const HTML_TABLE_FLAG = "data-html-table";
+
+/** 读取元素上的表格来源标记（兼容 sanitize 前后的两种属性键形态） */
+function hasTableFlag(el: HastElement, flag: string): boolean {
+  const props = (el.properties ?? {}) as Record<string, unknown>;
+  const camel = flag.replace(/-([a-z])/g, (_, ch: string) => ch.toUpperCase());
+  return Boolean(props[flag] ?? props[camel]);
+}
+
+/** 递归标记 toHast 产物中的 GFM 表格（in-place；融合前执行以幸存 rehype-raw） */
+function markMarkdownTables(node: HastRoot | HastContent): void {
+  const kids = (node as { children?: HastContent[] }).children;
+  if (!Array.isArray(kids)) return;
+  for (const c of kids) {
+    if (c.type === "element") {
+      const el = c as HastElement;
+      if (el.tagName === "table") {
+        (el.properties ??= {})[MD_TABLE_FLAG] = "1";
+      }
+      markMarkdownTables(el);
+    }
+  }
+}
+
+/** 递归为融合后无 markdown 标记的 <table> 补打 raw HTML 来源标记（in-place） */
+function markHtmlTables(node: HastRoot | HastContent): void {
+  const kids = (node as { children?: HastContent[] }).children;
+  if (!Array.isArray(kids)) return;
+  for (const c of kids) {
+    if (c.type === "element") {
+      const el = c as HastElement;
+      if (el.tagName === "table" && !hasTableFlag(el, MD_TABLE_FLAG)) {
+        (el.properties ??= {})[HTML_TABLE_FLAG] = "1";
+      }
+      markHtmlTables(el);
+    }
+  }
 }
 
 /* ---------------- HTML 语法图片归一化（rehype-raw 融合后） ---------------- */

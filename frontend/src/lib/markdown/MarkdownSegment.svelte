@@ -20,7 +20,9 @@
 <div class="md-item" class:md-first={index === 0} data-btype={seg.type} data-index={index}>
   <article class="md-block">
     {#each seg.nodes as node}
-      <MarkdownNode {node} />
+      <!-- index 即块下标（segments 与 blocks 一一对应），透传给可编辑表格
+           等需要源码定位的组件 -->
+      <MarkdownNode {node} blockIndex={index} />
     {/each}
   </article>
 </div>
