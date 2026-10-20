@@ -91,9 +91,7 @@ function tabCommand(getUnit: () => string): Command {
     if (state.selection.ranges.some((r) => !r.empty)) {
       return indentMore(view);
     }
-    view.dispatch(state.replaceSelection(getUnit()), {
-      scrollIntoView: true,
-    });
+    view.dispatch(state.replaceSelection(getUnit()));
     return true;
   };
 }
