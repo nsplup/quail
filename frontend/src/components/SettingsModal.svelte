@@ -4,6 +4,7 @@
   import TextInput from "./TextInput.svelte";
   import VirtualList from "../lib/virtual/VirtualList.svelte";
   import { focusTrap } from "../lib/focusTrap";
+  import { confirm$ } from "../lib/confirm";
   import { t, locale, langSetting, setLang } from "../lib/i18n.svelte";
   import {
     THEMES,
@@ -12,7 +13,11 @@
     PREVIEW_FONT_FALLBACK,
   } from "../lib/themes";
   import { licenseEntries } from "../lib/licenses";
-  import { APP_VERSION, COMMIT_HASH, SOURCE_TIME } from "../lib/generated/version";
+  import {
+    APP_VERSION,
+    COMMIT_HASH,
+    SOURCE_TIME,
+  } from "../lib/generated/version";
   import { openExternal } from "../lib/bridge";
   import {
     theme$ as theme,
@@ -32,6 +37,8 @@
     CountMode,
     DefaultLayout,
   } from "../lib/types";
+  import { tick } from "svelte";
+  import { get } from "svelte/store";
 
   let pressedOnOverlay = false;
 
@@ -54,10 +61,38 @@
         : "",
   );
 
-  /* 面板关闭时复位二级页面，下次打开回到一级（右栏从右侧滑回） */
-  $effect(() => {
-    if (!$settingsOpen) settingsSubPage.set(null);
-  });
+  function closeSettings(): void {
+    if ($settingsSubPage) {
+      // 步骤1：先关闭二级页面，这会触发二级 Trap 的销毁和 deactivate()
+      settingsSubPage.set(null);
+      // 步骤2：等待 Svelte 完成这一步的 DOM 更新与 attachment 清理
+      tick().then(() => {
+        // 步骤3：此时二级 Trap 已安全出栈，再关闭整个面板
+        settingsOpen.set(false);
+      });
+    } else {
+      // 没有二级页面时，直接关闭面板
+      settingsOpen.set(false);
+    }
+  }
+
+  function onWindowKeydown(e: KeyboardEvent): void {
+    if (e.key !== "Escape" || !$settingsOpen) return;
+
+    // 更高优先级的覆盖层（如 confirm 叠加在设置之上）先消费 ESC
+    if (get(confirm$)) return;
+
+    e.preventDefault();
+    e.stopPropagation(); // 阻止冒泡到 App 的全局守卫
+
+    if ($settingsSubPage) {
+      // 二级 → 一级：正常 LIFO 出栈，无需 tick
+      settingsSubPage.set(null);
+    } else {
+      // 一级 → 关闭：走 closeSettings，保证二级 trap 先停用
+      closeSettings();
+    }
+  }
 
   /* 焦点圈定交给 focus-trap（lib/focusTrap.ts 的 attachment 包装）：
    * - allowOutsideClick：放行 trap 外的点击 —— 遮罩点击关闭由 overlay 的
@@ -112,6 +147,8 @@
   ];
 </script>
 
+<svelte:window onkeydowncapture={onWindowKeydown} />
+
 {#if $settingsOpen}
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <div
@@ -125,7 +162,7 @@
     }}
     onpointerup={(e) => {
       if (pressedOnOverlay && e.target === e.currentTarget)
-        settingsOpen.set(false);
+        closeSettings();
       pressedOnOverlay = false;
     }}
   >
@@ -164,7 +201,7 @@
           class="icon-btn"
           title={$t("common.close")}
           aria-label={$t("common.close")}
-          onclick={() => settingsOpen.set(false)}
+          onclick={() => closeSettings()}
         >
           <Icon name="close" />
         </button>
@@ -339,7 +376,12 @@
                 <div class="app-info-name">Quail</div>
                 <div class="app-info-version-group">
                   {#if APP_VERSION}
-                    <div class="app-info-version" title={new Date(SOURCE_TIME).toLocaleString()}>Version {APP_VERSION}</div>
+                    <div
+                      class="app-info-version"
+                      title={new Date(SOURCE_TIME).toLocaleString()}
+                    >
+                      Version {APP_VERSION}
+                    </div>
                   {/if}
                   <div class="app-info-commit" title="Commit hash">
                     {COMMIT_HASH}
@@ -377,34 +419,34 @@
               <div class="h-full w-full" {@attach trap}>
                 <div class="settings-scroll h-full w-full overflow-y-auto">
                   <div class="grid grid-cols-2 gap-2 p-5">
-                  {#each themeList as tv (tv.id)}
-                    {@const vars = tv.vars}
-                    <button
-                      class="theme-card !block !p-0 overflow-hidden text-left"
-                      class:active={$theme === tv.id}
-                      style:background={vars["--pv-bg"]}
-                      style:color={vars["--pv-fg"]}
-                      style:border-color={$theme === tv.id
-                        ? vars["--ui-accent"]
-                        : vars["--ui-border"]}
-                      style:--card-strong={vars["--pv-fg-strong"]}
-                      style:--card-muted={vars["--pv-muted"]}
-                      style:--card-link={vars["--pv-link"]}
-                      onclick={() => theme.set(tv.id)}
-                    >
-                      <span
-                        class="block px-3 pt-2.5 text-xs font-semibold"
-                        style:color={vars["--card-strong"]}
+                    {#each themeList as tv (tv.id)}
+                      {@const vars = tv.vars}
+                      <button
+                        class="theme-card !block !p-0 overflow-hidden text-left"
+                        class:active={$theme === tv.id}
+                        style:background={vars["--pv-bg"]}
+                        style:color={vars["--pv-fg"]}
+                        style:border-color={$theme === tv.id
+                          ? vars["--ui-accent"]
+                          : vars["--ui-border"]}
+                        style:--card-strong={vars["--pv-fg-strong"]}
+                        style:--card-muted={vars["--pv-muted"]}
+                        style:--card-link={vars["--pv-link"]}
+                        onclick={() => theme.set(tv.id)}
                       >
-                        {tv.name}
-                      </span>
-                      <span
-                        class="theme-desc block px-3 pb-2.5 pt-1 text-[11px] leading-snug"
-                      >
-                        {@html desc}
-                      </span>
-                    </button>
-                  {/each}
+                        <span
+                          class="block px-3 pt-2.5 text-xs font-semibold"
+                          style:color={vars["--card-strong"]}
+                        >
+                          {tv.name}
+                        </span>
+                        <span
+                          class="theme-desc block px-3 pb-2.5 pt-1 text-[11px] leading-snug"
+                        >
+                          {@html desc}
+                        </span>
+                      </button>
+                    {/each}
                   </div>
                 </div>
               </div>

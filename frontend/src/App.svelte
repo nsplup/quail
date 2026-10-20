@@ -27,7 +27,6 @@
     theme$ as theme,
     indent$ as indent,
     settingsOpen$ as settingsOpen,
-    settingsSubPage$ as settingsSubPage,
     outlineOpen$ as outlineOpen,
     outlineAutoTrack$ as outlineAutoTrack,
     topIndex$ as topIndex,
@@ -42,7 +41,6 @@
     fontSizePv$ as fontSizePv,
     outline$ as outline,
     activeHeading$ as activeHeading,
-    countLabel$ as countLabel,
     dirty$ as dirty,
     guardDirty$ as guardDirty,
     editorApi$ as editorApi,
@@ -170,19 +168,7 @@
       const overlayOpen = settingsOpenNow || get(confirm$) !== null || dialogMaskOn;
 
       /* ---- 遮罩守卫：设置面板 / confirm 弹窗 / 系统弹窗遮罩打开期间 ---- */
-      if (overlayOpen) {
-        // Escape：沿用原设置面板逻辑（confirm 弹窗的 Esc 由其自身处理；
-        // 系统弹窗遮罩的 Esc 交给系统弹窗自身，不关闭遮罩）
-        if (e.key === "Escape" && !dialogMaskOn) {
-          // 二级页面先返回一级页面，再关闭设置面板
-          if (settingsOpenNow && get(settingsSubPage)) {
-            settingsSubPage.set(null);
-            return;
-          }
-          if (settingsOpenNow) settingsOpen.set(false);
-        }
-        return;
-      }
+      if (overlayOpen) return;
 
       /* ---- 常规状态：文档/窗口级快捷键 ---- */
       const mod = e.ctrlKey || e.metaKey;
