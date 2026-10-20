@@ -60,6 +60,10 @@
     cursor: ew-resize;
     z-index: 10;
     transition: background 0.15s;
+    /* 强制合成层：保证遮罩在启动时就参与合成排序，不被 WebKitGTK
+     * 的滚动条合成层压住（否则表现为"启动不遮、切换后才遮"） */
+    transform: translateZ(0);
+    isolation: isolate;
   }
 
   .divider::after {
@@ -67,8 +71,19 @@
     position: absolute;
     top: 0;
     bottom: 0;
-    left: -4px;
-    right: -4px;
+    left: -6px;   /* 向左 6px：遮住编辑区滚动条（宽度与 ::-webkit-scrollbar 耦合） */
+    right: -4px;  /* 向右 4px：保留原有拖拽热区 */
+    /* 线性渐变：左侧 6px 不透明遮罩；6px 之后全透明，让 1px 分隔线
+     * 与右侧热区正常透出（不再盖住 .divider 的线色） */
+    background: linear-gradient(
+      to right,
+      var(--ed-bg, var(--ui-bg)) 0,
+                                var(--ed-bg, var(--ui-bg)) 6px,
+                                transparent 6px,
+                                transparent 100%
+    );
+    z-index: -1;              /* 在 handler 之下 */
+    transform: translateZ(0); /* 与 .divider 同步提升合成层 */
   }
 
   /* 悬停手柄：圆角矩形 + 竖排三个圆点。
@@ -92,6 +107,7 @@
     opacity: 0;
     pointer-events: none;
     transition: opacity 0.15s;
+    z-index: 1;
   }
 
   /* 悬停/拖拽：分隔线本体恢复高亮，抓手同步浮现（样式保持不变） */
@@ -104,18 +120,6 @@
   .divider:hover::before,
   .divider.dragging::before {
     opacity: 1;
-  }
-
-  /* ---------- 双栏模式下隐藏编辑区滚动条（仅样式，不可交互；单栏模式保留） ---------- */
-  .main[data-mode="split"] .cm-scroller {
-    scrollbar-width: none;
-    -ms-overflow-style: none;
-  }
-
-  .main[data-mode="split"] .cm-scroller::-webkit-scrollbar {
-    width: 0;
-    height: 0;
-    display: none;
   }
 
   /* ---------- 设置弹窗 ---------- */
@@ -940,11 +944,7 @@ pointer-events: none;
   /* 样式 */
   --tbl-style-font-family: var(--ed-font-family);
   --tbl-style-font-size: inherit;
-  --tbl-style-menu-font-family: var(system-ui);
+  --tbl-style-menu-font-family: "system-ui";
   --tbl-style-menu-font-size: inherit;
   --tbl-style-default-header-alignment: left;
-}
-
-.cm-content div.tbl-table-widget .tbl-cell-editor ::selection {
-  background-color: red !important
 }
