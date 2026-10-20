@@ -50,17 +50,35 @@
    *   交叉观察反而推迟内存缓存命中与 load 事件 → 滚动往复时占位/空白
    *   帧闪烁；配合模块级终态缓存 + 命中时 sync 解码，重挂载首帧即有像素。
    * - 行内（inline=true，与文字混排等一切其他场景，data-inline 标注）：
-   *   不设宽高，使用图片原本尺寸；占位为行内布局 [SVG 图标][说明文本][刷新]，
+   *   不设宽高，使用图片原本尺寸；占位为行内布局 [SVG 图标][说明文本]，
    *   高度以行高为准，描边与背景色与块级占位一致；描述文本以 title 属性呈现。
    * - 三态（loading / error / restricted / notfound）文案走 i18n（preview.*）；
-   * - 刷新按钮：失败态占位为状态文本后的文字链接（loading 态不显示）；
-   *   loaded 态为左上角图标按钮（悬停显示，无淡入淡出动画），点击重新请求
-   *   并跳过前后端缓存；
+   * - 刷新按钮：仅失败态占位保留文字链接（loading 态不显示）；loaded 态的
+   *   刷新入口集成进右键菜单（见下），不再渲染角标按钮；
+   * - 右键菜单（仅 loaded 态可用）：右键图片弹出全局 ContextMenu
+   *   （lib/contextmenu 状态 + App 层组件渲染），菜单项依次为
+   *   复制图片 / 刷新 / 另存为 / 使用外部程序打开：
+   *   · 复制：fetch 当前请求 URL 取图，非 PNG 经 canvas 转 PNG 后写入剪贴板
+   *     （系统剪贴板位图格式约定）；
+   *   · 刷新：同原角标按钮的缓存穿透重载（bustParams）；
+   *   · 另存为：bridge.saveImageViaDialog → 后端弹图片格式保存对话框并
+   *     原子写入源文件字节；
+   *   · 使用外部程序打开：bridge.imageFilePath 解析代理缓存文件路径
+   *     （remote 未命中缓存时后端先下载），再 Browser.OpenFile 交系统打开；
+   *   右键监听用原生 addEventListener（非 Svelte onclick）：阻止冒泡，
+   *   避免触发外层 <a> 与预览面板委托；非 loaded 态不拦截、交还默认行为。
    * - 依赖 docState.dir：目录变化时自动执行刷新（回占位态 + 缓存穿透重新请求）。
    */
   import { untrack } from "svelte";
+  import { get } from "svelte/store";
   import { t } from "../i18n.svelte";
-  import { docState$ } from "../stores";
+  import { docState$, toast$ } from "../stores";
+  import { openContextMenu } from "../contextmenu";
+  import {
+    imageFilePath,
+    openFileWithSystem,
+    saveImageViaDialog,
+  } from "../bridge";
 
   let {
     /** 代理 URL（编译期 rewriteImageSrc 生成的 /__imgproxy/... 路径） */
@@ -129,16 +147,15 @@
   }
 
   /**
-   * 刷新按钮原生点击监听（角标 + 占位符刷新链接各一）。
+   * 刷新链接原生点击监听（失败态占位符刷新链接）。
    *
    * 不用 Svelte 的 onclick：Svelte 5 的 click 是应用根节点委托，事件先冒泡
    * 过预览面板滚动根（链接点击委托监听所在处）才到达委托点——带链接的图片
    * （块级图片可包在 <a> 内）点击刷新时会同时触发「打开链接 + 刷新」。
-   * 这里直接在按钮元素上挂原生监听，冒泡途中即 stopPropagation +
+   * 这里直接在链接元素上挂原生监听，冒泡途中即 stopPropagation +
    * preventDefault：点击刷新始终只触发刷新动作；点击占位符/图片的非刷新
    * 部分才会触发链接（链接行为由预览面板委托处理）。
    */
-  let cornerBtn = $state<HTMLButtonElement | null>(null);
   let linkBtn = $state<HTMLButtonElement | null>(null);
 
   function nativeReloadHandler(ev: MouseEvent): void {
@@ -148,17 +165,130 @@
   }
 
   $effect(() => {
-    const btn = cornerBtn;
+    const btn = linkBtn;
     if (!btn) return;
     btn.addEventListener("click", nativeReloadHandler);
     return () => btn.removeEventListener("click", nativeReloadHandler);
   });
 
+  /* ---------------- 右键菜单（仅 loaded 态可用） ---------------- */
+
+  /** 图片元素：右键监听挂载点 */
+  let imgEl = $state<HTMLImageElement | null>(null);
+
+  /** 失败类动作统一 TOAST 提示（成功提示按动作各自决定） */
+  function toast(
+    key: "imageCopyFailed" | "imageSaveFailed" | "imageOpenFailed",
+  ): void {
+    toast$.set({ id: Date.now(), msg: get(t)("preview." + key) });
+  }
+
+  /** 非 PNG 解码为 PNG（系统剪贴板位图约定 image/png） */
+  async function toPng(blob: Blob): Promise<Blob> {
+    const bmp = await createImageBitmap(blob);
+    const canvas = new OffscreenCanvas(bmp.width, bmp.height);
+    canvas.getContext("2d")?.drawImage(bmp, 0, 0);
+    bmp.close();
+    return canvas.convertToBlob({ type: "image/png" });
+  }
+
+  async function copyImage(): Promise<void> {
+    const url = imgSrc;
+    if (!url) return;
+    try {
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error(`fetch image: ${resp.status}`);
+      const blob = await resp.blob();
+      const png = blob.type === "image/png" ? blob : await toPng(blob);
+      await navigator.clipboard.write([
+        new ClipboardItem({ "image/png": png }),
+      ]);
+      toast$.set({ id: Date.now(), msg: get(t)("preview.imageCopied") });
+    } catch (err) {
+      console.error(err);
+      toast("imageCopyFailed");
+    }
+  }
+
+  /** 另存为：系统保存对话框（图片格式过滤）→ 后端读源文件原子写入目标路径 */
+  async function saveImageAs(): Promise<void> {
+    const url = imgSrc;
+    if (!url) return;
+    try {
+      await saveImageViaDialog(url, imageSaveName(url));
+    } catch {
+      toast("imageSaveFailed");
+    }
+  }
+
+  /** 保存对话框默认文件名：从代理 URL 的 p/url 参数取原始文件名；
+   *  代理 URL 参数已是解码值（URLSearchParams 自动解码），无需二次解码；
+   *  取不到或无扩展名时回退 image.png（真实格式以保存内容为准）。 */
+  function imageSaveName(url: string): string {
+    try {
+      const u = new URL(url, location.origin);
+      const raw = u.searchParams.get("p") ?? u.searchParams.get("url") ?? "";
+      const name = (raw.split(/[\\/]/).pop() ?? "").trim();
+      return name.includes(".") && !name.startsWith(".") ? name : "image.png";
+    } catch {
+      return "image.png";
+    }
+  }
+
+  /** 使用外部程序打开：后端解析代理 URL 为磁盘文件（remote 未命中缓存先
+   *  下载缓存），再交 wails runtime Browser.OpenFile 由系统默认程序打开。 */
+  async function openImageWithSystem(): Promise<void> {
+    const url = imgSrc;
+    if (!url) return;
+    try {
+      const filePath = await imageFilePath(url);
+      if (!filePath) return;
+      await openFileWithSystem(filePath);
+    } catch {
+      toast("imageOpenFailed");
+    }
+  }
+
+  /**
+   * 右键菜单入口（原生 contextmenu 监听，见 $effect）：
+   * - 仅 loaded 态拦截并弹出自定义菜单（复制 → 刷新 → 另存为 → 外部打开）；
+   * - 其余状态不拦截不阻止默认行为（加载中/失败态无自定义菜单可用）；
+   * - stopPropagation：预览面板滚动根的委托监听不受影响，且右键不触发
+   *   外层链接的任何行为。
+   */
+  function imgContextMenuHandler(ev: MouseEvent): void {
+    if (status !== "loaded" || !imgSrc) return; // 非 loaded 态交还默认行为
+    ev.stopPropagation();
+    ev.preventDefault();
+    openContextMenu(ev.clientX, ev.clientY, [
+      {
+        icon: "copy",
+        label: get(t)("preview.imageCopy"),
+        action: () => void copyImage(),
+      },
+      {
+        icon: "refresh",
+        label: get(t)("preview.imageReload"),
+        action: doReload,
+      },
+      {
+        icon: "floppy",
+        label: get(t)("preview.imageSaveAs"),
+        action: () => void saveImageAs(),
+      },
+      {
+        icon: "external",
+        label: get(t)("preview.imageOpenExternal"),
+        action: () => void openImageWithSystem(),
+      },
+    ]);
+  }
+
   $effect(() => {
-    const btn = linkBtn;
-    if (!btn) return;
-    btn.addEventListener("click", nativeReloadHandler);
-    return () => btn.removeEventListener("click", nativeReloadHandler);
+    const el = imgEl;
+    if (!el) return;
+    el.addEventListener("contextmenu", imgContextMenuHandler);
+    return () => el.removeEventListener("contextmenu", imgContextMenuHandler);
   });
 
   /**
@@ -228,6 +358,7 @@
     {alt}
     title={inline && alt ? alt : undefined}
     decoding={decodeSync ? "sync" : "async"}
+    bind:this={imgEl}
     onload={() => {
       status = "loaded";
       errorCode = "";
@@ -241,46 +372,6 @@
     }}
   />
   {#if status === "loaded"}
-    <!-- loaded 态：左上角刷新按钮（悬停显示，无淡入淡出动画） -->
-    <button
-      class="md-img-reload-corner"
-      type="button"
-      bind:this={cornerBtn}
-      aria-label={$t("preview.imageReload")}
-      title={$t("preview.imageReload")}
-    >
-      {#if inline}
-        <!-- 行内刷新：1em，粗线圆弧 + 短箭头，缩小后仍可读 -->
-        <svg
-          viewBox="0 0 16 16"
-          width="1em"
-          height="1em"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.5"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          aria-hidden="true"
-        >
-          <path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9" />
-          <path d="M13.5 3.5v3.5H10" />
-        </svg>
-      {:else}
-        <!-- 块级刷新：24px，开环 + 折角箭头 -->
-        <svg
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          aria-hidden="true"
-        >
-          <path d="M21 12a9 9 0 1 1-2.64-6.36" />
-          <path d="M21 3v6h-6" />
-        </svg>
-      {/if}
-    </button>
     {#if !inline && alt}
       <!-- 块级图片的 alt 描述文本（caption，DOM 位于 img 之后 → 显示在底部）；
            行内不显示，描述文本走 title 悬停提示 -->
@@ -373,7 +464,13 @@
           >
             <circle cx="12" cy="12" r="9" />
             <path d="M9.7 9.5a2.3 2.3 0 1 1 3.3 2.1c-.7.35-1 .85-1 1.7" />
-            <circle cx="12" cy="16.2" r="0.8" fill="currentColor" stroke="none" />
+            <circle
+              cx="12"
+              cy="16.2"
+              r="0.8"
+              fill="currentColor"
+              stroke="none"
+            />
           </svg>
         {:else if errorCode === "restricted"}
           <!-- 锁：代理白名单拒绝（403）或上游防盗链/禁止外链（401/403） -->
@@ -417,9 +514,17 @@
             stroke-linejoin="round"
             aria-hidden="true"
           >
-            <path d="M20.32 15.44 15.44 20.32H8.56L3.68 15.44V8.56L8.56 3.68H15.44L20.32 8.56Z" />
+            <path
+              d="M20.32 15.44 15.44 20.32H8.56L3.68 15.44V8.56L8.56 3.68H15.44L20.32 8.56Z"
+            />
             <path d="M12 7.5v6" />
-            <circle cx="12" cy="16.5" r="0.8" fill="currentColor" stroke="none" />
+            <circle
+              cx="12"
+              cy="16.5"
+              r="0.8"
+              fill="currentColor"
+              stroke="none"
+            />
           </svg>
         {/if}
       {/if}

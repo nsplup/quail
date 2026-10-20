@@ -23,11 +23,15 @@ const {
 const {
   PickOpen,
   PickSave,
+  PickImageSave,
+  ImageFilePath,
+  ImageSaveFile,
   Open,
   SaveAs,
   Save,
   CloseDoc,
   StartupDoc,
+  OpenFileWithExternal,
 } = FileService;
 
 const { Get: ConfigGet, SaveFields: ConfigSaveFields } = ConfigService;
@@ -135,6 +139,13 @@ export async function newInstance(path = ""): Promise<void> {
   await NewInstance(path);
 }
 
+/** 用系统默认程序打开本地文件（wails runtime Browser.OpenFile，与
+ *  openExternal 同为后端/运行时转发模式）。图片右键菜单「使用外部程序
+ *  打开」用：path 为后端 ImageFilePath 解析出的代理缓存文件绝对路径。 */
+export async function openFileWithSystem(path: string): Promise<void> {
+  await OpenFileWithExternal(path);
+}
+
 /* ---------------- FileService ---------------- */
 
 /** 启动文档：后端按命令行参数提交，无路径则空文档（untitled），不弹对话框 */
@@ -180,6 +191,31 @@ export async function saveAsViaDialog(content: string, defaultName = "untitled.m
 /** 确认退出（close:request 确认后调用） */
 export async function confirmQuit(): Promise<void> {
   await ConfirmQuit();
+}
+
+/* ---------------- 图片右键菜单（imgproxy 资源操作） ---------------- */
+
+/**
+ * 解析 imgproxy 代理 URL 为磁盘文件路径（图片右键菜单「使用外部程序打开」用）。
+ * local：文档目录白名单内资源的目标绝对路径；remote：代理缓存文件路径
+ * （未命中缓存时后端先下载缓存再返回，确保路径在文件系统上可用）。
+ * 返回 null 表示解析失败（越权 / 不存在 / 下载失败等，由调用方提示）。
+ */
+export async function imageFilePath(proxySrc: string): Promise<string | null> {
+  const p = (await ImageFilePath(proxySrc)) as unknown as string;
+  return p || null;
+}
+
+/**
+ * 图片另存为：弹系统「保存图片」对话框（取消返回 null），选定路径后由
+ * 后端读取源文件（本地资源 / 远程缓存）原子写入，字节不经前端往返。
+ * 弹窗期间与文档另存为同口径显示空白遮罩（withDialogMask）。
+ */
+export async function saveImageViaDialog(proxySrc: string, defaultName: string): Promise<string | null> {
+  const path = await withDialogMask<string>(() => PickImageSave(defaultName));
+  if (!path) return null;
+  await ImageSaveFile(proxySrc, path);
+  return path;
 }
 
 /** 关闭当前文档 */

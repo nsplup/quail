@@ -7,6 +7,7 @@
   import SettingsModal from "./components/SettingsModal.svelte";
   import { applyThemeVars, buildFontChain, EDITOR_FONT_FALLBACK, PREVIEW_FONT_FALLBACK } from "./lib/themes";
   import Toast from "./components/Toast.svelte";
+  import ContextMenu from "./components/ContextMenu.svelte";
   import ConfirmDialog from "./components/ConfirmDialog.svelte";
   import Banner from "./components/Banner.svelte";
   import { dialogMask$ as dialogMask } from "./lib/confirm";
@@ -754,6 +755,8 @@
   <ConfirmDialog />
 
   <Toast />
+
+  <ContextMenu />
 
   <BottomBar />
 </div>

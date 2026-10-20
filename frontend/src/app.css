@@ -610,7 +610,8 @@ md-image[data-status="error"] {
   border: 1px dashed var(--ui-border);
 }
 
-/* 刷新按钮（占位态：状态文本后的文字链接） */
+/* 刷新入口（占位态：状态文本后的文字链接；loaded 态集成进右键菜单，见
+ * ContextMenu.svelte / MarkdownImage.svelte，原角标按钮已移除） */
 .md-img-reload-link {
   display: inline-block;
   margin-left: 0.4em;
@@ -625,37 +626,6 @@ md-image[data-status="error"] {
 
 .md-img-reload-link:hover {
   text-decoration: underline;
-}
-
-/* 刷新按钮（loaded 态：左上角，悬停显示；不做淡入淡出动画） */
-.md-img-reload-corner {
-  position: absolute;
-  top: 6px;
-  left: 6px;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  border: 1px solid var(--pv-border);
-  border-radius: 6px;
-  background: var(--pv-bg, #fff);
-  color: var(--pv-fg);
-  cursor: pointer;
-  opacity: 0; /* 无 transition：悬停即显即隐 */
-  pointer-events: none;
-}
-
-md-image:hover .md-img-reload-corner {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.md-img-reload-corner svg {
-  width: 14px;
-  height: 14px;
 }
 
 /* 块级图片 loaded 态：alt 描述文本（caption） */
