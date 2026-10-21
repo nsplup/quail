@@ -6,7 +6,7 @@
  * 主题通过 CSS 变量注入（--ed-*，由 themes.css 的主题类提供），因此
  * 切换预览主题时编辑器配色同步变化，无需重新 configure。
  */
-import { Annotation, EditorState, EditorSelection, Compartment, type Text } from "@codemirror/state";
+import { Annotation, EditorState, EditorSelection, Compartment, type Extension, type Text } from "@codemirror/state";
 import { cmPhrases } from "../i18n-messages";
 import {
   EditorView,
@@ -14,6 +14,7 @@ import {
   keymap,
   crosshairCursor,
   highlightSpecialChars,
+  type KeyBinding,
 } from "@codemirror/view";
 import {
   defaultKeymap,
@@ -112,6 +113,13 @@ function tabCommand(getUnit: () => string): Command {
   };
 }
 
+/* 输入停顿多久后合并为新的撤销组（CM6 默认 500ms，收紧为 200ms）。
+ * 主编辑器与单元格编辑器共用同一取值（编辑区同配置的一部分） */
+const HISTORY_NEW_GROUP_DELAY = 200;
+/** 全局缩进单位镜像（兼容旧调用点）：主编辑器创建 / setIndentUnit 时同步。
+ *  新代码应把缩进单位显式传给 createCellEditor；此变量仅作为其缺省回退。 */
+let sharedIndentUnit = "  ";
+
 /* ---------------- 主题（CSS 变量驱动，静态配置一次） ---------------- */
 
 const editorTheme = EditorView.theme({
@@ -178,6 +186,48 @@ const mdHighlight = HighlightStyle.define([
   { tag: tags.invalid, color: "var(--ed-danger)" },
 ]);
 
+/* ---------------- 主编辑器与单元格编辑器共享的扩展片段 ----------------
+ *
+ * 两个工厂的差异是“职责性”的（生命周期、Compartment、面板、专属键位、
+ * 主题布局、返回类型），不适合合并成一个带大量 option 的通用工厂；
+ * 但“无参数、无副作用、语义完全一致”的部分应提出来，避免两处漂移。
+ * 新增/调整通用 Markdown 编辑行为时，只改这里。
+ */
+
+/** 两边共用的 Markdown 编辑扩展（语言、选区策略、高亮、特殊字符处理）。 */
+function commonMarkdownExtensions(): Extension[] {
+  return [
+    highlightSpecialChars(),
+    crosshairCursor(),
+    bracketMatching(),
+    highlightSelectionMatches(),
+    markdownEmphasis(),
+    /* 禁用多光标：false 时状态层把任何新选区 asSingle() 折叠，
+       Ctrl/Cmd+Click、矩形拖拽、Ctrl-Alt-↑/↓ 等所有入口一并失效 */
+    EditorState.allowMultipleSelections.of(false),
+    /* 拖拽永远视为“移动”而非“添加”：Alt/Ctrl+左键拖拽不再产生
+       选区/光标扩展（矩形选区扩展已移除，此为兜底） */
+    EditorView.dragMovesSelection.of(() => true),
+    EditorView.lineWrapping,
+    markdown(),
+    syntaxHighlighting(mdHighlight),
+  ];
+}
+
+/** 两边共用的按键（撤销/重做/反向缩进 + CM 默认键位）。
+ *  - 调用方专属键（Mod-s / Mod-f / Tab / Mod-Enter / Esc）由各自工厂
+ *    按需前置声明，不在此列；
+ *  - 自定义 Mod-z / Mod-y 必须排在 historyKeymap 之前，这里已保证。 */
+function commonKeymap(): KeyBinding[] {
+  return [
+    { key: "Mod-z", run: undo, shift: redo },
+    { key: "Mod-y", run: redo },
+    { key: "Shift-Tab", run: indentLess },
+    ...defaultKeymap,
+    ...historyKeymap,
+  ];
+}
+
 /* ---------------- 创建编辑器 ---------------- */
 
 export function createEditorApi(
@@ -195,10 +245,9 @@ export function createEditorApi(
 
   /* 缩进单位用 Compartment 动态重配置（设置切换 制表符/空格 时生效） */
   const indentCompartment = new Compartment();
+  sharedIndentUnit = initialIndent;
   /* 历史独立 Compartment：打开文档时卸载再重装 = 清空撤销历史 */
   const historyCompartment = new Compartment();
-  /* 输入停顿多久后合并为新的撤销组（CM6 默认 500ms，收紧为 200ms） */
-  const HISTORY_NEW_GROUP_DELAY = 200;
   const phrasesCompartment = new Compartment();
   /* 可编辑性 Compartment：任一遮罩（设置面板 / confirm 弹窗 / 系统弹窗
      空白遮罩）开启期间切换为不可编辑，全部关闭后恢复
@@ -215,25 +264,12 @@ export function createEditorApi(
     state: EditorState.create({
       doc: initialDoc,
       extensions: [
-        highlightSpecialChars(),
+        ...commonMarkdownExtensions(),
         historyCompartment.of(history({ newGroupDelay: HISTORY_NEW_GROUP_DELAY })),
-        crosshairCursor(),
-        bracketMatching(),
-        highlightSelectionMatches(),
-        markdownEmphasis(),
-        /* 禁用多光标：false 时状态层把任何新选区 asSingle() 折叠，
-         Ctrl/Cmd+Click、矩形拖拽、Ctrl-Alt-↑/↓ 等所有入口一并失效 */
-        EditorState.allowMultipleSelections.of(false),
-        /* 拖拽永远视为“移动”而非“添加”：Alt/Ctrl+左键拖拽不再产生
-           选区/光标扩展（矩形选区扩展已移除，此为兜底） */
-        EditorView.dragMovesSelection.of(() => true),
-        EditorView.lineWrapping,
-        markdown(),
         indentCompartment.of(indentUnit.of(initialIndent)),
         phrasesCompartment.of(phrasesFor(initialLang)),
         editableCompartment.of(EditorView.editable.of(true)),
         editorTheme,
-        syntaxHighlighting(mdHighlight),
         search({
           // 用自研面板替代原生查找面板
           createPanel: createModernSearchPanel,
@@ -243,12 +279,8 @@ export function createEditorApi(
           // 面板已开时 Mod-f 拉取选区到关键词框（须在 searchKeymap 之前拦截）
           { key: "Mod-f", run: searchPanelModF },
           { key: "Mod-s", preventDefault: true, run: () => (handlers.onsave(), true) },
-          { key: "Mod-z", run: undo, shift: redo },
-          { key: "Mod-y", run: redo },
           { key: "Tab", run: tabCommand(() => indent) },
-          { key: "Shift-Tab", run: indentLess },
-          ...defaultKeymap,
-          ...historyKeymap,
+          ...commonKeymap(),
           ...searchKeymap,
         ]),
         EditorView.updateListener.of((u) => {
@@ -578,6 +610,7 @@ export function createEditorApi(
     },
     setIndentUnit(unit: string) {
       indent = unit;
+      sharedIndentUnit = unit;
       view.dispatch({
         effects: indentCompartment.reconfigure(indentUnit.of(unit)),
       });
@@ -597,6 +630,179 @@ export function createEditorApi(
       view.dispatch({
         effects: phrasesCompartment.reconfigure(phrasesFor(lang)),
       });
+    },
+  };
+}
+
+/* ============================================================
+ * 单元格编辑器（可编辑表格用）：与编辑区同配置的 CM6 实例
+ * ============================================================
+ * - 与编辑区共用同一套语言（markdown / lezer 高亮）、自动换行、
+ *   按键（defaultKeymap / historyKeymap / Tab 缩进）、撤销历史参数
+ *   与 --ed-* 主题变量；仅去掉编辑区面板专属能力（查找面板、
+ *   滚动同步上报、IME 全局闸门、遮罩禁用、Mod-s）；
+ * - 懒创建：EditableTable 首次进入单元格编辑时才构建实例；
+ * - 冻结复用：结束单元格编辑后不销毁实例，DOM 脱离文档挂起
+ *   （Svelte 卸载宿主节点即完成冻结），下次编辑把 dom 重新挂载
+ *   并整体换文档（history 卸载重装 = 清空撤销历史）；
+ * - 自适应：height:auto + scroller 不滚动 → 编辑器随内容撑高，
+ *   单元格随之变宽变高；换行（自动换行 / 用户插入 \n）后把光标
+ *   滚动进最近的可滚动祖先（预览滚动容器）可视区。
+ */
+
+export interface CellEditorHandlers {
+  /** 文档变化（EditableTable 同步 editValue + 触发防抖实时解析） */
+  onchange: (doc: string) => void;
+  /** Ctrl/Cmd+Enter 或失焦：提交编辑 */
+  oncommit: () => void;
+  /** Esc：取消编辑 */
+  oncancel: () => void;
+}
+
+export interface CellEditorHandle {
+  /** .cm-editor 根节点（冻结期间由调用方持有，复用时重新挂载） */
+  dom: HTMLElement;
+  /** 整体替换文档（复用实例换单元格时调用，撤销历史随重装清空） */
+  setDoc(text: string): void;
+  /** 光标移到文档末尾并聚焦（重新挂载进文档后调用） */
+  focusEnd(): void;
+  /** 重新挂载后触发一次量测（脱离/进入文档后 CM 需重新测量几何） */
+  requestMeasure(): void;
+  destroy(): void;
+}
+
+/** 单元格编辑器主题：配色/字体沿用编辑区的 --ed-* 变量，但布局改为
+ * 随内容自适应（编辑区是 100% 高的滚动面板，单元格必须撑开 <td>） */
+const cellEditorTheme = EditorView.theme({
+  "&": {
+    height: "auto",
+    maxWidth: "100%",
+    backgroundColor: "transparent",
+    color: "var(--ed-fg)",
+    fontSize: "var(--ed-font-size, 13.5px)",
+  },
+  ".cm-scroller": {
+    fontFamily: "var(--ed-font-family, ui-monospace, monospace)",
+    lineHeight: "1.55",
+    padding: "0",
+    /* 高度完全由内容决定，不产生内部滚动（滚动交给页面滚动容器） */
+    overflow: "hidden",
+    cursor: "text",
+  },
+  ".cm-content": { caretColor: "var(--ed-accent)", padding: "0" },
+  ".cm-line": { padding: "0" },
+  ".cm-cursor": { borderLeftColor: "var(--ed-accent)", borderLeftWidth: "2px" },
+  "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection": {
+    backgroundColor: "var(--ed-selection)",
+  },
+  ".cm-selectionMatch": { backgroundColor: "var(--ed-selection)" },
+});
+
+/** 换行/插行后保持光标可见：编辑器自身无内部滚动（高度自适应），
+ * 需要滚的是最近的可滚动祖先（预览滚动容器）。仅向下滚动——
+ * 自动换行与插入 \n 都只会让内容向下增长。 */
+function scrollCaretIntoViewAncestor(view: EditorView): void {
+  const head = view.state.selection.main.head;
+  let coords: { top: number; bottom: number } | null = null;
+  try {
+    coords = view.coordsAtPos(head);
+  } catch {
+    return; // 视口外 / 量测中：跳过本次
+  }
+  if (!coords) return;
+  let el: HTMLElement | null = view.dom.parentElement;
+  while (el && el !== document.body) {
+    const oy = getComputedStyle(el).overflowY;
+    if ((oy === "auto" || oy === "scroll") && el.scrollHeight > el.clientHeight + 1) {
+      const box = el.getBoundingClientRect();
+      const margin = 24;
+      if (coords.bottom > box.bottom - margin) {
+        el.scrollTop += coords.bottom - box.bottom + margin;
+      } else if (coords.top < box.top) {
+        el.scrollTop -= box.top - coords.top;
+      }
+      return;
+    }
+    el = el.parentElement;
+  }
+}
+
+/** 创建单元格编辑器（EditableTable 懒调用：首次编辑单元格才创建）。
+ * 返回的实例在编辑结束后由调用方「冻结」——只要不 destroy，dom 脱离
+ * 文档仍然存活，下一次编辑重新 appendChild 即可复用。
+ *
+ * indentUnitValue：Tab 缩进单位。推荐调用方显式传入主编辑器当前缩进
+ * （例如从设置 store 读取），避免依赖模块级 sharedIndentUnit 镜像；
+ * 缺省仍回退到 sharedIndentUnit 以兼容旧调用点。 */
+export function createCellEditor(
+  parent: HTMLElement,
+  initialDoc: string,
+  handlers: CellEditorHandlers,
+  indentUnitValue: string = sharedIndentUnit
+): CellEditorHandle {
+  /* 换文档时卸载再重装 history = 清空撤销历史（与编辑区 setDoc 同策略） */
+  const historyCompartment = new Compartment();
+  let scrollRaf = 0;
+
+  const view = new EditorView({
+    parent,
+    state: EditorState.create({
+      doc: initialDoc,
+      extensions: [
+        ...commonMarkdownExtensions(),
+        historyCompartment.of(history({ newGroupDelay: HISTORY_NEW_GROUP_DELAY })),
+        indentUnit.of(indentUnitValue),
+        cellEditorTheme,
+        keymap.of([
+          { key: "Mod-Enter", preventDefault: true, run: () => (handlers.oncommit(), true) },
+          { key: "Escape", preventDefault: true, run: () => (handlers.oncancel(), true) },
+          { key: "Tab", run: tabCommand(() => indentUnitValue) },
+          ...commonKeymap(),
+        ]),
+        EditorView.updateListener.of((u) => {
+          if (u.docChanged) {
+            handlers.onchange(u.state.doc.toString());
+            /* 换行（自动换行 / 插入 \n）→ 内容高度增长，rAF 后把光标
+             * 滚动进最近可滚动祖先的可视区（只向下） */
+            cancelAnimationFrame(scrollRaf);
+            scrollRaf = requestAnimationFrame(() => scrollCaretIntoViewAncestor(view));
+          }
+        }),
+        EditorView.domEventHandlers({
+          /* 与旧 textarea 行为一致：失焦即提交（Esc 取消路径不会走到这里） */
+          blur: () => {
+            handlers.oncommit();
+            return false;
+          },
+        }),
+      ],
+    }),
+  });
+
+  return {
+    dom: view.dom,
+    setDoc(text: string) {
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: text },
+        /* 换文档：卸载再重装 history = 全新撤销历史 */
+        effects: historyCompartment.reconfigure([]),
+      });
+      view.dispatch({
+        effects: historyCompartment.reconfigure(
+          history({ newGroupDelay: HISTORY_NEW_GROUP_DELAY })
+        ),
+      });
+    },
+    focusEnd() {
+      view.dispatch({ selection: { anchor: view.state.doc.length } });
+      view.focus();
+    },
+    requestMeasure() {
+      view.requestMeasure();
+    },
+    destroy() {
+      cancelAnimationFrame(scrollRaf);
+      view.destroy();
     },
   };
 }

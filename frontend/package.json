@@ -17,6 +17,7 @@
     "@codemirror/search": "^6.5.10",
     "@codemirror/state": "^6.5.2",
     "@codemirror/view": "^6.36.2",
+    "@jridgewell/trace-mapping": "^0.3.31",
     "@lezer/highlight": "^1.2.1",
     "@types/mdast": "^4.0.4",
     "@wailsio/runtime": "^3.0.0-beta.28",

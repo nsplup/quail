@@ -16,16 +16,28 @@
    * 见 tableOriginFromEl / table-source.ts。
    *
    * 【编辑交互】
-   * - 单击单元格 → 原地 textarea 编辑原始源码；blur / Ctrl+Enter 提交，
-   *   Esc 取消；单元格内支持多行（markdown 序列化为 <br>）；
-   * - 右键单元格 → ContextMenu 行/列操作（插入 / 复制 / 删除），操作后
-   *   立即回写；
+   * - 单击单元格 → 原地 CM6 编辑器（与编辑区同配置，见
+   *   codemirrorSetup.createCellEditor）编辑原始源码；实例懒创建（首次
+   *   编辑单元格才构建），结束编辑后冻结复用（不销毁，下次编辑重新
+   *   挂载换文档）；blur / Ctrl+Enter 提交，Esc 取消；
+   * - 单元格解析策略与编辑区相同：编辑期间对单元格内容做带防抖的
+   *   实时解析（复用 markdown-core 同款编译管线），编辑结束后再应用
+   *   解析后的样式（本地即时应用，不等 worker 回流）；反向更新依旧
+   *   保持在编辑结束后；
+   * - 右键单元格 → ContextMenu 行/列操作（插入 / 移动 / 复制 / 删除，
+   *   移动与复制均带方向性），操作后立即回写；
    * - 源码定位失败的表格（如区块定位漂移、含 colspan/rowspan）静态渲染。
    */
   import type { Element, ElementContent } from "hast";
   import { get } from "svelte/store";
+  import { untrack } from "svelte";
   import MarkdownNode from "./MarkdownNode.svelte";
   import { editorApi$, blocks$ } from "../stores";
+  import {
+    createCellEditor,
+    type CellEditorHandle,
+  } from "../editor/codemirrorSetup";
+  import { compileMarkdown } from "./markdown-core";
   import { openContextMenu } from "../contextmenu";
   import { t } from "../i18n.svelte";
   import {
@@ -121,7 +133,14 @@
   let src = $state<TableSource | null>(null);
   let editing = $state<{ r: number; c: number } | null>(null);
   let editValue = $state("");
-  let editEl = $state<HTMLTextAreaElement | null>(null);
+  /** 单元格 CM6 编辑器宿主（仅编辑中的单元格渲染该节点） */
+  let editorHost = $state<HTMLElement | null>(null);
+  /** 冻结复用的 CM6 单元格编辑器实例（懒创建：首次编辑单元格才构建；
+   * 结束编辑不销毁，仅随宿主节点脱离文档，下次编辑重新挂载换文档） */
+  let cellEditor: CellEditorHandle | null = null;
+  /** 本地解析样式覆盖（编辑结束后应用，key "r:c" → HAST 子节点）；
+   * worker 回流（node 引用变化）后清除，显示回归 worker 产物 */
+  let localDisplay = $state.raw<Map<string, ElementContent[]> | null>(null);
   let tableEl = $state<HTMLTableElement | null>(null);
   /** 嵌套表格（raw HTML 单元格内的表格）：挂载后经 DOM 判定，只读渲染 */
   let nested = $state(false);
@@ -132,27 +151,49 @@
     nested = Boolean(tableEl?.parentElement?.closest("td, th, table"));
   });
 
-  /* node 引用变化（worker 重解析回流）→ 源码缓存失效，交互时重新定位 */
+  /* node 引用变化（worker 重解析回流）→ 源码缓存失效，交互时重新定位；
+   * 本地解析样式同时失效（worker 产物自此接管显示） */
   $effect(() => {
     void node;
     src = null;
+    localDisplay = null;
   });
 
-  /* 进入编辑态后：聚焦 + 自适应高度 */
+  /* 组件卸载：销毁冻结中的单元格编辑器实例 */
   $effect(() => {
-    if (editing && editEl) {
-      editEl.focus();
-      editEl.setSelectionRange(editEl.value.length, editEl.value.length);
-      autoSize();
-    }
+    return () => {
+      cellEditor?.destroy();
+      cellEditor = null;
+    };
   });
 
-  function autoSize(): void {
-    const el = editEl;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${el.scrollHeight}px`;
-  }
+  /* 进入编辑态 → 挂载/复用 CM6 单元格编辑器：
+   * - 懒创建：首次进入编辑才构建实例（不编辑单元格则不存在实例）；
+   * - 复用：把冻结实例的 dom 重新挂载进新宿主并整体换文档（撤销历史
+   *   随 history 卸载重装清空）；光标定位到文档末尾（与旧行为一致）。
+   * 源码定位走 untrack：编辑器内容只由「进入编辑」驱动，禁止 node
+   * 引用变化（worker 回流）触发重跑——那会在编辑中重置编辑器文档。 */
+  $effect(() => {
+    if (!editing || !editorHost) return;
+    const e = editing;
+    const s = untrack(() => ensureSource());
+    const initial = s?.rows[e.r]?.[e.c] ?? "";
+    if (!cellEditor) {
+      cellEditor = createCellEditor(editorHost, initial, {
+        onchange: (doc) => {
+          editValue = doc;
+          scheduleCellParse();
+        },
+        oncommit: () => commitEdit(),
+        oncancel: () => cancelEdit(),
+      });
+    } else {
+      editorHost.appendChild(cellEditor.dom);
+      cellEditor.setDoc(initial);
+    }
+    cellEditor.focusEnd();
+    cellEditor.requestMeasure();
+  });
 
   /** 懒定位表格源码（缓存在交互期间复用；node 变化后自动失效） */
   function ensureSource(): TableSource | null {
@@ -235,20 +276,100 @@
     const s = ensureSource();
     if (!s || e.r >= s.rows.length) return;
     while (s.rows[e.r].length <= e.c) s.rows[e.r].push("");
+    /* 编辑结束 → 应用解析后的样式（本地即时，不等 worker 回流） */
+    applyParsedStyle(s, e);
     if (s.rows[e.r][e.c] === editValue) return; // 内容未变不回写
     s.rows[e.r][e.c] = editValue;
+    /* 反向更新依旧保持在编辑结束后 */
     writeBack(s, { r: e.r, c: e.c });
   }
 
-  function editKeydown(ev: KeyboardEvent): void {
-    ev.stopPropagation();
-    if (ev.key === "Escape") {
-      ev.preventDefault();
-      editing = null;
-    } else if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) {
-      ev.preventDefault();
-      commitEdit();
+  /** 取消编辑（Esc）：丢弃改动与暂存的防抖解析结果 */
+  function cancelEdit(): void {
+    editing = null;
+    pendingParsed = null;
+    if (cellParseTimer !== undefined) {
+      clearTimeout(cellParseTimer);
+      cellParseTimer = undefined;
     }
+  }
+
+  /* ---------------- 单元格实时解析（与编辑区相同，带防抖） ----------------
+   * 策略与编辑区一致：内容变化后静默 CELL_PARSE_DEBOUNCE_MS 才解析
+   * （连续输入不打出解析洪峰）。解析复用 markdown-core 的 compileMarkdown
+   * （worker 同款纯编译管线：remark-parse → GFM → rehype-raw → sanitize），
+   * 且直接解析「序列化后的表格源码」——即 writeBack 将写入编辑区的同一份
+   * 文本，保证本地应用的样式与 worker 回流后的结果完全一致。
+   * 解析结果仅暂存（pendingParsed），编辑结束后才应用到单元格显示。 */
+
+  /** 与编辑区解析防抖一致（stores.ts PARSE_DEBOUNCE_MS） */
+  const CELL_PARSE_DEBOUNCE_MS = 200;
+
+  let cellParseTimer: ReturnType<typeof setTimeout> | undefined;
+  /** 防抖解析的暂存结果与其对应的单元格内容（过期则 commit 时重解析） */
+  let pendingParsed: Map<string, ElementContent[]> | null = null;
+  let pendingParsedValue = "";
+
+  /**
+   * 编译单元格矩阵（含正在编辑的单元格）为本地显示映射。
+   * key "r:c" → 该单元格渲染用的 HAST 子节点。
+   */
+  function parseCellsPreview(
+    s: TableSource,
+    editingCell: { r: number; c: number },
+    value: string,
+  ): Map<string, ElementContent[]> | null {
+    const rows = s.rows.map((row) => [...row]);
+    while (rows.length <= editingCell.r) rows.push([]);
+    while (rows[editingCell.r].length <= editingCell.c)
+      rows[editingCell.r].push("");
+    rows[editingCell.r][editingCell.c] = value;
+
+    // serialize* 返回 { text, cellOffset }，这里只需要 text
+    const serialized =
+      s.origin === "markdown"
+        ? serializeMarkdownTable(rows, s.aligns as (TableAlign | null)[])
+        : serializeHtmlTable(
+            rows,
+            s.aligns as (TableAlign | null)[],
+            s.hasHeader,
+          );
+
+    const table = compileMarkdown(serialized.text).children.find(
+      (n): n is Element => n.type === "element" && n.tagName === "table",
+    );
+    if (!table) return null;
+    const map = new Map<string, ElementContent[]>();
+    for (const dr of extractDisplayRows(table)) {
+      dr.cells.forEach((cell, ci) => map.set(`${dr.idx}:${ci}`, cell.children));
+    }
+    return map;
+  }
+
+  /** 编辑期间：内容变化后重起防抖，静默后解析并暂存（不应用显示） */
+  function scheduleCellParse(): void {
+    if (cellParseTimer !== undefined) clearTimeout(cellParseTimer);
+    cellParseTimer = setTimeout(() => {
+      cellParseTimer = undefined;
+      const e = editing;
+      const s = ensureSource();
+      if (!e || !s) return;
+      pendingParsedValue = editValue;
+      pendingParsed = parseCellsPreview(s, e, editValue);
+    }, CELL_PARSE_DEBOUNCE_MS);
+  }
+
+  /** 编辑结束：应用解析后的样式（本地覆盖 worker 回流前的显示） */
+  function applyParsedStyle(s: TableSource, e: { r: number; c: number }): void {
+    const fresh =
+      pendingParsed && pendingParsedValue === editValue ? pendingParsed : null;
+    pendingParsed = null;
+    if (cellParseTimer !== undefined) {
+      clearTimeout(cellParseTimer);
+      cellParseTimer = undefined;
+    }
+    /* 防抖未及触发（提交早于静默期结束）：同步补一次解析 */
+    localDisplay = fresh ?? parseCellsPreview(s, e, editValue);
   }
 
   /* ---------------- 右键菜单：行 / 列操作 ---------------- */
@@ -274,9 +395,40 @@
       for (const row of t.rows) row.splice(at, 0, "");
       t.aligns.splice(at, 0, null);
     };
-    const copyCol = (at: number) => (t: TableSource) => {
-      for (const row of t.rows) row.splice(at + 1, 0, row[at] ?? "");
-      t.aligns.splice(at + 1, 0, t.aligns[at] ?? null);
+    /* 移动（带方向性）：与相邻行/列交换位置；列移动同步交换列对齐 */
+    const moveRow = (from: number, dir: -1 | 1) => (t: TableSource) => {
+      const to = from + dir;
+      if (to < 0 || to >= t.rows.length) return;
+      const tmp = t.rows[from];
+      t.rows[from] = t.rows[to];
+      t.rows[to] = tmp;
+    };
+    const moveCol = (from: number, dir: -1 | 1) => (t: TableSource) => {
+      const to = from + dir;
+      if (to < 0 || to >= colCount) return;
+      for (const row of t.rows) {
+        const tmp = row[from];
+        row[from] = row[to];
+        row[to] = tmp;
+      }
+      const tmp = t.aligns[from];
+      t.aligns[from] = t.aligns[to];
+      t.aligns[to] = tmp;
+    };
+    /* 复制（带方向性，参照 ref.html）：
+     * 向上复制插到原行位置（原行下移），向下复制插到原行之后；
+     * 向左复制插到原列位置（原列右移），向右复制插到原列之后 */
+    const copyRowDir = (from: number, dir: -1 | 1) => (t: TableSource) => {
+      if (dir < 0 && from === 0) return;
+      if (dir > 0 && from >= t.rows.length - 1) return;
+      t.rows.splice(dir < 0 ? from : from + 1, 0, [...(t.rows[from] ?? [])]);
+    };
+    const copyColDir = (from: number, dir: -1 | 1) => (t: TableSource) => {
+      if (dir < 0 && from === 0) return;
+      if (dir > 0 && from >= colCount - 1) return;
+      const at = dir < 0 ? from : from + 1;
+      for (const row of t.rows) row.splice(at, 0, row[from] ?? "");
+      t.aligns.splice(at, 0, t.aligns[from] ?? null);
     };
     const delCol = (at: number) => (t: TableSource) => {
       for (const row of t.rows) row.splice(at, 1);
@@ -295,9 +447,28 @@
         action: apply((t) => t.rows.splice(r + 1, 0, emptyRow())),
       },
       {
+        icon: "arrow-up",
+        label: $t("table.rowMoveUp"),
+        disabled: r === 0,
+        action: apply(moveRow(r, -1)),
+      },
+      {
+        icon: "arrow-down",
+        label: $t("table.rowMoveDown"),
+        disabled: r === rows.length - 1,
+        action: apply(moveRow(r, 1)),
+      },
+      {
         icon: "copy",
-        label: $t("table.rowCopy"),
-        action: apply((t) => t.rows.splice(r + 1, 0, [...(t.rows[r] ?? [])])),
+        label: $t("table.rowCopyUp"),
+        disabled: r === 0,
+        action: apply(copyRowDir(r, -1)),
+      },
+      {
+        icon: "copy",
+        label: $t("table.rowCopyDown"),
+        disabled: r === rows.length - 1,
+        action: apply(copyRowDir(r, 1)),
       },
       {
         icon: "trash",
@@ -313,7 +484,30 @@
         label: $t("table.colRight"),
         action: apply(addCol(c + 1)),
       },
-      { icon: "copy", label: $t("table.colCopy"), action: apply(copyCol(c)) },
+      {
+        icon: "chevron-left",
+        label: $t("table.colMoveLeft"),
+        disabled: c === 0,
+        action: apply(moveCol(c, -1)),
+      },
+      {
+        icon: "chevron-right",
+        label: $t("table.colMoveRight"),
+        disabled: c === colCount - 1,
+        action: apply(moveCol(c, 1)),
+      },
+      {
+        icon: "copy",
+        label: $t("table.colCopyLeft"),
+        disabled: c === 0,
+        action: apply(copyColDir(c, -1)),
+      },
+      {
+        icon: "copy",
+        label: $t("table.colCopyRight"),
+        disabled: c === colCount - 1,
+        action: apply(copyColDir(c, 1)),
+      },
       {
         icon: "trash",
         label: $t("table.colDelete"),
@@ -347,15 +541,13 @@
               oncontextmenu={(ev) => openCellMenu(ev, row.idx, ci)}
             >
               {#if editing && editing.r === row.idx && editing.c === ci}
-                <textarea
-                  bind:this={editEl}
-                  bind:value={editValue}
-                  class="md-cell-editor"
-                  rows="1"
-                  spellcheck="false"
-                  onblur={commitEdit}
-                  onkeydown={editKeydown}
-                  oninput={autoSize}></textarea>
+                <!-- CM6 单元格编辑器（冻结复用实例）的挂载宿主 -->
+                <div class="md-cell-editor-host" bind:this={editorHost}></div>
+              {:else if localDisplay?.has(`${row.idx}:${ci}`)}
+                <!-- 编辑结束应用的本地解析样式（worker 回流后自动清除） -->
+                {#each localDisplay?.get(`${row.idx}:${ci}`) ?? [] as ch (ch)}
+                  <MarkdownNode node={ch} />
+                {/each}
               {:else}
                 {#each cell.children ?? [] as ch (ch)}
                   <MarkdownNode node={ch} />
@@ -379,15 +571,13 @@
               oncontextmenu={(ev) => openCellMenu(ev, row.idx, ci)}
             >
               {#if editing && editing.r === row.idx && editing.c === ci}
-                <textarea
-                  bind:this={editEl}
-                  bind:value={editValue}
-                  class="md-cell-editor"
-                  rows="1"
-                  spellcheck="false"
-                  onblur={commitEdit}
-                  onkeydown={editKeydown}
-                  oninput={autoSize}></textarea>
+                <!-- CM6 单元格编辑器（冻结复用实例）的挂载宿主 -->
+                <div class="md-cell-editor-host" bind:this={editorHost}></div>
+              {:else if localDisplay?.has(`${row.idx}:${ci}`)}
+                <!-- 编辑结束应用的本地解析样式（worker 回流后自动清除） -->
+                {#each localDisplay?.get(`${row.idx}:${ci}`) ?? [] as ch (ch)}
+                  <MarkdownNode node={ch} />
+                {/each}
               {:else}
                 {#each cell.children ?? [] as ch (ch)}
                   <MarkdownNode node={ch} />

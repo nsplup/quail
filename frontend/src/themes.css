@@ -303,24 +303,28 @@
   box-shadow: none;
 }
 
-/* 单元格原码编辑器：等宽、占满单元格、随内容增高 */
-.md-block .md-cell-editor {
+/* 单元格 CM6 编辑器（冻结复用实例）的宿主：占满单元格、随内容撑高
+   （单元格适应编辑器宽高；换行自动换行 + 单元格向下增高） */
+.md-block .md-cell-editor-host {
   display: block;
   width: 100%;
   min-width: 6ch;
   min-height: 1.1em;
-  padding: 0;
-  margin: 0;
-  border: none;
-  outline: none;
+}
+
+.md-block .md-cell-editor-host .cm-editor {
   background: transparent;
-  color: var(--pv-fg);
-  font-family: var(--ed-font-family, ui-monospace, monospace);
+  color: var(--ed-fg);
   font-size: 0.92em;
-  line-height: inherit;
-  resize: none;
+}
+
+.md-block .md-cell-editor-host .cm-editor.cm-focused {
+  outline: none;
+}
+
+.md-block .md-cell-editor-host .cm-scroller {
+  font-family: var(--ed-font-family, ui-monospace, monospace);
   overflow: hidden;
-  white-space: pre;
 }
 
 .md-block hr {
