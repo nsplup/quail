@@ -12,7 +12,11 @@
    */
   import { tick } from "svelte";
   import Icon from "./Icon.svelte";
-  import { contextMenu$, closeContextMenu, type ContextMenuItem } from "../lib/contextmenu";
+  import {
+    contextMenu$,
+    closeContextMenu,
+    type ContextMenuItem,
+  } from "../lib/contextmenu";
 
   const contextMenuState = $derived($contextMenu$);
 
@@ -82,7 +86,7 @@
        text-xs 字号（与 Toast / 设置面板同级密度）；z 层压过 Toast(60) -->
   <!-- svelte-ignore a11y_interactive_supports_focus -->
   <div
-    class="ctx-menu fixed z-[70] min-w-[176px] rounded-lg border border-line bg-soft py-1 shadow-lg"
+    class="ctx-menu fixed z-[70] min-w-[176px] rounded-lg border border-line bg-soft py-1 shadow-lg select-none"
     style="left: {pos.x}px; top: {pos.y}px;"
     bind:this={menuEl}
     role="menu"
@@ -96,10 +100,16 @@
     {#each contextMenuState.items as item, i (i)}
       {#if item.kind === "separator"}
         <!-- 分组分隔线：非交互项，不关闭菜单 -->
-        <div class="ctx-separator my-1 border-t border-line" role="separator"></div>
+        <div
+          class="ctx-separator my-1 border-t border-line"
+          role="separator"
+        ></div>
       {:else if item.kind === "header"}
         <!-- 分组标题：非交互项，不关闭菜单 -->
-        <div class="ctx-header px-3 pb-1 pt-1.5 text-[10.5px] font-semibold uppercase tracking-wide text-muted" role="presentation">
+        <div
+          class="ctx-header px-3 pb-1 pt-1.5 text-[10.5px] font-semibold uppercase tracking-wide text-muted"
+          role="presentation"
+        >
           {item.label}
         </div>
       {:else}
@@ -112,7 +122,9 @@
           onclick={() => itemClick(item)}
         >
           {#if item.icon}
-            <span class="flex-none text-muted"><Icon name={item.icon} size={14} /></span>
+            <span class="flex-none text-muted"
+              ><Icon name={item.icon} size={14} /></span
+            >
           {/if}
           <span class="truncate">{item.label}</span>
         </button>

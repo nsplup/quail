@@ -24,8 +24,8 @@
    *   实时解析（复用 markdown-core 同款编译管线），编辑结束后再应用
    *   解析后的样式（本地即时应用，不等 worker 回流）；反向更新依旧
    *   保持在编辑结束后；
-   * - 右键单元格 → ContextMenu 行/列操作（插入 / 移动 / 复制 / 删除，
-   *   移动与复制均带方向性），操作后立即回写；
+   * - 右键单元格 → ContextMenu 行/列操作（插入 / 移动 / 复制 / 删除），
+   *   复制固定插到当前行/列之后（无方向性），操作后立即回写；
    * - 源码定位失败的表格（如区块定位漂移、含 colspan/rowspan）静态渲染。
    */
   import type { Element, ElementContent } from "hast";
@@ -379,8 +379,6 @@
     ev.stopPropagation();
     const s = ensureSource();
     if (!s) return;
-    const originTag =
-      s.origin === "markdown" ? $t("table.originMd") : $t("table.originHtml");
     const rows = s.rows;
     const canDelRow = rows.length > 1;
     const canDelCol = colCount > 1;
@@ -415,101 +413,86 @@
       t.aligns[from] = t.aligns[to];
       t.aligns[to] = tmp;
     };
-    /* 复制（带方向性，参照 ref.html）：
-     * 向上复制插到原行位置（原行下移），向下复制插到原行之后；
-     * 向左复制插到原列位置（原列右移），向右复制插到原列之后 */
-    const copyRowDir = (from: number, dir: -1 | 1) => (t: TableSource) => {
-      if (dir < 0 && from === 0) return;
-      if (dir > 0 && from >= t.rows.length - 1) return;
-      t.rows.splice(dir < 0 ? from : from + 1, 0, [...(t.rows[from] ?? [])]);
+    /* 复制（无方向性）：副本固定插到当前行/列之后。
+     * 插入位置 from+1 始终落在 [1, rows.length] 区间内，永不失序；
+     * 列复制同步复制列对齐。 */
+    const copyRow = (from: number) => (t: TableSource) => {
+      t.rows.splice(from + 1, 0, [...(t.rows[from] ?? [])]);
     };
-    const copyColDir = (from: number, dir: -1 | 1) => (t: TableSource) => {
-      if (dir < 0 && from === 0) return;
-      if (dir > 0 && from >= colCount - 1) return;
-      const at = dir < 0 ? from : from + 1;
-      for (const row of t.rows) row.splice(at, 0, row[from] ?? "");
-      t.aligns.splice(at, 0, t.aligns[from] ?? null);
+    const copyCol = (from: number) => (t: TableSource) => {
+      for (const row of t.rows) row.splice(from + 1, 0, row[from] ?? "");
+      t.aligns.splice(from + 1, 0, t.aligns[from] ?? null);
     };
     const delCol = (at: number) => (t: TableSource) => {
       for (const row of t.rows) row.splice(at, 1);
       t.aligns.splice(at, 1);
     };
     openContextMenu(ev.clientX, ev.clientY, [
-      { kind: "header", label: `${$t("table.row")} · ${originTag}` },
+      { kind: "header", label: $t("table.row") },
       {
-        icon: "rows",
+        icon: "table-row-plus-before",
         label: $t("table.rowAbove"),
         action: apply((t) => t.rows.splice(r, 0, emptyRow())),
       },
       {
-        icon: "rows",
+        icon: "table-row-plus-after",
         label: $t("table.rowBelow"),
         action: apply((t) => t.rows.splice(r + 1, 0, emptyRow())),
       },
       {
-        icon: "arrow-up",
+        icon: "table-arrow-up",
         label: $t("table.rowMoveUp"),
         disabled: r === 0,
         action: apply(moveRow(r, -1)),
       },
       {
-        icon: "arrow-down",
+        icon: "table-arrow-down",
         label: $t("table.rowMoveDown"),
         disabled: r === rows.length - 1,
         action: apply(moveRow(r, 1)),
       },
       {
-        icon: "copy",
-        label: $t("table.rowCopyUp"),
-        disabled: r === 0,
-        action: apply(copyRowDir(r, -1)),
+        icon: "table-row-copy",
+        label: $t("table.rowCopy"),
+        action: apply(copyRow(r)),
       },
       {
-        icon: "copy",
-        label: $t("table.rowCopyDown"),
-        disabled: r === rows.length - 1,
-        action: apply(copyRowDir(r, 1)),
-      },
-      {
-        icon: "trash",
+        icon: "table-row-remove",
         label: $t("table.rowDelete"),
         disabled: !canDelRow,
         action: apply((t) => t.rows.splice(r, 1)),
       },
       { kind: "separator", label: "" },
-      { kind: "header", label: `${$t("table.col")} · ${originTag}` },
-      { icon: "cols", label: $t("table.colLeft"), action: apply(addCol(c)) },
+      { kind: "header", label: $t("table.col") },
       {
-        icon: "cols",
+        icon: "table-column-plus-before",
+        label: $t("table.colLeft"),
+        action: apply(addCol(c)),
+      },
+      {
+        icon: "table-column-plus-after",
         label: $t("table.colRight"),
         action: apply(addCol(c + 1)),
       },
       {
-        icon: "chevron-left",
+        icon: "table-arrow-left",
         label: $t("table.colMoveLeft"),
         disabled: c === 0,
         action: apply(moveCol(c, -1)),
       },
       {
-        icon: "chevron-right",
+        icon: "table-arrow-right",
         label: $t("table.colMoveRight"),
         disabled: c === colCount - 1,
         action: apply(moveCol(c, 1)),
       },
       {
-        icon: "copy",
-        label: $t("table.colCopyLeft"),
-        disabled: c === 0,
-        action: apply(copyColDir(c, -1)),
+        icon: "table-column-copy",
+        label: $t("table.colCopy"),
+        action: apply(copyCol(c)),
       },
       {
-        icon: "copy",
-        label: $t("table.colCopyRight"),
-        disabled: c === colCount - 1,
-        action: apply(copyColDir(c, 1)),
-      },
-      {
-        icon: "trash",
+        icon: "table-column-remove",
         label: $t("table.colDelete"),
         disabled: !canDelCol,
         action: apply(delCol(c)),
