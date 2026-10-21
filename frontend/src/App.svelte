@@ -5,7 +5,12 @@
   import BottomBar from "./components/BottomBar.svelte";
   import OutlinePanel from "./components/OutlinePanel.svelte";
   import SettingsModal from "./components/SettingsModal.svelte";
-  import { applyThemeVars, buildFontChain, EDITOR_FONT_FALLBACK, PREVIEW_FONT_FALLBACK } from "./lib/themes";
+  import {
+    applyThemeVars,
+    buildFontChain,
+    EDITOR_FONT_FALLBACK,
+    PREVIEW_FONT_FALLBACK,
+  } from "./lib/themes";
   import Toast from "./components/Toast.svelte";
   import ContextMenu from "./components/ContextMenu.svelte";
   import ConfirmDialog from "./components/ConfirmDialog.svelte";
@@ -57,7 +62,11 @@
   import type { EditorApi } from "./lib/editor/codemirrorSetup";
   import { get } from "svelte/store";
 
-  const indentUnit: Record<string, string> = { tab: "\t", space2: "  ", space4: "    " };
+  const indentUnit: Record<string, string> = {
+    tab: "\t",
+    space2: "  ",
+    space4: "    ",
+  };
   const SYNC_OFFSET = 8;
 
   /* ---------------- 主题/字体/字号：脚本注入根元素变量（store 驱动） ---------------- */
@@ -70,7 +79,7 @@
         buildFontChain($fontEditor, EDITOR_FONT_FALLBACK),
         buildFontChain($fontPreview, PREVIEW_FONT_FALLBACK),
         $fontSizeEd,
-        $fontSizePv
+        $fontSizePv,
       );
       $editorApi?.requestMeasure();
     }
@@ -80,6 +89,24 @@
   $effect(() => {
     const api = $editorApi;
     if (api) api.setIndentUnit(indentUnit[$indent]);
+  });
+
+  /* 反向更新前置清理（预览表格回写 EditableTable → replaceLines）：
+   * - pendingCursorLine：用户"先在编辑器打字 → 再点进预览表格"的常见
+   *   顺序会留下未完成的光标同步待办，blocks 重建时 trySyncCursor 会
+   *   拿旧光标行拽预览——必须取消；
+   * - lastCursorActivityAt 归零：replaceLines 本身已被注解抑制、不再
+   *   刷新该时间戳，但旧值若在 1.2s 窗口内仍会把 blocks 重建劫持进
+   *   "编辑中"分支（光标行对齐）。归零确保走"非编辑"分支（顶行对齐
+   *   + 去重）。
+   * $effect 返回清理函数：editorApi 重建（理论场景）时自动注销旧钩子。 */
+  $effect(() => {
+    const api = $editorApi;
+    if (!api) return;
+    return api.onBeforeReplace(() => {
+      cancelCursorSync();
+      lastCursorActivityAt = 0;
+    });
   });
 
   /* 面板从 display:none 恢复显示后，请求 CM 重新测量几何信息（防光标/滚动错位） */
@@ -113,7 +140,7 @@
         const g = get(guardDirty);
         const res = await confirmDialog(
           g ? get(t)("confirm.quitDirty") : get(t)("confirm.quit"),
-          g ? "dirty" : "confirm"
+          g ? "dirty" : "confirm",
         );
         if (res === "cancel") return; // 中止关闭
         if (res === "save") {
@@ -132,11 +159,7 @@
       // 遮罩开启期间（设置面板 / confirm 弹窗 / 系统弹窗空白遮罩，与
       // 快捷键的 overlayOpen 同口径）：停止响应拖拽打开，避免遮罩交互
       // 流程未结束时装载新文档、遮罩结果与拖拽装载相互覆盖
-      if (
-        get(settingsOpen) ||
-        get(confirm$) !== null ||
-        get(dialogMask)
-      ) {
+      if (get(settingsOpen) || get(confirm$) !== null || get(dialogMask)) {
         return;
       }
       const path = d?.files?.find((p) => !!p);
@@ -166,7 +189,8 @@
       // 系统弹窗空白遮罩打开期间（Ctrl+O / Ctrl+Shift+S 等系统弹窗存续）
       // 与设置面板 / confirm 弹窗同等对待：阻断所有界面快捷键
       const dialogMaskOn = get(dialogMask);
-      const overlayOpen = settingsOpenNow || get(confirm$) !== null || dialogMaskOn;
+      const overlayOpen =
+        settingsOpenNow || get(confirm$) !== null || dialogMaskOn;
 
       /* ---- 遮罩守卫：设置面板 / confirm 弹窗 / 系统弹窗遮罩打开期间 ---- */
       if (overlayOpen) return;
@@ -256,7 +280,7 @@
     if (!st?.path) return;
     const res = await confirmDialog(
       get(t)("confirm.deletedSave", { values: { path: st.path } }),
-      "deletedSave"
+      "deletedSave",
     );
     if (res !== "save") return; // 取消：不写盘
     try {
@@ -362,7 +386,9 @@
     previewProgrammaticUntil = performance.now() + 320;
     try {
       $previewApi?.scrollToIndex(index, { offset: SYNC_OFFSET });
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }
 
   function scrollToEditor(line: number): void {
@@ -413,7 +439,7 @@
   function trySyncCursor(): void {
     const line = pendingCursorLine;
     if (line == null) return;
-    if (get(mode) !== "split") return;                       // 保留：切回 split 再试
+    if (get(mode) !== "split") return; // 保留：切回 split 再试
     // 编辑器被程序化滚动期间（预览→编辑器回写 / 大纲跳转）光标事件让位；
     // 延迟重试，等抑制过期后再评估，避免 pending 卡住
     if (performance.now() < editorProgrammaticUntil) {
@@ -428,11 +454,11 @@
 
     const pv = $previewApi;
     const el = pvScrollEl();
-    if (!pv || !el || el.clientHeight === 0) return;         // 保留：等 ready / 布局
+    if (!pv || !el || el.clientHeight === 0) return; // 保留：等 ready / 布局
     const bks = get(blocks);
-    if (bks.length === 0) return;                            // 保留：等首次解析
+    if (bks.length === 0) return; // 保留：等首次解析
     const lastBlk = bks[bks.length - 1];
-    if (!lastBlk || line > lastBlk.endLine) return;          // 保留：blocks 尚未覆盖新行
+    if (!lastBlk || line > lastBlk.endLine) return; // 保留：blocks 尚未覆盖新行
 
     const b = indexOfLine(line);
     if (b < 0 || b >= bks.length) return;
@@ -443,7 +469,7 @@
     const size = Math.max(1, pv.getItemSize(b));
     const rows = Math.max(1, blk.endLine - blk.startLine);
     const frac = Math.min(1, Math.max(0, (line - blk.startLine) / rows));
-    const y = off + frac * size;                             // 光标行估计 y
+    const y = off + frac * size; // 光标行估计 y
 
     // 与上次同步目标相近 → 视为已完成（避免两条路径互相覆盖抖动）
     if (b === lastSyncedBlock && Math.abs(y - lastSyncedY) < 8) {
@@ -463,18 +489,16 @@
 
     // 目标位置：从上方进入 → 落在视窗 35%；从下方进入 → 落在 65%
     // （比 SYNC_OFFSET 更稳：长块内滚动后光标行不贴边，下次可见判定更宽松）
-    const targetY = y < top + margin
-      ? y - vh * 0.35
-      : y - vh * 0.65;
+    const targetY = y < top + margin ? y - vh * 0.35 : y - vh * 0.65;
     const target = Math.max(0, targetY);
 
     outlineAutoTrack.set(true);
     topIndex.set(b);
     el.scrollTop = target;
-    previewProgrammaticUntil = performance.now() + 320;      // 抑制预览回写
+    previewProgrammaticUntil = performance.now() + 320; // 抑制预览回写
     lastSyncedBlock = b;
     lastSyncedY = y;
-    pendingCursorLine = null;                                // 完成
+    pendingCursorLine = null; // 完成
   }
 
   /* ---------------- 顶行同步（编辑器滚动 → 预览） ---------------- */
@@ -582,7 +606,10 @@
     // 预览是滚动源：顶部块 b + 块内像素进度 → 编辑器小数行号（块内插值）
     const off = pv.getItemOffset(index);
     const size = Math.max(1, pv.getItemSize(index));
-    const frac = Math.min(1, Math.max(0, (pv.getScrollTop() - off + SYNC_OFFSET) / size));
+    const frac = Math.min(
+      1,
+      Math.max(0, (pv.getScrollTop() - off + SYNC_OFFSET) / size),
+    );
     const rows = Math.max(1, blk.endLine - blk.startLine);
     outlineAutoTrack.set(true);
     topIndex.set(index);
@@ -680,7 +707,6 @@
 
   // splitPct：仅拖拽/双击重置使用的局部布局比例（不放全局 store）
   let splitPct = $state(50);
-
 </script>
 
 <!-- 全窗口放置区（Wails File Drop）：data-file-drop-target 由 Wails 运行时识别，
@@ -709,7 +735,10 @@
       {/if}
 
       <!-- 内容区：两个面板始终挂载（CSS 控制显隐），模式切换不销毁组件 -->
-      <div class="content flex min-w-0 flex-1 overflow-hidden" bind:this={contentEl}>
+      <div
+        class="content flex min-w-0 flex-1 overflow-hidden"
+        bind:this={contentEl}
+      >
         <CodePane
           initialDoc={$doc}
           initialIndent={indentUnit[$indent]}

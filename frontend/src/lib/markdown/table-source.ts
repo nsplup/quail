@@ -17,6 +17,18 @@ import type { Element as HastElement } from "hast";
 
 export type TableOrigin = "markdown" | "html";
 export type TableAlign = "left" | "center" | "right";
+/** 锚定单元格：序列化时记录其在输出文本内的字符偏移（0-based） */
+export interface CellMark {
+  r: number;
+  c: number;
+}
+
+export interface SerializedTable {
+  text: string;
+  /** anchor 单元格内容首字符的偏移；未传 anchor 或越界回落为 0 */
+  cellOffset: number;
+}
+
 
 /** 表格源码定位 + 解析结果（rows[0] = 表头行；markdown 来源恒有表头） */
 export interface TableSource {
@@ -320,8 +332,11 @@ function escapeMarkdownCell(s: string): string {
   return s.replace(/\|/g, "\\|").replace(/\r?\n/g, "<br>");
 }
 
-/** rows → 对齐填充的 GFM 表格源码（rows[0] = 表头；恒输出分隔行） */
-export function serializeMarkdownTable(rows: string[][], aligns: (TableAlign | null)[]): string {
+/** rows → 对齐填充的 GFM 表格源码（rows[0] = 表头；恒输出分隔行）。
+ * mark：锚定单元格，序列化时记录其内容首字符在输出文本内的偏移
+ *（替换后光标落点，使兜底对齐目标落在表格附近而非文档顶部）。 */
+export function serializeMarkdownTable(rows: string[][], aligns: (TableAlign | null)[], mark?: CellMark): SerializedTable {
+  /* ……以下 norm / widths / alignOf / padCell / delim 计算，与原实现完全一致…… */
   const colCount = Math.max(1, ...rows.map((r) => r.length), aligns.length);
   const norm = rows.map((r) => {
     const cells = [...r];
@@ -342,19 +357,34 @@ export function serializeMarkdownTable(rows: string[][], aligns: (TableAlign | n
     if (a === "left") return fill(":" + "-".repeat(Math.max(1, w - 1)));
     return fill("-".repeat(w));
   }).join(" | ")} |`;
-  return [lines[0] ?? "", delim, ...lines.slice(1)].join("\n");
+
+  const rowLines = [lines[0] ?? "", delim, ...lines.slice(1)];
+
+  /* 记账：mark.r 行在最终输出中的位置——norm[0] 是输出第 0 行，
+   * norm[r≥1] 排在分隔行之后（第 r+1 行）。行内前缀 =
+   * "| " (2) + Σ_{c'<c} (paddedCell(c').length + " | " (3)) */
+  let cellOffset = 0;
+  if (mark && mark.r >= 0 && mark.r < norm.length) {
+    const rowPos = mark.r === 0 ? 0 : mark.r + 1;
+    const padded = norm[mark.r].map((cell, c) => padCell(cell, widths[c], alignOf(c)));
+    const inLine = 2 + padded.slice(0, mark.c).reduce((n, p) => n + p.length + 3, 0);
+    cellOffset = rowLines.slice(0, rowPos).reduce((n, l) => n + l.length + 1, 0) + inLine;
+  }
+
+  return { text: rowLines.join("\n"), cellOffset };
 }
+
 
 function escapeHtmlCell(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\r?\n/g, "<br>");
 }
 
-/** rows → 缩进规整的 HTML 表格源码（2 空格缩进；hasHeader 时输出 thead/th） */
 export function serializeHtmlTable(
   rows: string[][],
   aligns: (TableAlign | null)[],
-  hasHeader: boolean
-): string {
+  hasHeader: boolean,
+  mark?: CellMark
+): SerializedTable {
   const colCount = Math.max(1, ...rows.map((r) => r.length));
   const norm = rows.map((r) => {
     const cells = [...r];
@@ -365,37 +395,48 @@ export function serializeHtmlTable(
     const a = aligns[c];
     return a && a !== "left" ? ` align="${a}"` : "";
   };
+
+  let cellOffset = 0;
   const out: string[] = ["<table>"];
-  const emitRow = (cells: string[], tag: "th" | "td", indent: string): void => {
+  /** rowIdx：rows 矩阵行号（hasHeader 时 norm[0] → 0，norm[1..] → 1..n） */
+  const emitRow = (cells: string[], tag: "th" | "td", indent: string, rowIdx: number): void => {
     out.push(`${indent}<tr>`);
     cells.forEach((cell, c) => {
+      if (mark && rowIdx === mark.r && c === mark.c) {
+        /* out 中已有行的总长 + 各行换行符，加本行前缀：
+         * indent + "  " + "<" + tag + alignAttr + ">" */
+        cellOffset = out.reduce((n, l) => n + l.length + 1, 0)
+          + indent.length + 2 + tag.length + alignAttr(c).length + 1;
+      }
       out.push(`${indent}  <${tag}${alignAttr(c)}>${escapeHtmlCell(cell)}</${tag}>`);
     });
     out.push(`${indent}</tr>`);
   };
   if (hasHeader && norm.length > 0) {
     out.push("  <thead>");
-    emitRow(norm[0], "th", "    ");
+    emitRow(norm[0], "th", "    ", 0);
     out.push("  </thead>");
     if (norm.length > 1) {
       out.push("  <tbody>");
-      norm.slice(1).forEach((r) => emitRow(r, "td", "    "));
+      norm.slice(1).forEach((r, i) => emitRow(r, "td", "    ", i + 1));
       out.push("  </tbody>");
     }
   } else {
     out.push("  <tbody>");
-    norm.forEach((r) => emitRow(r, "td", "    "));
+    norm.forEach((r, i) => emitRow(r, "td", "    ", i));
     out.push("  </tbody>");
   }
   out.push("</table>");
-  return out.join("\n");
+  return { text: out.join("\n"), cellOffset };
 }
+
 
 /** 底栏插入用：r 行 c 列的格式化 MARKDOWN 表格（空表头 + 空单元格） */
 export function emptyMarkdownTable(rowCount: number, colCount: number): string {
   const rows: string[][] = Array.from({ length: Math.max(1, rowCount) }, () => new Array(colCount).fill(""));
-  return serializeMarkdownTable(rows, []);
+  return serializeMarkdownTable(rows, []).text;  // ← 解构 .text
 }
+
 
 /* ---------------- 源码定位（种子块区间优先，全文兜底） ---------------- */
 

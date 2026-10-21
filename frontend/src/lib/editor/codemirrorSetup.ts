@@ -6,7 +6,7 @@
  * 主题通过 CSS 变量注入（--ed-*，由 themes.css 的主题类提供），因此
  * 切换预览主题时编辑器配色同步变化，无需重新 configure。
  */
-import { EditorState, EditorSelection, Compartment, type Text } from "@codemirror/state";
+import { Annotation, EditorState, EditorSelection, Compartment, type Text } from "@codemirror/state";
 import { cmPhrases } from "../i18n-messages";
 import {
   EditorView,
@@ -34,6 +34,15 @@ import { markdownEmphasis } from "./emphasis"
 import { dirty$, setImeComposing, settingsOpen$ } from "../stores";
 import { confirm$, dialogMask$ } from "../confirm";
 import { get } from "svelte/store";
+
+/**
+ * 程序性反向更新标记：预览区可编辑表格等场景中，由代码驱动的
+ * 文档替换（replaceLines / setDoc）必须挂载。挂载后：
+ * - 光标行上报监听器跳过该事务（预览是编辑源，禁止源码光标反向拽预览）；
+ * - 脏状态监听器【不受影响】——反向更新后文档照常置脏。
+ * 不用 Transaction.remote：那是协同编辑的"远端变更"语义，挪用有隐患。
+ */
+const programmaticChange = Annotation.define<"reverseUpdate">();
 
 export interface EditorHandlers {
   /** 文档内容变化（编辑器是源码的唯一编辑入口） */
@@ -65,8 +74,15 @@ export interface EditorApi {
    *  插入（光标落进首个表头单元格）。 */
   insertText(text: string, cursorOffset?: number): void;
   /** 替换指定行区间（1-based，含端点）为给定文本。用于预览区可编辑表格
-   *  的反向更新（整表源码替换，行数可增减，undo 可整体回退）。 */
-  replaceLines(startLine: number, endLine: number, text: string): void;
+   * 的反向更新（整表源码替换，行数可增减，undo 可整体回退）。
+   * cursorOffsetInText：光标在替换文本内的字符偏移（可选）。 */
+  replaceLines(startLine: number, endLine: number, text: string,
+    cursorOffsetInText?: number): void;
+  /** 注册反向更新前置钩子：replaceLines 每次调用前触发。
+   * 供 App 清理残留的光标同步状态（pendingCursorLine /
+   * lastCursorActivityAt），防止 blocks 重建后旧光标行拽动预览。
+   * 返回注销函数。 */
+  onBeforeReplace(fn: () => void): () => void;
   /** 隐藏后重新显示时请求重新测量几何信息 */
   measure(): void;
   /** 切换缩进单位（设置里选择制表符 / 空格），动态重配置无需重建编辑器 */
@@ -253,6 +269,11 @@ export function createEditorApi(
            语义一致；程序性滚动（scrollToLine）不改变选区，不会误触发。 */
         EditorView.updateListener.of((u) => {
           if (!u.selectionSet && !u.docChanged) return;
+          // 程序性反向更新（预览表格回写等）：预览是编辑源，不触发
+          // 源码→预览的光标行同步。跳过上报，避免污染 App 侧的
+          // lastCursorActivityAt（编辑意图锚点判定）与 pendingCursorLine。
+          // 注意：u.transactions 是本次 update 的事务数组，需用 some 聚合判断。
+          if (u.transactions.some((tr) => tr.annotation(programmaticChange))) return;
           pendingCursorState = u.state;
           if (cursorLineRaf) return;
           cursorLineRaf = requestAnimationFrame(() => {
@@ -387,6 +408,11 @@ export function createEditorApi(
     dialogMask$.subscribe(syncEditable),
   ];
 
+  /* 反向更新前置钩子：EditableTable 经 replaceLines 回写表格前，
+   App 侧需要先清残留同步状态。钩子集在 createEditorApi 作用域内，
+   随编辑器销毁一并失效 */
+  const beforeReplaceHooks = new Set<() => void>();
+
   return {
     destroy() {
       for (const unsub of unsubOverlays) unsub();
@@ -473,16 +499,55 @@ export function createEditorApi(
       });
       view.focus();
     },
-    /** 行区间替换（1-based，含端点；区间外越界按文档边界收敛） */
-    replaceLines(startLine: number, endLine: number, text: string) {
+    /** 行区间替换（1-based，含端点；区间外越界按文档边界收敛）。
+     *
+     * 用于预览区可编辑表格的反向更新：整表源码替换，行数可增减，
+     * undo 可整体回退。
+     *
+     * cursorOffsetInText：光标落点在【替换文本 text 内】的字符偏移
+     * （0-based，越界收敛到 text.length）。可选：
+     * - 传入被编辑单元格在整表源码内的偏移 → 替换后光标精确落在该处，
+     *   blocks 重建后的重对齐目标落在表格附近（兜底语义）；
+     * - 缺省 → 光标落在替换起点。
+     *
+     * 抑制语义（三条，缺一不可）：
+     * 1. programmaticUntil：本次变更可能引发编辑器滚动（原选区被映射/
+     *    替换后 CM6 滚到选区），抑制 scroll → ontopline 上报，
+     *    防止编辑器顶行回写预览（deadline 模式，同 scrollToLine 先例，
+     *    只设不清，scroll 事件异步到达时窗口必须仍然有效）；
+     * 2. programmaticChange 注解：光标行上报监听器跳过本事务，
+     *    不刷新 App 侧 lastCursorActivityAt / pendingCursorLine，
+     *    blocks 重建后走"非编辑"分支（顶行对齐 + 去重），而非
+     *    "编辑中"分支（光标行对齐——跳顶的根因）；
+     * 3. 显式 selection：不依赖 CM6 对旧选区的隐式映射，消灭映射
+     *    不确定性；即使上述两条漏防，跳变目标也落在表格内而非顶部。
+     *
+     * 允许的行为边界：替换后 blocks 重建，若行数变化导致块偏移漂移
+     * 超过去重阈值（8px），允许一次小幅重对齐；禁止的是跳回光标行
+     * 或文档顶部。
+     */
+    replaceLines(startLine: number, endLine: number, text: string,
+      cursorOffsetInText?: number): void {
+      for (const fn of beforeReplaceHooks) fn();
       const doc = view.state.doc;
       if (doc.lines === 0) return;
       const a = Math.max(1, Math.min(startLine, doc.lines));
       const b = Math.max(a, Math.min(endLine, doc.lines));
+      const from = doc.line(a).from;
+      const off = cursorOffsetInText == null
+        ? 0
+        : Math.max(0, Math.min(cursorOffsetInText, text.length));
+      programmaticUntil = performance.now() + 320;
       view.dispatch({
-        changes: { from: doc.line(a).from, to: doc.line(b).to, insert: text },
+        changes: { from, to: doc.line(b).to, insert: text },
+        selection: { anchor: from + off },
+        annotations: programmaticChange.of("reverseUpdate"),
         userEvent: "input.replace",
       });
+    },
+    onBeforeReplace(fn: () => void) {
+      beforeReplaceHooks.add(fn);
+      return () => { beforeReplaceHooks.delete(fn); };
     },
     getTopLine() {
       try {

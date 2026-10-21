@@ -39,7 +39,10 @@
     type TableSource,
   } from "./table-source";
 
-  let { node, blockIndex = null }: { node: Element; blockIndex?: number | null } = $props();
+  let {
+    node,
+    blockIndex = null,
+  }: { node: Element; blockIndex?: number | null } = $props();
 
   /* ---------------- HAST 显示结构（worker 解析产物） ---------------- */
 
@@ -57,11 +60,20 @@
       if (section.type !== "element") continue;
       const tag = section.tagName;
       const isHeadSection = tag === "thead";
-      if (tag !== "thead" && tag !== "tbody" && tag !== "tfoot" && tag !== "tr") continue;
-      const trs = tag === "tr" ? [section] : ((section.children ?? []) as ElementContent[]).filter((c) => c.type === "element" && (c as Element).tagName === "tr") as Element[];
+      if (tag !== "thead" && tag !== "tbody" && tag !== "tfoot" && tag !== "tr")
+        continue;
+      const trs =
+        tag === "tr"
+          ? [section]
+          : (((section.children ?? []) as ElementContent[]).filter(
+              (c) => c.type === "element" && (c as Element).tagName === "tr",
+            ) as Element[]);
       for (const tr of trs) {
         const cells = ((tr.children ?? []) as ElementContent[]).filter(
-          (c) => c.type === "element" && ((c as Element).tagName === "td" || (c as Element).tagName === "th")
+          (c) =>
+            c.type === "element" &&
+            ((c as Element).tagName === "td" ||
+              (c as Element).tagName === "th"),
         ) as Element[];
         rows.push({ idx: idx++, cells, isHeader: isHeadSection });
       }
@@ -75,7 +87,9 @@
   }
 
   const displayRows = $derived(extractDisplayRows(node));
-  const colCount = $derived(displayRows.reduce((m, r) => Math.max(m, r.cells.length), 0));
+  const colCount = $derived(
+    displayRows.reduce((m, r) => Math.max(m, r.cells.length), 0),
+  );
   const origin = $derived(tableOriginFromEl(node));
   /** colspan/rowspan 表格不做原地编辑（朴素序列化会破坏合并结构） */
   const hasSpan = $derived(
@@ -84,16 +98,19 @@
         const p = c.properties as Record<string, unknown> | undefined;
         const col = Number(p?.colspan ?? 1);
         const row = Number(p?.rowspan ?? 1);
-        return (Number.isFinite(col) && col > 1) || (Number.isFinite(row) && row > 1);
-      })
-    )
+        return (
+          (Number.isFinite(col) && col > 1) || (Number.isFinite(row) && row > 1)
+        );
+      }),
+    ),
   );
 
   /** 列对齐（显示用；HAST 单元格自带 align 属性，直接透传） */
   function alignStyle(cell: Element | undefined): string | undefined {
     const p = (cell?.properties ?? {}) as Record<string, unknown>;
     const a = typeof p.align === "string" ? p.align.toLowerCase() : undefined;
-    if (a === "left" || a === "center" || a === "right") return `text-align: ${a};`;
+    if (a === "left" || a === "center" || a === "right")
+      return `text-align: ${a};`;
     const style = typeof p.style === "string" ? p.style : "";
     const m = /text-align\s*:\s*(left|center|right)/i.exec(style);
     return m ? `text-align: ${m[1].toLowerCase()};` : undefined;
@@ -146,7 +163,9 @@
     const doc = api.getDoc();
     const blocks = get(blocks$);
     const block = blockIndex != null ? blocks[blockIndex] : undefined;
-    const seed = block ? { startLine: block.startLine, endLine: block.endLine } : null;
+    const seed = block
+      ? { startLine: block.startLine, endLine: block.endLine }
+      : null;
     const found = locateTableSource(doc, seed, origin);
     if (!found) return null;
     /* 行列对齐显示尺寸（源解析与 HAST 显示在正常情况下一致；补齐兜底） */
@@ -159,25 +178,44 @@
     return src;
   }
 
-  /** 回写：内部状态 → 格式化源码 → 编辑器（反向更新；worker 随后回流显示） */
-  function writeBack(s: TableSource): void {
+  /** 回写：内部状态 → 格式化源码 → 编辑器（反向更新）。
+   * anchor：锚定单元格 → 序列化时记录其偏移作为替换后光标落点。 */
+  function writeBack(s: TableSource, anchor?: { r: number; c: number }): void {
     const api = get(editorApi$);
     if (!api) return;
     const doc = api.getDoc();
     const lines = doc.split("\n");
-    /* 行区间漂移校验（上一次回写尚未重解析 / 外部编辑）→ 就近重定位 */
     let range = rangeMatches(lines, s, s.text)
       ? { startLine: s.startLine, endLine: s.endLine }
       : relocateNearest(doc, s.text, s.startLine);
-    if (!range) return; // 无法安全定位：放弃本次回写（不破坏用户源码）
-    const text =
+    if (!range) return;
+
+    const serialized =
       s.origin === "markdown"
-        ? serializeMarkdownTable(s.rows, s.aligns as (TableAlign | null)[])
-        : serializeHtmlTable(s.rows, s.aligns as (TableAlign | null)[], s.hasHeader);
-    api.replaceLines(range.startLine, range.endLine, text);
+        ? serializeMarkdownTable(
+            s.rows,
+            s.aligns as (TableAlign | null)[],
+            anchor,
+          )
+        : serializeHtmlTable(
+            s.rows,
+            s.aligns as (TableAlign | null)[],
+            s.hasHeader,
+            anchor,
+          );
+
+    /* 三条抑制（deadline/注解/显式选区）都在 replaceLines 内部完成；
+     * 残留同步状态由 App 注册的 onBeforeReplace 钩子清理 */
+    api.replaceLines(
+      range.startLine,
+      range.endLine,
+      serialized.text,
+      serialized.cellOffset,
+    );
+
     s.startLine = range.startLine;
-    s.endLine = range.startLine + text.split("\n").length - 1;
-    s.text = text;
+    s.endLine = range.startLine + serialized.text.split("\n").length - 1;
+    s.text = serialized.text;
   }
 
   /* ---------------- 单元格编辑 ---------------- */
@@ -199,7 +237,7 @@
     while (s.rows[e.r].length <= e.c) s.rows[e.r].push("");
     if (s.rows[e.r][e.c] === editValue) return; // 内容未变不回写
     s.rows[e.r][e.c] = editValue;
-    writeBack(s);
+    writeBack(s, { r: e.r, c: e.c });
   }
 
   function editKeydown(ev: KeyboardEvent): void {
@@ -220,7 +258,8 @@
     ev.stopPropagation();
     const s = ensureSource();
     if (!s) return;
-    const originTag = s.origin === "markdown" ? $t("table.originMd") : $t("table.originHtml");
+    const originTag =
+      s.origin === "markdown" ? $t("table.originMd") : $t("table.originHtml");
     const rows = s.rows;
     const canDelRow = rows.length > 1;
     const canDelCol = colCount > 1;
@@ -228,7 +267,7 @@
       const cur = ensureSource();
       if (!cur) return;
       fn(cur);
-      writeBack(cur);
+      writeBack(cur, { r, c });
     };
     const emptyRow = () => new Array(colCount).fill("");
     const addCol = (at: number) => (t: TableSource) => {
@@ -245,16 +284,42 @@
     };
     openContextMenu(ev.clientX, ev.clientY, [
       { kind: "header", label: `${$t("table.row")} · ${originTag}` },
-      { icon: "rows", label: $t("table.rowAbove"), action: apply((t) => t.rows.splice(r, 0, emptyRow())) },
-      { icon: "rows", label: $t("table.rowBelow"), action: apply((t) => t.rows.splice(r + 1, 0, emptyRow())) },
-      { icon: "copy", label: $t("table.rowCopy"), action: apply((t) => t.rows.splice(r + 1, 0, [...(t.rows[r] ?? [])])) },
-      { icon: "trash", label: $t("table.rowDelete"), disabled: !canDelRow, action: apply((t) => t.rows.splice(r, 1)) },
+      {
+        icon: "rows",
+        label: $t("table.rowAbove"),
+        action: apply((t) => t.rows.splice(r, 0, emptyRow())),
+      },
+      {
+        icon: "rows",
+        label: $t("table.rowBelow"),
+        action: apply((t) => t.rows.splice(r + 1, 0, emptyRow())),
+      },
+      {
+        icon: "copy",
+        label: $t("table.rowCopy"),
+        action: apply((t) => t.rows.splice(r + 1, 0, [...(t.rows[r] ?? [])])),
+      },
+      {
+        icon: "trash",
+        label: $t("table.rowDelete"),
+        disabled: !canDelRow,
+        action: apply((t) => t.rows.splice(r, 1)),
+      },
       { kind: "separator", label: "" },
       { kind: "header", label: `${$t("table.col")} · ${originTag}` },
       { icon: "cols", label: $t("table.colLeft"), action: apply(addCol(c)) },
-      { icon: "cols", label: $t("table.colRight"), action: apply(addCol(c + 1)) },
+      {
+        icon: "cols",
+        label: $t("table.colRight"),
+        action: apply(addCol(c + 1)),
+      },
       { icon: "copy", label: $t("table.colCopy"), action: apply(copyCol(c)) },
-      { icon: "trash", label: $t("table.colDelete"), disabled: !canDelCol, action: apply(delCol(c)) },
+      {
+        icon: "trash",
+        label: $t("table.colDelete"),
+        disabled: !canDelCol,
+        action: apply(delCol(c)),
+      },
     ]);
   }
 
@@ -290,10 +355,9 @@
                   spellcheck="false"
                   onblur={commitEdit}
                   onkeydown={editKeydown}
-                  oninput={autoSize}
-                ></textarea>
+                  oninput={autoSize}></textarea>
               {:else}
-                {#each (cell.children ?? []) as ch (ch)}
+                {#each cell.children ?? [] as ch (ch)}
                   <MarkdownNode node={ch} />
                 {/each}
               {/if}
@@ -323,10 +387,9 @@
                   spellcheck="false"
                   onblur={commitEdit}
                   onkeydown={editKeydown}
-                  oninput={autoSize}
-                ></textarea>
+                  oninput={autoSize}></textarea>
               {:else}
-                {#each (cell.children ?? []) as ch (ch)}
+                {#each cell.children ?? [] as ch (ch)}
                   <MarkdownNode node={ch} />
                 {/each}
               {/if}
