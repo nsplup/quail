@@ -16,7 +16,11 @@
   /** 阵列尺寸：9×9 */
   const MAX = 9;
 
-  let { oninsert, onclose }: { oninsert: (rows: number, cols: number) => void; onclose: () => void } = $props();
+  let {
+    oninsert,
+    onclose,
+  }: { oninsert: (rows: number, cols: number) => void; onclose: () => void } =
+    $props();
 
   /** 当前悬停的行列（1-based；null = 未悬停） */
   let hover = $state<{ r: number; c: number } | null>(null);
@@ -28,7 +32,11 @@
       const target = ev.target instanceof Node ? ev.target : null;
       if (!rootEl || !target) return;
       // 开关按钮自身不视为「外部」：避免 toggle 关闭后被 onclick 再次打开
-      if (target instanceof Element && target.closest("[data-table-insert-toggle]")) return;
+      if (
+        target instanceof Element &&
+        target.closest("[data-table-insert-toggle]")
+      )
+        return;
       if (!rootEl.contains(target)) {
         onclose();
       }
@@ -60,7 +68,12 @@
   role="dialog"
   aria-label={$t("table.insert")}
 >
-  <div class="ti-grid" role="group" aria-label={$t("table.insert")} onmouseleave={() => (hover = null)}>
+  <div
+    class="ti-grid"
+    role="group"
+    aria-label={$t("table.insert")}
+    onmouseleave={() => (hover = null)}
+  >
     {#each Array(MAX) as _, r (r)}
       {#each Array(MAX) as _, c (c)}
         <button
@@ -76,17 +89,21 @@
     {/each}
   </div>
   <!-- 实时行列数量提示：固定高度占位避免出现/消失时浮窗跳动 -->
-  <div class="ti-hint mt-2 flex h-5 items-center justify-center gap-1.5 text-xs text-muted tabular-nums">
-    {#if hover}
-      <span class="inline-flex items-center gap-1 text-fg">
-        <Icon name="rows" size={13} />
-        {hover.r}
+  <div
+    class="ti-hint mt-2 flex h-5 items-center justify-center gap-1.5 text-xs text-muted tabular-nums"
+  >
+    <span class="inline-flex items-center gap-4 text-fg">
+      <span class="opacity-50">
+        <Icon name="rows" size={16} />
       </span>
-      <span class="opacity-60">×</span>
-      <span class="inline-flex items-center gap-1 text-fg">
-        <Icon name="cols" size={13} />
-        {hover.c}
+      {hover === null ? 1 : hover.r}
+    </span>
+    <span class="opacity-60 font-bold mx-4">×</span>
+    <span class="inline-flex items-center gap-4 text-fg">
+      <span class="opacity-50">
+        <Icon name="cols" size={16} />
       </span>
-    {/if}
+      {hover === null ? 1 : hover.c}
+    </span>
   </div>
 </div>

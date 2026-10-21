@@ -23,10 +23,10 @@
     /* 表格（底栏插入表格 / 行列选择浮窗） */
     table:
       '<rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="3" y1="9" x2="21" y2="9"></line><line x1="3" y1="15" x2="21" y2="15"></line><line x1="9" y1="3" x2="9" y2="21"></line><line x1="15" y1="3" x2="15" y2="21"></line>',
-    /* 行（横向线条，浮窗行列数量提示用） */
-    rows: '<line x1="4" y1="6" x2="20" y2="6"></line><line x1="4" y1="12" x2="20" y2="12"></line><line x1="4" y1="18" x2="20" y2="18"></line>',
-    /* 列（纵向线条，浮窗行列数量提示用） */
-    cols: '<line x1="6" y1="4" x2="6" y2="20"></line><line x1="12" y1="4" x2="12" y2="20"></line><line x1="18" y1="4" x2="18" y2="20"></line>',
+    /* 行（圆角矩形横向三等分；与 table 同框同线位，去掉竖线） */
+    rows: '<rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="3" y1="9" x2="21" y2="9"></line><line x1="3" y1="15" x2="21" y2="15"></line>',
+    /* 列（圆角矩形纵向三等分；与 table 同框同线位，去掉横线） */
+    cols: '<rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="9" y1="3" x2="9" y2="21"></line><line x1="15" y1="3" x2="15" y2="21"></line>',
     eye: '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle>',
     close:
       '<line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line>',
@@ -46,13 +46,8 @@
     /* 外部链接（使用外部程序打开） */
     external:
       '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line>',
-    /* 箭头（可编辑表格的行移动菜单项） */
-    "arrow-up":
-      '<line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline>',
-    "arrow-down":
-      '<line x1="12" y1="5" x2="12" y2="19"></line><polyline points="19 12 12 19 5 12"></polyline>',
 
-    /* ---------- 表格行 / 列操作（feather 描边风格，与上面一致） ---------- */
+    /* ---------- 表格行 / 列操作 ---------- */
     /* 上方插入行：表格轮廓 + 上方加号 */
     "table-row-plus-before":
       '<rect x="3" y="10" width="18" height="11" rx="1.5"></rect><line x1="3" y1="15.5" x2="21" y2="15.5"></line><line x1="12" y1="2" x2="12" y2="8"></line><line x1="9" y1="5" x2="15" y2="5"></line>',

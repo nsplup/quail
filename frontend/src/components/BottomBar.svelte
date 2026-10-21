@@ -59,7 +59,7 @@
     </button>
 
     <div
-      class="relative ml-1 inline-flex items-center rounded-[10px] border border-line bg-inset p-[3px]"
+      class="relative mx-1 inline-flex items-center rounded-[10px] border border-line bg-inset p-[3px]"
       role="tablist"
       aria-label="mode"
       bind:this={groupEl}
