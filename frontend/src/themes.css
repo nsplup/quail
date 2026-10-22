@@ -259,7 +259,6 @@
   display: block;
   overflow-x: auto;
   max-width: 100%;
-  font-size: 0.94em;
 }
 
 .md-block th,
@@ -287,8 +286,14 @@
 .md-block table.md-editable-table th,
 .md-block table.md-editable-table td {
   min-width: 5.5em;   /* 默认列宽下限（auto 布局下 min-width 对单元格生效） */
-  height: 2.4em;    /* 表格布局中 height 即"最小高度"，空单元格不再塌缩 */
+  /* 空单元格高度 = CM6 单元格编辑器单空行高（line-height 1.78 × 字号）
+    + 单元格上下 padding（9px × 2）。表格布局中 height 即最小高度，
+    box-sizing: border-box 下 height 含 padding，故内容区恰为 1.78em，
+    与编辑态宿主（= CM6 空行高）等高——空单元格两态不再差 8px。
+    改 line-height / 字号 / padding 时需同步此处。 */
+  height: calc(1.78em + 18px);
   padding: 9px 14px; /* 加大内边距 = 整体增高 */
+  line-height: 1.78;
   cursor: cell;
   transition: box-shadow 0.1s;
 }
@@ -316,19 +321,24 @@
   box-shadow: none;
 }
 
+/* 预览态内容容器：空时也占一行，与 CM6 空行同高 */
+.md-block .md-cell-content {
+  min-height: 1lh;            /* ← 精确等于当前 line-height，而非 1.78em 近似 */
+  /* 行盒与 CM6 同源：line-height 继承 td 的 1.78，font-size 继承 .md-block */
+}
+
 /* 单元格 CM6 编辑器（冻结复用实例）的宿主：占满单元格、随内容撑高
    （单元格适应编辑器宽高；换行自动换行 + 单元格向下增高） */
 .md-block .md-cell-editor-host {
   display: block;
   width: 100%;
   min-width: 6ch;
-  min-height: 2.4em; /* 与 td/th 的默认高度一致，进入编辑行高不跳 */
+  min-height: 1lh;
 }
 
 .md-block .md-cell-editor-host .cm-editor {
   background: transparent;
   color: var(--ed-fg);
-  font-size: 0.92em;
 }
 
 .md-block .md-cell-editor-host .cm-editor.cm-focused {

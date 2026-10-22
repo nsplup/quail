@@ -504,7 +504,11 @@
           action: apply(delCol(c)),
         },
       ],
-      { onClosed: () => { if (menuToken === token) menuCell = null; } },
+      {
+        onClosed: () => {
+          if (menuToken === token) menuCell = null;
+        },
+      },
     );
 
     menuCell = { r, c };
@@ -538,15 +542,18 @@
               {#if editing && editing.r === row.idx && editing.c === ci}
                 <!-- CM6 单元格编辑器（冻结复用实例）的挂载宿主 -->
                 <div class="md-cell-editor-host" bind:this={editorHost}></div>
-              {:else if localDisplay?.has(`${row.idx}:${ci}`)}
-                <!-- 编辑结束应用的本地解析样式（worker 回流后自动清除） -->
-                {#each localDisplay?.get(`${row.idx}:${ci}`) ?? [] as ch (ch)}
-                  <MarkdownNode node={ch} />
-                {/each}
               {:else}
-                {#each cell.children ?? [] as ch (ch)}
-                  <MarkdownNode node={ch} />
-                {/each}
+                <div class="md-cell-content">
+                  {#if localDisplay?.has(`${row.idx}:${ci}`)}
+                    {#each localDisplay?.get(`${row.idx}:${ci}`) ?? [] as ch (ch)}
+                      <MarkdownNode node={ch} />
+                    {/each}
+                  {:else}
+                    {#each cell.children ?? [] as ch (ch)}
+                      <MarkdownNode node={ch} />
+                    {/each}
+                  {/if}
+                </div>
               {/if}
             </th>
           {/each}
@@ -570,15 +577,18 @@
               {#if editing && editing.r === row.idx && editing.c === ci}
                 <!-- CM6 单元格编辑器（冻结复用实例）的挂载宿主 -->
                 <div class="md-cell-editor-host" bind:this={editorHost}></div>
-              {:else if localDisplay?.has(`${row.idx}:${ci}`)}
-                <!-- 编辑结束应用的本地解析样式（worker 回流后自动清除） -->
-                {#each localDisplay?.get(`${row.idx}:${ci}`) ?? [] as ch (ch)}
-                  <MarkdownNode node={ch} />
-                {/each}
               {:else}
-                {#each cell.children ?? [] as ch (ch)}
-                  <MarkdownNode node={ch} />
-                {/each}
+                <div class="md-cell-content">
+                  {#if localDisplay?.has(`${row.idx}:${ci}`)}
+                    {#each localDisplay?.get(`${row.idx}:${ci}`) ?? [] as ch (ch)}
+                      <MarkdownNode node={ch} />
+                    {/each}
+                  {:else}
+                    {#each cell.children ?? [] as ch (ch)}
+                      <MarkdownNode node={ch} />
+                    {/each}
+                  {/if}
+                </div>
               {/if}
             </td>
           {/each}

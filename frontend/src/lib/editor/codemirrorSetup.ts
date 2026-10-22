@@ -762,17 +762,22 @@ const cellEditorTheme = EditorView.theme({
     maxWidth: "100%",
     backgroundColor: "transparent",
     color: "var(--ed-fg)",
-    fontSize: "var(--ed-font-size, 13.5px)",
+    fontSize: "inherit",
   },
   ".cm-scroller": {
+    height: "auto", /** 覆盖 baseTheme 的 height: 100% */
     fontFamily: "var(--ed-font-family, ui-monospace, monospace)",
-    lineHeight: "1.55",
+    lineHeight: "1.78",
     padding: "0",
     /* 高度完全由内容决定，不产生内部滚动（滚动交给页面滚动容器） */
     overflow: "hidden",
     cursor: "text",
   },
-  ".cm-content": { caretColor: "var(--ed-accent)", padding: "0" },
+  ".cm-content": {
+    caretColor: "var(--ed-accent)",
+    padding: "0",
+    minHeight: "0", /** 覆盖 baseTheme 的 min-height: 100% */
+  },
   ".cm-line": { padding: "0" },
   ".cm-cursor": { borderLeftColor: "var(--ed-accent)", borderLeftWidth: "2px" },
   "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection": {
