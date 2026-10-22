@@ -102,16 +102,23 @@ export interface EditorApi {
 /* Tab 键行为：
  * - 无选区：在光标处插入缩进单位（制表符或空格，由设置决定）；
  * - 有选区：整体缩进选中行（indentMore，Shift+Tab 反向 indentLess）。 */
-function tabCommand(getUnit: () => string): Command {
+function tabCommand(getUnit: () => string, beforeScroll?: () => void): Command {
   return (view) => {
     const { state } = view;
     if (state.selection.ranges.some((r) => !r.empty)) {
-      return indentMore(view);
+      return indentMore(view); // 缩进选区行：目标本就在视口内，无需干预
     }
-    view.dispatch(state.replaceSelection(getUnit()));
+    const unit = getUnit();
+    const head = state.selection.main.head + unit.length;
+    beforeScroll?.(); // 抑制钩子必须在 dispatch 之前生效（scroll 事件异步到达）
+    view.dispatch({
+      ...state.replaceSelection(unit),
+      effects: EditorView.scrollIntoView(head, { y: "nearest", yMargin: 6 }),
+    });
     return true;
   };
 }
+
 
 /* 输入停顿多久后合并为新的撤销组（CM6 默认 500ms，收紧为 200ms）。
  * 主编辑器与单元格编辑器共用同一取值（编辑区同配置的一部分） */
@@ -279,7 +286,11 @@ export function createEditorApi(
           // 面板已开时 Mod-f 拉取选区到关键词框（须在 searchKeymap 之前拦截）
           { key: "Mod-f", run: searchPanelModF },
           { key: "Mod-s", preventDefault: true, run: () => (handlers.onsave(), true) },
-          { key: "Tab", run: tabCommand(() => indent) },
+          {
+            key: "Tab", run: tabCommand(() => indent, () => {
+              programmaticUntil = performance.now() + 300;
+            })
+          },
           ...commonKeymap(),
           ...searchKeymap,
         ]),
@@ -523,10 +534,14 @@ export function createEditorApi(
     /** 光标处插入文本（选区替换）。光标按 cursorOffset 落位，滚动可见并聚焦 */
     insertText(text: string, cursorOffset?: number) {
       const sel = view.state.selection.main;
-      const off = cursorOffset == null ? text.length : Math.max(0, Math.min(cursorOffset, text.length));
+      const off = cursorOffset == null ? text.length
+        : Math.max(0, Math.min(cursorOffset, text.length));
+      const pos = sel.from + off;
+      programmaticUntil = performance.now() + 300; // 抑制本次滚动触发的 ontopline 回写
       view.dispatch({
         changes: { from: sel.from, to: sel.to, insert: text },
-        selection: { anchor: sel.from + off },
+        selection: { anchor: pos },
+        effects: EditorView.scrollIntoView(pos, { y: "nearest", yMargin: 6 }),
         userEvent: "input.insert",
       });
       view.focus();
