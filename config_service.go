@@ -28,7 +28,7 @@ type Config struct {
         Theme           string  `json:"theme"`          // ThemeId
         Locale          string  `json:"locale"`         // system | zh | en（system = 跟随系统语言，默认）
         Indent          string  `json:"indent"`         // IndentId
-        CountMode       string  `json:"countMode"`      // CountMode
+        CountMode       string  `json:"countMode"`      // character | word | hybrid（字数统计方式）
         FontEditor      string  `json:"fontEditor"`
         FontPreview     string  `json:"fontPreview"`
         FontSizeEditor  float64 `json:"fontSizeEditor"`
@@ -43,7 +43,7 @@ func defaultConfig() Config {
                 Theme:           "ayu-dark",
                 Locale:          "system",
                 Indent:          "space2",
-                CountMode:       "auto",
+                CountMode:       "hybrid",
                 FontEditor:      "",
                 FontPreview:     "",
                 FontSizeEditor:  14,

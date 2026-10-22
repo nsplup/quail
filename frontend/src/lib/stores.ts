@@ -137,8 +137,8 @@ export const theme$ = persistedEnum<ThemeId>(
 
 export const indent$ = persistedEnum<IndentId>("md.indent", "space2", ["tab", "space2", "space4"] as const);
 
-/** 字数统计方式（auto = 跟随界面语言） */
-export const countMode$ = persistedEnum<CountMode>("md.countMode", "auto", ["auto", "words", "chars"] as const);
+/** 字数统计方式：character（字符）/ word（单词）/ hybrid（字词，单位随界面语言） */
+export const countMode$ = persistedEnum<CountMode>("md.countMode", "hybrid", ["character", "word", "hybrid"] as const);
 
 /** 编辑区/预览区字体（空值 = 使用回退链默认值） */
 export const fontEditor$ = persistedText("md.fontEditor", "");
@@ -183,7 +183,7 @@ export const blocks$ = writable<PreviewBlock[]>([]);
 /** 大纲（worker 由 mdast + blocks 计算后回传） */
 export const outline$ = writable<OutlineItem[]>([]);
 /** 字数统计（worker 按解析时刻源码快照计算后回传，主线程不再扫全文） */
-export const counts$ = writable<{ words: number; hanChars: number }>({ words: 0, hanChars: 0 });
+export const counts$ = writable<{ chars: number; words: number; hybrid: number }>({ chars: 0, words: 0, hybrid: 0 });
 
 /** 预览解析阶段：parsing（worker 解析中）→ idle（结果落地即收敛，无渐进挂载阶段） */
 export const parsePhase$ = writable<ParsePhase>("idle");
@@ -364,7 +364,7 @@ function flushNow(): void {
     segments$.set([]);
     blocks$.set([]);
     outline$.set([]);
-    counts$.set({ words: 0, hanChars: 0 });
+    counts$.set({ chars: 0, words: 0, hybrid: 0 });
     parseContext$.set(openNow ? "blank-open" : "edit");
     if (openNow) {
       // 打开空白文档 → 指示器切「准备就绪」：合成一对 parsing/idle 相位事件
@@ -388,19 +388,20 @@ doc$.subscribe((src) => {
 let booted = false;
 
 
-/** 派生：字数统计生效模式（auto 跟随界面语言） */
-export const effectiveCountMode$ = derived([countMode$, locale], ([m, lang]) =>
-  m === "auto" ? (lang === "zh" ? "chars" : "words") : m
-);
-
-/** 派生：字数统计标签（worker 回传的解析快照统计，主线程不扫全文） */
+/** 派生：字数统计标签（worker 回传的解析快照统计，主线程不扫全文）。
+ * 字词（hybrid）的显示单位跟随界面语言：中文始终「字」、西文始终「词」。 */
 export const countLabel$ = derived(
-  [counts$, effectiveCountMode$, t],
-  ([counts, mode, tt]) => {
-    if (mode === "chars") {
-      return `${counts.hanChars.toLocaleString()} ${tt("stats.chars")}`;
-    }
-    return `${counts.words.toLocaleString()} ${tt("stats.words")}`;
+  [counts$, countMode$, locale, t],
+  ([counts, mode, lang, tt]) => {
+    const n =
+      mode === "character" ? counts.chars
+      : mode === "word" ? counts.words
+      : counts.hybrid;
+    const unit =
+      mode === "character" ? tt("stats.chars")
+      : mode === "word" ? tt("stats.words")
+      : lang === "zh" ? tt("stats.chars") : tt("stats.words");
+    return `${n.toLocaleString()} ${unit}`;
   }
 );
 
@@ -533,7 +534,7 @@ function resetDocRuntime(): void {
   segments$.set([]);
   blocks$.set([]);
   outline$.set([]);
-  counts$.set({ words: 0, hanChars: 0 });
+  counts$.set({ chars: 0, words: 0, hybrid: 0 });
   // 编辑区：整体替换为空文档（setDoc 清撤销历史并记干净基线）；
   // doc$ 调度随后走空白重置路径，与 worker 归零语义对齐
   doc$.set("");
@@ -617,7 +618,13 @@ export function applyBackendConfig(snap: Record<string, unknown>): void {
   // 直接写入会让 CM6 缩进配置拿到 undefined
   if (ind === "tab" || ind === "space2" || ind === "space4") indent$.set(ind);
   const cm = str("countMode");
-  if (cm) countMode$.set(cm as CountMode);
+  // 旧配置迁移：auto（跟随语言）→ hybrid；chars → character；words → word；
+  // 非法值不回放（保持默认 hybrid）
+  if (cm === "character" || cm === "word" || cm === "hybrid") {
+    countMode$.set(cm);
+  } else if (cm === "auto" || cm === "chars" || cm === "words") {
+    countMode$.set(cm === "auto" ? "hybrid" : cm === "chars" ? "character" : "word");
+  }
   const fe = str("fontEditor");
   if (fe != null) fontEditor$.set(fe);
   const fp = str("fontPreview");

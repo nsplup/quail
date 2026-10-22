@@ -34,7 +34,14 @@ export type ThemeId =
   | "one-light"
   | "alabaster";
 
-export type CountMode = "words" | "chars" | "auto";
+/**
+ * 字数统计方式：
+ * - character 字符：Intl.Segmenter grapheme 模式，统一码用户感知字符为最小单元；
+ * - word 单词：Intl.Segmenter word 模式，依赖 isWordLike 判定；
+ * - hybrid 字词：word 分词后逐段 CJK 判定——含 CJK 的段按 grapheme 展开计字
+ *   （去全角标点），其余段加一；显示单位跟随界面语言（中文「字」/西文「词」）。
+ */
+export type CountMode = "character" | "word" | "hybrid";
 
 /** 预览解析阶段（底栏指示数据源；渲染随结果落地即时完成，无独立渲染阶段） */
 export type ParsePhase = "idle" | "parsing";

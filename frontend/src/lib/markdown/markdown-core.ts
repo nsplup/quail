@@ -44,8 +44,7 @@ import { rewriteImageSrc } from "../imgproxy";
 import {
   blockIndexForLine,
   blocksCoverDoc,
-  countEnglishWords,
-  countHanCharacters,
+  countText,
 } from "./blocks";
 
 /* remark-slug 自带的 @types/mdast / vfile 版本与项目顶层 unified 实例存在
@@ -952,4 +951,4 @@ export function buildBlocksIncremental(
   };
 }
 
-export { blocksCoverDoc, countEnglishWords, countHanCharacters };
+export { blocksCoverDoc, countText };

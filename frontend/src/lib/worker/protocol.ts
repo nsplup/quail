@@ -27,10 +27,12 @@ import type { PreviewBlock, OutlineItem } from "../types";
 import type { Root as MdastRoot } from "mdast";
 
 export interface Counts {
-  /** 英文单词数 */
+  /** 字符模式：grapheme（统一码用户感知字符）数 */
+  chars: number;
+  /** 单词模式：isWordLike 词元数 */
   words: number;
-  /** 汉字数 */
-  hanChars: number;
+  /** 字词模式：CJK 段按字（去全角标点）+ 其余段按词 */
+  hybrid: number;
 }
 
 export interface ParseRequest {

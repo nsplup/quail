@@ -150,9 +150,9 @@
   ];
 
   const counts: { id: CountMode; key: string }[] = [
-    { id: "auto", key: "settings.countAuto" },
-    { id: "chars", key: "settings.countChars" },
-    { id: "words", key: "settings.countWords" },
+    { id: "character", key: "settings.countCharacter" },
+    { id: "word", key: "settings.countWord" },
+    { id: "hybrid", key: "settings.countHybrid" },
   ];
 
   const layouts: { id: DefaultLayout; key: string }[] = [

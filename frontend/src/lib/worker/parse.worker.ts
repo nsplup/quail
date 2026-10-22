@@ -32,8 +32,7 @@ import {
   buildOutline,
   splitSegments,
   blocksCoverDoc,
-  countEnglishWords,
-  countHanCharacters,
+  countText,
   SELF_HEAL_EVERY,
   type IncrementalParseState,
 } from "../markdown/markdown-core";
@@ -90,10 +89,7 @@ function postFull(
   src: string
 ): void {
   const outline = buildOutline(root, blocks);
-  const counts = {
-    words: countEnglishWords(src),
-    hanChars: countHanCharacters(src),
-  };
+  const counts = countText(src);
   // 空文档也必须发首批（items 为空）：主线程以 segStart=0 识别「清空旧列表」，
   // 缺批会让 segments$ 残留上一份文档的段（预览不随清空更新）
   if (segments.length === 0) {
@@ -234,10 +230,7 @@ function parse(src: string, forceFull: boolean, rev: number): void {
       },
       blocks: res.blocks,
       outline: buildOutline(res.root, res.blocks),
-      counts: {
-        words: countEnglishWords(src),
-        hanChars: countHanCharacters(src),
-      },
+      counts: countText(src),
     });
     // 例行周期全量：阈值倍数触发（重建 worker 并行执行，不阻塞增量请求）
     if (res.incrementalCount % SELF_HEAL_EVERY === 0) requestRebuild();

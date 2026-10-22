@@ -15,6 +15,5 @@ export type {
 export {
   blockIndexForLine,
   blocksCoverDoc,
-  countEnglishWords,
-  countHanCharacters,
+  countText,
 } from "./markdown/blocks";
