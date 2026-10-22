@@ -373,6 +373,8 @@
   }
 
   /* ---------------- 右键菜单：行 / 列操作 ---------------- */
+  let menuCell = $state<{ r: number; c: number } | null>(null);
+  let menuToken = 0;
 
   function openCellMenu(ev: MouseEvent, r: number, c: number): void {
     ev.preventDefault();
@@ -427,77 +429,85 @@
       for (const row of t.rows) row.splice(at, 1);
       t.aligns.splice(at, 1);
     };
-    openContextMenu(ev.clientX, ev.clientY, [
-      { kind: "header", label: $t("table.row") },
-      {
-        icon: "table-row-plus-before",
-        label: $t("table.rowAbove"),
-        action: apply((t) => t.rows.splice(r, 0, emptyRow())),
-      },
-      {
-        icon: "table-row-plus-after",
-        label: $t("table.rowBelow"),
-        action: apply((t) => t.rows.splice(r + 1, 0, emptyRow())),
-      },
-      {
-        icon: "table-arrow-up",
-        label: $t("table.rowMoveUp"),
-        disabled: r === 0,
-        action: apply(moveRow(r, -1)),
-      },
-      {
-        icon: "table-arrow-down",
-        label: $t("table.rowMoveDown"),
-        disabled: r === rows.length - 1,
-        action: apply(moveRow(r, 1)),
-      },
-      {
-        icon: "table-row-copy",
-        label: $t("table.rowCopy"),
-        action: apply(copyRow(r)),
-      },
-      {
-        icon: "table-row-remove",
-        label: $t("table.rowDelete"),
-        disabled: !canDelRow,
-        action: apply((t) => t.rows.splice(r, 1)),
-      },
-      { kind: "separator", label: "" },
-      { kind: "header", label: $t("table.col") },
-      {
-        icon: "table-column-plus-before",
-        label: $t("table.colLeft"),
-        action: apply(addCol(c)),
-      },
-      {
-        icon: "table-column-plus-after",
-        label: $t("table.colRight"),
-        action: apply(addCol(c + 1)),
-      },
-      {
-        icon: "table-arrow-left",
-        label: $t("table.colMoveLeft"),
-        disabled: c === 0,
-        action: apply(moveCol(c, -1)),
-      },
-      {
-        icon: "table-arrow-right",
-        label: $t("table.colMoveRight"),
-        disabled: c === colCount - 1,
-        action: apply(moveCol(c, 1)),
-      },
-      {
-        icon: "table-column-copy",
-        label: $t("table.colCopy"),
-        action: apply(copyCol(c)),
-      },
-      {
-        icon: "table-column-remove",
-        label: $t("table.colDelete"),
-        disabled: !canDelCol,
-        action: apply(delCol(c)),
-      },
-    ]);
+    const token = ++menuToken;
+    openContextMenu(
+      ev.clientX,
+      ev.clientY,
+      [
+        { kind: "header", label: $t("table.row") },
+        {
+          icon: "table-row-plus-before",
+          label: $t("table.rowAbove"),
+          action: apply((t) => t.rows.splice(r, 0, emptyRow())),
+        },
+        {
+          icon: "table-row-plus-after",
+          label: $t("table.rowBelow"),
+          action: apply((t) => t.rows.splice(r + 1, 0, emptyRow())),
+        },
+        {
+          icon: "table-arrow-up",
+          label: $t("table.rowMoveUp"),
+          disabled: r === 0,
+          action: apply(moveRow(r, -1)),
+        },
+        {
+          icon: "table-arrow-down",
+          label: $t("table.rowMoveDown"),
+          disabled: r === rows.length - 1,
+          action: apply(moveRow(r, 1)),
+        },
+        {
+          icon: "table-row-copy",
+          label: $t("table.rowCopy"),
+          action: apply(copyRow(r)),
+        },
+        {
+          icon: "table-row-remove",
+          label: $t("table.rowDelete"),
+          disabled: !canDelRow,
+          action: apply((t) => t.rows.splice(r, 1)),
+        },
+        { kind: "separator", label: "" },
+        { kind: "header", label: $t("table.col") },
+        {
+          icon: "table-column-plus-before",
+          label: $t("table.colLeft"),
+          action: apply(addCol(c)),
+        },
+        {
+          icon: "table-column-plus-after",
+          label: $t("table.colRight"),
+          action: apply(addCol(c + 1)),
+        },
+        {
+          icon: "table-arrow-left",
+          label: $t("table.colMoveLeft"),
+          disabled: c === 0,
+          action: apply(moveCol(c, -1)),
+        },
+        {
+          icon: "table-arrow-right",
+          label: $t("table.colMoveRight"),
+          disabled: c === colCount - 1,
+          action: apply(moveCol(c, 1)),
+        },
+        {
+          icon: "table-column-copy",
+          label: $t("table.colCopy"),
+          action: apply(copyCol(c)),
+        },
+        {
+          icon: "table-column-remove",
+          label: $t("table.colDelete"),
+          disabled: !canDelCol,
+          action: apply(delCol(c)),
+        },
+      ],
+      { onClosed: () => { if (menuToken === token) menuCell = null; } },
+    );
+
+    menuCell = { r, c };
   }
 
   /* ---------------- 模板辅助 ---------------- */
@@ -515,11 +525,13 @@
   {#if headRows.length > 0}
     <thead>
       {#each headRows as row (row.idx)}
-        <tr>
+        <tr class:md-hl-row={menuCell?.r === row.idx}>
           {#each row.cells as cell, ci (ci)}
             <!-- svelte-ignore a11y_no_noninteractive_element_interactions a11y_click_events_have_key_events -->
             <th
               style={alignStyle(cell)}
+              class:md-hl-col={menuCell?.c === ci}
+              class:md-cell-active={editing?.r === row.idx && editing?.c === ci}
               onclick={() => startEdit(row.idx, ci)}
               oncontextmenu={(ev) => openCellMenu(ev, row.idx, ci)}
             >
@@ -545,11 +557,13 @@
   {#if bodyRows.length > 0}
     <tbody>
       {#each bodyRows as row (row.idx)}
-        <tr>
+        <tr class:md-hl-row={menuCell?.r === row.idx}>
           {#each row.cells as cell, ci (ci)}
             <!-- svelte-ignore a11y_no_noninteractive_element_interactions a11y_click_events_have_key_events -->
             <td
               style={alignStyle(cell)}
+              class:md-hl-col={menuCell?.c === ci}
+              class:md-cell-active={editing?.r === row.idx && editing?.c === ci}
               onclick={() => startEdit(row.idx, ci)}
               oncontextmenu={(ev) => openCellMenu(ev, row.idx, ci)}
             >

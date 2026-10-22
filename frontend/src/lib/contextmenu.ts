@@ -7,7 +7,7 @@
  *   组件内部负责视口边缘收敛与关闭（外点 / Esc / 滚动 / 失焦）；
  * - 动作（action 回调）由调用方闭包注入，本模块只承载状态，不感知具体行为。
  */
-import { writable } from "svelte/store";
+import { get, writable } from "svelte/store";
 
 /**
  * 菜单项：icon 为 Icon.svelte 手写图标名；disabled 项仅置灰不可触发。
@@ -25,20 +25,51 @@ export interface ContextMenuItem {
 }
 
 interface ContextMenuState {
-  /** 光标位置（视口坐标，组件内做边缘收敛） */
   x: number;
   y: number;
   items: ContextMenuItem[];
+  /** 菜单收起时回调（选中/外点/Esc/滚动/失焦/被新菜单覆盖） */
+  onClosed?: () => void;
+}
+
+/** 安全触发关闭回调：防止调用方回调抛错影响状态机 */
+function notifyClosed(state: ContextMenuState | null): void {
+  if (!state?.onClosed) return;
+  try {
+    state.onClosed();
+  } catch (err) {
+    console.error("[contextMenu] onClosed threw:", err);
+  }
 }
 
 export const contextMenu$ = writable<ContextMenuState | null>(null);
 
 /** 打开右键菜单（重复调用直接覆盖：右键另一目标时即时换菜单） */
-export function openContextMenu(x: number, y: number, items: ContextMenuItem[]): void {
-  contextMenu$.set({ x, y, items });
+export function openContextMenu(
+  x: number,
+  y: number,
+  items: ContextMenuItem[],
+  options?: { onClosed?: () => void },
+): void {
+  const prev = get(contextMenu$);           // 1. 取出旧状态（同步）
+
+  contextMenu$.set({                        // 2. 新状态先落地
+    x,
+    y,
+    items,
+    onClosed: options?.onClosed,
+  });
+
+  // 3. 再通知旧菜单关闭：此时 store 里已是新菜单，
+  //    旧回调即使误清引用也不会把新菜单"关掉"
+  notifyClosed(prev);
 }
 
 /** 关闭右键菜单（选中项、外点、Esc、滚动、窗口失焦均走这里） */
 export function closeContextMenu(): void {
-  contextMenu$.set(null);
+  const prev = get(contextMenu$);
+  if (!prev) return;
+
+  contextMenu$.set(null);                   // 先清状态，再回调
+  notifyClosed(prev);
 }
