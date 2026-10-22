@@ -340,9 +340,6 @@
     await openPath(path);
   }
 
-  /* 装载（loadOpenedDoc）与另存为（saveFileAs）移至 lib/stores：
-     横幅「重新加载 / 另存为」动作与原地打开通道共用同一实现 */
-
   /* ---------------- 同步滚动（带程序化滚动抑制 + 光标同步待办，防止回环与丢事件） ----------------
      两个抑制标记按"方向"拆分：
        editorProgrammaticUntil  —— 编辑器被程序化滚动（预览→编辑器回写 / 大纲跳转 /
@@ -359,7 +356,12 @@
        编辑中（近期有光标活动）blocks 重建后用光标行重新对齐，而不是顶行——
        顶行锚定在视窗顶部，光标锚定在 35%/65%，若 blocks 重建用顶行对齐会把
        预览从光标位置拉回顶部。非编辑（滚动查看）才用顶行对齐。
-     lastSyncedBlock / lastSyncedY 用于两条同步路径的目标去重，防止互相打架抖动。 */
+     去重策略（修复"重复插入后预览冻结同步"）：
+       两条路径都不再维护"上次同步目标"记录（lastSyncedBlock/lastSyncedY，
+       已删除），改为把目标落点与预览【当前实际 scrollTop】比对——记录式
+       去重的隐含前提"目标相同 = 已在原地"不成立：预览实际位置随时会被
+       用户滚动或顶行同步改写，而 blocks 防抖期间光标行估计 y 是不变量，
+       记录命中会连 pending 一起销毁，断掉自愈路径导致永久冻结。 */
   let editorProgrammaticUntil = 0;
   let previewProgrammaticUntil = 0;
 
@@ -471,12 +473,6 @@
     const frac = Math.min(1, Math.max(0, (line - blk.startLine) / rows));
     const y = off + frac * size; // 光标行估计 y
 
-    // 与上次同步目标相近 → 视为已完成（避免两条路径互相覆盖抖动）
-    if (b === lastSyncedBlock && Math.abs(y - lastSyncedY) < 8) {
-      pendingCursorLine = null;
-      return;
-    }
-
     const top = pv.getScrollTop();
     const vh = el.clientHeight;
     const margin = visibleMargin(vh);
@@ -488,22 +484,31 @@
     }
 
     // 目标位置：从上方进入 → 落在视窗 35%；从下方进入 → 落在 65%
-    // （比 SYNC_OFFSET 更稳：长块内滚动后光标行不贴边，下次可见判定更宽松）
     const targetY = y < top + margin ? y - vh * 0.35 : y - vh * 0.65;
     const target = Math.max(0, targetY);
+
+    // 与预览【当前实际位置】比对（而非历史记录）：预览被用户滚动或
+    // 顶行同步挪走后，实际位置与目标必然拉开 ≥8px，不会再把
+    // "估计值未变"误判为"已同步"（原记录式去重的冻结根因）
+    if (Math.abs(el.scrollTop - target) < 8) {
+      pendingCursorLine = null;
+      return;
+    }
 
     outlineAutoTrack.set(true);
     topIndex.set(b);
     el.scrollTop = target;
     previewProgrammaticUntil = performance.now() + 320; // 抑制预览回写
-    lastSyncedBlock = b;
-    lastSyncedY = y;
     pendingCursorLine = null; // 完成
   }
 
   /* ---------------- 顶行同步（编辑器滚动 → 预览） ---------------- */
   function onEditorTopLine(line: number): void {
     if (performance.now() < editorProgrammaticUntil) return;
+    // 刚发生插入/编辑（光标同步待办未消化）：顶行上报让位本轮光标同步。
+    // 覆盖 insertText/Tab 的 scrollIntoView 落点及其测量修正第二跳——
+    // 这些事件携带中间态顶行，以顶行锚定回写会把预览从光标落点拽开
+    if (pendingCursorLine != null) return;
     const bks = get(blocks);
     if (get(mode) === "source" || bks.length === 0) return;
     const pv = $previewApi;
@@ -518,16 +523,14 @@
     const y = pv.getItemOffset(b) + frac * pv.getItemSize(b);
     const target = Math.max(0, y - SYNC_OFFSET);
 
-    // 与上次同步目标相近 → 跳过（避免光标同步 / 顶行同步互相覆盖抖动）
-    if (b === lastSyncedBlock && Math.abs(y - lastSyncedY) < 8) return;
+    // 与预览当前实际位置比对：已同步则跳过（防止与光标路径互相覆盖抖动）
+    const el = pvScrollEl();
+    if (el && Math.abs(el.scrollTop - target) < 8) return;
 
     outlineAutoTrack.set(true);
     topIndex.set(b);
-    const el = pvScrollEl();
     if (el) el.scrollTop = target;
     previewProgrammaticUntil = performance.now() + 320;
-    lastSyncedBlock = b;
-    lastSyncedY = y;
   }
 
   /* 编辑区内容变化 → blocks 重建（500ms 防抖解析后）→ 块偏移可能整体
@@ -662,10 +665,8 @@
     if (p !== pvSavedForPath) {
       pvSavedForPath = p;
       pvSavedTop = 0;
-      // 新文档：清空上一文档残留的光标同步待办、重试计时与去重目标
+      // 新文档：清空上一文档残留的光标同步待办、重试计时
       cancelCursorSync();
-      lastSyncedBlock = -1;
-      lastSyncedY = -1;
       lastCursorLine = 0;
       lastCursorActivityAt = 0;
     }

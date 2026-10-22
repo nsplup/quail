@@ -245,7 +245,25 @@ export function createEditorApi(
   initialLang = "en"
 ): EditorApi {
   let topLineRaf = 0;
+  /* 程序化滚动抑制（两级）：
+     - programmaticScrollArmed：markProgrammaticScroll 置位的“待消费”
+       标记。onScroll 收到的第一个滚动事件若处于窗口内，视为程序化
+       滚动自身的事件——消费掉武装标记，并把抑制窗口收缩为 80ms
+       （仅用于吸收 scrollIntoView 测量修正可能引发的第二跳）。
+       此后紧跟的用户滚动（哪怕距程序化滚动仅 100ms）都正常上报——
+       旧的纯时间窗方案会把“插入后立刻滚走”误判为程序化滚动，
+       造成预览不跟随，是重复插入冻结问题的诱因之一。
+     - programmaticUntil：300ms 主窗口，作为“置位后未发生滚动”的
+       兜底；若窗口到期仍无滚动事件，onScroll 会先解除武装再按普通
+       滚动处理，防止标记滞留误吞后续用户滚动。 */
   let programmaticUntil = 0;
+  let programmaticScrollArmed = false;
+
+  function markProgrammaticScroll(): void {
+    programmaticScrollArmed = true;
+    programmaticUntil = performance.now() + 300;
+  }
+
   /* 光标行上报：选区/文档更新后经 rAF 合并，同一帧内多次变化只报最终值 */
   let cursorLineRaf = 0;
   let pendingCursorState: EditorState | null = null;
@@ -286,11 +304,8 @@ export function createEditorApi(
           // 面板已开时 Mod-f 拉取选区到关键词框（须在 searchKeymap 之前拦截）
           { key: "Mod-f", run: searchPanelModF },
           { key: "Mod-s", preventDefault: true, run: () => (handlers.onsave(), true) },
-          {
-            key: "Tab", run: tabCommand(() => indent, () => {
-              programmaticUntil = performance.now() + 300;
-            })
-          },
+          { key: "Tab", run: tabCommand(() => indent, markProgrammaticScroll) },
+
           ...commonKeymap(),
           ...searchKeymap,
         ]),
@@ -415,6 +430,15 @@ export function createEditorApi(
   });
 
   const onScroll = () => {
+    if (programmaticScrollArmed) {
+      programmaticScrollArmed = false;
+      if (performance.now() < programmaticUntil) {
+        // 程序化滚动自身的事件：消费掉，收缩窗口吸收测量修正第二跳
+        programmaticUntil = performance.now() + 80;
+        return;
+      }
+      // 窗口已过仍才发生滚动：解除武装，按普通滚动处理
+    }
     if (performance.now() < programmaticUntil) return;
     if (topLineRaf) return;
     topLineRaf = requestAnimationFrame(() => {
@@ -428,6 +452,7 @@ export function createEditorApi(
       }
     });
   };
+
   view.scrollDOM.addEventListener("scroll", onScroll, { passive: true });
 
   /* 遮罩联动：任一遮罩（设置面板 / confirm 弹窗 / 系统弹窗空白遮罩，
@@ -474,7 +499,7 @@ export function createEditorApi(
         // 未测量区的估计几何（lineWrapping 下行高估计误差随距离累积），
         // 落点后 CM6 实测修正 → 行位置漂移，即大纲跳转概率性对不齐的根因。
         // y:"start" + yMargin:6 与旧约定（scrollTop = block.top - 6）一致。
-        programmaticUntil = performance.now() + 300;
+        markProgrammaticScroll();
         view.dispatch({
           effects: EditorView.scrollIntoView(pos, { y: "start", yMargin: 6 }),
         });
@@ -483,7 +508,7 @@ export function createEditorApi(
       }
     },
     scrollToBottom() {
-      programmaticUntil = performance.now() + 300;
+      markProgrammaticScroll();
       view.scrollDOM.scrollTop = view.scrollDOM.scrollHeight;
     },
     scrollToFractionalLine(fline: number) {
@@ -495,7 +520,9 @@ export function createEditorApi(
         const line = doc.line(i);
         const block = view.lineBlockAt(line.from);
         const far = Math.abs(block.top - view.scrollDOM.scrollTop) > view.scrollDOM.clientHeight * 2;
-        programmaticUntil = performance.now() + 300;
+        // 置位一次即可：远距路径的第一跳（scrollIntoView）被 armed 消费，
+        // 第二跳（measure 回调写 scrollTop）落入收缩后的 80ms 短窗
+        markProgrammaticScroll();
         if (far) {
           // 远距目标（预览快速滚动空窗后一次性跟随）：走 CM6 的测量感知
           // 落点（同 scrollToLine），落到整行后在 measure 回调里按实测
@@ -531,13 +558,18 @@ export function createEditorApi(
     getDoc() {
       return view.state.doc.toString();
     },
-    /** 光标处插入文本（选区替换）。光标按 cursorOffset 落位，滚动可见并聚焦 */
+    /** 光标处插入文本（选区替换）。光标按 cursorOffset 落位，滚动可见并聚焦。
+     *  程序化 dispatch 不会像用户输入那样自动滚到选区，必须显式
+     *  scrollIntoView；markProgrammaticScroll 抑制本次滚动引发的
+     *  ontopline 回写（防止顶行锚定覆盖光标锚定的预览同步）。
+     *  不挂 programmaticChange 注解：这是用户编辑意图，光标行上报
+     *  必须照常进行，预览侧由 trySyncCursor / blocks 重建“编辑中”
+     *  分支跟随到插入点。 */
     insertText(text: string, cursorOffset?: number) {
       const sel = view.state.selection.main;
-      const off = cursorOffset == null ? text.length
-        : Math.max(0, Math.min(cursorOffset, text.length));
+      const off = cursorOffset == null ? text.length : Math.max(0, Math.min(cursorOffset, text.length));
       const pos = sel.from + off;
-      programmaticUntil = performance.now() + 300; // 抑制本次滚动触发的 ontopline 回写
+      markProgrammaticScroll();
       view.dispatch({
         changes: { from: sel.from, to: sel.to, insert: text },
         selection: { anchor: pos },
@@ -584,7 +616,7 @@ export function createEditorApi(
       const off = cursorOffsetInText == null
         ? 0
         : Math.max(0, Math.min(cursorOffsetInText, text.length));
-      programmaticUntil = performance.now() + 320;
+      markProgrammaticScroll();
       view.dispatch({
         changes: { from, to: doc.line(b).to, insert: text },
         selection: { anchor: from + off },
