@@ -25,7 +25,8 @@
   const MIN_VISIBLE_MS = 500;
   /** EWMA 平滑系数：越小越平滑（历史权重越大） */
   const EWMA_ALPHA = 0.25;
-  /** 固定宽度测量用的耗时代表值（4 位数，tabular-nums 下覆盖常规区间） */
+  /** 固定宽度测量用的最小样本值（4 位数，tabular-nums 下覆盖常规区间）；
+   *  实际测量样本取 max(该值, 历史最大耗时)，保证 5 位数及以上也不截断 */
   const WIDTH_SAMPLE_MS = 8888;
 
   type View = "ready" | "parsing" | "done";
@@ -156,15 +157,16 @@
   const boxW = $derived(sizerW > 0 ? Math.ceil(sizerW) + 1 : 96);
 </script>
 
-<!-- 固定宽度容器：三态内容居中，超宽截断（超出 4 位代表值时 tooltip 仍有完整数据） -->
+<!-- 最小宽度容器：三态内容居中；宽度取 max(测量宽度, 内容自然宽度)，
+     5 位数以上耗时会自动撑开，不会截断 ms 单位 -->
 <div
   class="relative flex-none select-none"
   role="status"
   title={tooltip}
 >
   <div
-    class="flex items-center justify-center gap-1.5 overflow-hidden whitespace-nowrap text-xs text-muted tabular-nums"
-    style="width: {boxW}px;"
+    class="flex w-fit items-center justify-center gap-1.5 whitespace-nowrap text-xs text-muted tabular-nums"
+    style="min-width: {boxW}px;"
   >
     {#if view === "parsing"}
       <span>{$t("parse.parsing")}</span>
@@ -180,8 +182,7 @@
   </div>
 
   <!-- 隐形测量层：纵向堆叠三个状态行，宽度取最宽行。
-       w-max 使其按 max-content 取宽，摆脱绝对定位包含块的
-       shrink-to-fit 约束（否则 4 位数行在测量层内部就换行） -->
+       耗时行使用「历史最大耗时」而非固定样本，使宽度覆盖 5 位数及以上 -->
   <div
     aria-hidden="true"
     class="pointer-events-none invisible absolute left-0 top-0 -z-10 flex w-max flex-col whitespace-nowrap text-xs tabular-nums"
@@ -195,6 +196,6 @@
         <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="3" stroke-linecap="round"></path>
       </svg>
     </span>
-    <span>{$t("parse.done", { values: { ms: WIDTH_SAMPLE_MS } })}</span>
+    <span>{$t("parse.done", { values: { ms: Math.max(WIDTH_SAMPLE_MS, Math.ceil(stats.max)) } })}</span>
   </div>
 </div>
