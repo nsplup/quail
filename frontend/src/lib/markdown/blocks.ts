@@ -28,6 +28,19 @@ export function blockIndexForLine(blocks: PreviewBlock[], line: number): number 
 }
 
 /**
+ * 行切分（全管线唯一行语义）：\r\n、\r、\n 均为换行——与 remark/micromark
+ * 的行计数及 CodeMirror 默认 lineSeparator 完全一致。
+ * 必须用本函数而非 src.split("\n")：含孤立 \r（旧 Mac 式 / 混合换行）的
+ * 文档（如网络小说 txt）两者行数不一致 → 锚点行号超出 split("\n") 行数
+ * → blocksCoverDoc 恒失败 → worker 10s idle 自愈每 10s 重复一次全量解析。
+ * 尾随换行产出空串元素，与 micromark 的行号语义（root.position.end.line）
+ * 一致。
+ */
+export function splitLines(src: string): string[] {
+  return src.split(/\r\n|\r|\n/);
+}
+
+/**
  * 校验块行界是否连续覆盖整个文档（1..行数）：
  * 通过 → 增量解析结果与全量一致，无需周期性全量重算（自愈）。
  * 空白文档（无任何可渲染块）视为已覆盖：全量解析对空白文档恒产出 0 块，
@@ -35,7 +48,7 @@ export function blockIndexForLine(blocks: PreviewBlock[], line: number): number 
  */
 export function blocksCoverDoc(blocks: PreviewBlock[], src: string): boolean {
   if (src.trim() === "") return blocks.length === 0;
-  const totalLines = src.split("\n").length;
+  const totalLines = splitLines(src).length;
   let expect = 1;
   for (const b of blocks) {
     if (b.startLine !== expect || b.endLine < b.startLine) return false;

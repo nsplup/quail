@@ -45,6 +45,7 @@ import {
   blockIndexForLine,
   blocksCoverDoc,
   countTextAs,
+  splitLines,
 } from "./blocks";
 
 /* remark-slug 自带的 @types/mdast / vfile 版本与项目顶层 unified 实例存在
@@ -503,7 +504,10 @@ function blocksFromHast(
 }
 
 export function buildBlocks(root: Root, src: string): PreviewBlock[] {
-  return blocksFromHast(rootToHast(root), src.split("\n").length).blocks;
+  /* 行数必须与锚点行号同语义（remark 把 \r\n/\r/\n 都计为换行，见
+     splitLines）：用 split("\n") 会在含孤立 \r 的文档上少计行数 →
+     blocksCoverDoc 恒失败 → idle 自愈每 10s 重复一次全量解析 */
+  return blocksFromHast(rootToHast(root), splitLines(src).length).blocks;
 }
 
 function textOf(node: PhrasingContent | MdastContent | null | undefined): string {
@@ -712,8 +716,10 @@ export function buildBlocksIncremental(
   }
   const prevBlocks = prev.blocks;
 
-  const prevLines = prev.src.split("\n");
-  const nextLines = nextSrc.split("\n");
+  // 行级公共前缀/后缀（行切分与锚点行号同语义，见 splitLines：
+  // 含孤立 \r 的文档若按 split("\n") 切行，diff 区间与块行界错位）
+  const prevLines = splitLines(prev.src);
+  const nextLines = splitLines(nextSrc);
   const minLen = Math.min(prevLines.length, nextLines.length);
 
   // 行级公共前缀/后缀
@@ -951,4 +957,4 @@ export function buildBlocksIncremental(
   };
 }
 
-export { blocksCoverDoc, countTextAs };
+export { blocksCoverDoc, countTextAs, splitLines };

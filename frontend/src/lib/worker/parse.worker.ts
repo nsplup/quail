@@ -33,6 +33,7 @@ import {
   splitSegments,
   blocksCoverDoc,
   countTextAs,
+  splitLines,
   SELF_HEAL_EVERY,
   type IncrementalParseState,
   type SegmentPatchRange,
@@ -112,9 +113,9 @@ function cachePut(key: string, value: number): void {
   }
 }
 
-/** 从源码行数组提取块的源码文本。行尾 "\r" 剥除：CRLF 下全文的 "\r\n"
- * 为单一 grapheme 簇，块文本按 "\n" 连接还原后须与全文统计口径一致
- * （\r 若保留会与块间分隔 "\n" 重复计簇，见 blocks.ts 可加性约定）。 */
+/** 从源码行数组提取块的源码文本。行数组必须来自 splitLines（与锚点行号
+ * 同语义）；其中行内容已不含行尾 "\r"（\r 已作为换行分隔被消费），
+ * 行尾 "\r" 剥除仅作防御保留。 */
 function blockTextFromLines(lines: string[], b: PreviewBlock): string {
   let text = "";
   for (let i = b.startLine - 1; i < b.endLine; i++) {
@@ -144,7 +145,7 @@ function computeCounts(
   mode: CountMode
 ): { value: number; baseline: number[] | null } {
   if (blocks.length > 0 && blocksCoverDoc(blocks, src)) {
-    const lines = src.split("\n");
+    const lines = splitLines(src);
     const baseline: number[] = new Array(blocks.length);
     for (let i = 0; i < blocks.length; i++) {
       baseline[i] = countTextAs(blockTextFromLines(lines, blocks[i]), mode);
@@ -152,10 +153,10 @@ function computeCounts(
     return { value: totalFromBaseline(baseline, mode), baseline };
   }
   // 覆盖不变量不成立（理论只在漂移瞬间出现）：退回全文统计，不建基线。
-  // CRLF 归一口径与块文本提取一致（剥除行尾 "\r"，含文末孤立 "\r"，
-  // 见 blocks.ts 可加性约定），保证两条路径统计结果可互逆。
+  // 归一口径与块文本提取一致（\r\n/\r 均归一为 "\n"，与 splitLines 行语义
+  // 对齐），保证两条路径统计结果可互逆。
   return {
-    value: countTextAs(src.replace(/\r\n/g, "\n").replace(/\r$/, ""), mode),
+    value: countTextAs(src.replace(/\r\n?/g, "\n"), mode),
     baseline: null,
   };
 }
@@ -176,7 +177,7 @@ function applyCountPatch(
   if (bc === null || bc.length !== blocks.length - p.segAdded + p.segRemoved) {
     return null;
   }
-  const lines = src.split("\n");
+  const lines = splitLines(src);
   // 被替换区间的每个新块按其行界重算（只碰局部 chunk 行，不扫全文）
   const added: number[] = new Array(p.segAdded);
   for (let i = 0; i < p.segAdded; i++) {
