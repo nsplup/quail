@@ -16,13 +16,16 @@
  *   重建后 worker 状态清零，调用方必须以 forceFull 重发。重建 worker 崩溃
  *   静默重启并重新布线（例行重建是 best-effort，不影响正确性）。
  */
-import type { FullBatch, ParseResult, WorkerError, WorkerOut } from "./protocol";
+import type { CountsMsg, FullBatch, ParseResult, WorkerError, WorkerOut } from "./protocol";
+import type { CountMode } from "../types";
 
 export interface ParseClientHandlers {
   /** 全量段批次（渐进渲染在批次到达期间即可推进） */
   onBatch: (msg: FullBatch) => void;
   /** 解析结果（full=true 汇总 / full=false 增量补丁） */
   onResult: (msg: ParseResult) => void;
+  /** 字数统计回执（口径切换；解析路径的统计随 ParseResult.counts 携带） */
+  onCounts: (msg: CountsMsg) => void;
   /** worker 内部异常（调用方负责 toast + forceFull 重发） */
   onWorkerError: (msg: WorkerError) => void;
   /** worker 脚本级崩溃（调用方负责 toast + forceFull 重发） */
@@ -32,6 +35,8 @@ export interface ParseClientHandlers {
 export interface ParseClient {
   /** 发送解析请求；返回本次 rev */
   request(src: string, forceFull: boolean): number;
+  /** 切换字数统计口径：worker 只计算该口径（缓存命中免重算），回执经 onCounts */
+  setCountMode(mode: CountMode): void;
   /** 空白文档重置：通知增量 worker 把内部状态归零（不解析、不回包、不计在途） */
   resetEmpty(): void;
   /** 是否有请求在途（发出 → 响应回齐） */
@@ -53,6 +58,8 @@ export function createParseClient(handlers: ParseClientHandlers): ParseClient {
   /** 在途请求数（发出 +1，全部响应回齐 -1；全量路径 batch...result 合计一次） */
   let outstanding = 0;
   let disposed = false;
+  /** 最近一次设置的统计口径：worker（重）建后补发，保证新实例口径与设置一致 */
+  let lastCountMode: CountMode | null = null;
 
   function spawnIncrement(): Worker {
     const w = new Worker(new URL("./parse.worker.ts", import.meta.url), {
@@ -69,6 +76,10 @@ export function createParseClient(handlers: ParseClientHandlers): ParseClient {
       if (msg.type === "result") {
         outstanding = Math.max(0, outstanding - 1);
         handlers.onResult(msg);
+        return;
+      }
+      if (msg.type === "counts") {
+        handlers.onCounts(msg);
         return;
       }
       // type === "error"：worker 内部异常。状态可能已损坏 → 重建 + forceFull
@@ -117,6 +128,7 @@ export function createParseClient(handlers: ParseClientHandlers): ParseClient {
     worker = spawnIncrement();
     rebuildWorker = spawnRebuild();
     wireChannel();
+    syncCountMode();
   }
 
   function restart(): void {
@@ -124,6 +136,7 @@ export function createParseClient(handlers: ParseClientHandlers): ParseClient {
     worker?.terminate();
     worker = spawnIncrement();
     wireChannel();
+    syncCountMode();
   }
 
   function restartRebuild(): void {
@@ -140,6 +153,23 @@ export function createParseClient(handlers: ParseClientHandlers): ParseClient {
     outstanding++;
     worker!.postMessage({ type: "parse", rev, src, forceFull });
     return rev;
+  }
+
+  /** 把当前口径同步给增量 worker：fire-and-forget（不计在途）。
+   * worker 尚未创建时不主动拉起（保持惰性创建语义）：只记录，
+   * 首次 spawnAll 会按 lastCountMode 补发（新实例从干净状态起步）。 */
+  function setCountMode(mode: CountMode): void {
+    if (disposed) return;
+    lastCountMode = mode;
+    if (!worker || !rebuildWorker) return;
+    worker.postMessage({ type: "setCountMode", mode });
+  }
+
+  /** worker（重）建后补发最近一次口径：新实例默认 hybrid，须与设置对齐 */
+  function syncCountMode(): void {
+    if (lastCountMode !== null) {
+      worker!.postMessage({ type: "setCountMode", mode: lastCountMode });
+    }
   }
 
   /** 空白文档重置：fire-and-forget（不解析不回包），不计入在途请求 */
@@ -172,6 +202,7 @@ export function createParseClient(handlers: ParseClientHandlers): ParseClient {
 
   return {
     request,
+    setCountMode,
     resetEmpty,
     reset,
     restart,

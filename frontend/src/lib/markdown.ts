@@ -15,5 +15,5 @@ export type {
 export {
   blockIndexForLine,
   blocksCoverDoc,
-  countText,
+  countTextAs,
 } from "./markdown/blocks";

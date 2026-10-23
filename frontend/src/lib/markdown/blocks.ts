@@ -3,9 +3,9 @@
  *
  * - blockIndexForLine：源码行号 → 预览块下标（滚动同步 / 大纲跳转的二分映射）；
  * - blocksCoverDoc：校验块行界是否无缝覆盖整个文档（增量解析自愈判据）；
- * - countText：字数统计（worker 内计算后回传，主线程不扫全文）。
+ * - countTextAs：字数统计（只算当前口径；worker 内计算后回传，主线程不扫全文）。
  */
-import type { PreviewBlock } from "../types";
+import type { CountMode, PreviewBlock } from "../types";
 
 /**
  * 行号 → 预览块下标（二分查找：找到 startLine <= line 的最后一个块）。
@@ -46,9 +46,9 @@ export function blocksCoverDoc(blocks: PreviewBlock[], src: string): boolean {
 
 /* ---------------- 字数统计 ----------------
  *
- * 三种统计方式（CountMode，设置项）：
+ * 三种统计方式（CountMode，设置项），解耦为独立口径、只计算当前口径：
  * - 字符（character）：以统一码用户感知字符（grapheme cluster）为最小单元，
- *   对全文做一次 Intl.Segmenter grapheme 分段后计数；
+ *   对文本做一次 Intl.Segmenter grapheme 分段后计数；
  * - 单词（word）：以单词为最小单元，Intl.Segmenter word 分段后按
  *   isWordLike 判定计数（依赖 isWordLike）；
  * - 字词（hybrid）：先做 word 分词，再对每个 segment 做 CJK 判定——
@@ -56,19 +56,21 @@ export function blocksCoverDoc(blocks: PreviewBlock[], src: string): boolean {
  *   （去掉 CJK 标点，即全角符号）；不含 CJK 的段只加一。
  *   字符模式与字词模式都不依赖 isWordLike 判定。
  *
+ * worker 内只对「当前设置的口径」做一次统计（countTextAs），
+ * 切换统计方式时由 worker 按内容哈希缓存重算/命中回传——不再一次
+ * 全文分段算出三种口径（旧 countText 的做法，编辑热路径三倍浪费）。
+ *
  * 全部 Intl.Segmenter 实例的 locales 始终显式设为 "en"：
  * 分词结果与界面语言解耦，行为跨环境确定。CJK 段在字词模式下按
  * grapheme 展开计数，其结果不受 word 分词粒度（字典是否可用）影响。
+ *
+ * 可加性约定（worker 块级增量统计依赖，见 parse.worker.ts）：
+ * 文本以块为单位切分后按 "\n" 连接还原全文，三种口径在块间均可加——
+ * grapheme 簇不跨 "\n"；word 词元不跨 "\n"；hybrid 的 CJK 段收集
+ * 顺序与合并结果不受块切分影响。唯一的例外是 CRLF（"\r\n" 为单一
+ * grapheme 簇，"\r" 与分隔 "\n" 跨块合并）：由块文本提取时剥除行尾
+ * "\r"（extractBlockText）保证与全文统计口径一致。
  */
-
-export interface TextCounts {
-  /** 字符模式：grapheme（统一码用户感知字符）数 */
-  chars: number;
-  /** 单词模式：isWordLike 词元数 */
-  words: number;
-  /** 字词模式：CJK 段按字（去全角标点）+ 其余段按词 */
-  hybrid: number;
-}
 
 /** Intl.Segmenter 可用性兜底（极旧 WebView 下回退正则统计，不致崩溃） */
 const HAS_SEGMENTER =
@@ -154,31 +156,44 @@ function countHanCharactersFallback(text: string): number {
 }
 
 /**
- * 按全部三种方式统计文本（worker 每次解析后对源码快照调用一次，
- * 主线程按设置的 CountMode 取用 → 切换统计方式无需重新解析）。
+ * 按指定口径统计文本（三策略解耦后的单一入口）：
+ * 只执行 mode 对应的分段，不触碰另外两种口径的分段逻辑。
+ * worker 每次解析 / 每次切换口径后对当前内容调用一次，切换口径时的
+ * 重算与缓存由 parse.worker.ts 负责（内容哈希 → 各口径统计值）。
  */
-export function countText(text: string): TextCounts {
-  if (text === "") return { chars: 0, words: 0, hybrid: 0 };
+export function countTextAs(text: string, mode: CountMode): number {
+  if (text === "") return 0;
   if (!HAS_SEGMENTER) {
     // 兜底路径：无 Intl.Segmenter 时退回旧正则口径
-    const words = countEnglishWordsFallback(text);
-    return {
-      chars: Array.from(text).length,
-      words,
-      hybrid: words + countHanCharactersFallback(text),
-    };
+    switch (mode) {
+      case "character":
+        return Array.from(text).length;
+      case "word":
+        return countEnglishWordsFallback(text);
+      case "hybrid":
+        return countEnglishWordsFallback(text) + countHanCharactersFallback(text);
+    }
   }
-  // 字符模式：整文一次 grapheme 分段（含空白字符，统一码即最小单元）
-  let chars = 0;
-  for (const _ of graphemeSegmenter.segment(text)) chars++;
-  // 单词 / 字词模式共用同一次 word 分段
-  let words = 0;
+  if (mode === "character") {
+    // 字符口径：一次 grapheme 分段（含空白字符，统一码即最小单元）
+    let chars = 0;
+    for (const _ of graphemeSegmenter.segment(text)) chars++;
+    return chars;
+  }
+  if (mode === "word") {
+    // 单词口径：一次 word 分段，仅按 isWordLike 判定
+    let words = 0;
+    for (const s of wordSegmenter.segment(text)) {
+      if (s.isWordLike === true) words++;
+    }
+    return words;
+  }
+  // 字词口径（hybrid）：word 分段 → CJK 段收集合并后一次 grapheme 分段
   let hybrid = 0;
   let cjkChunks: string[] | null = null;
   for (const s of wordSegmenter.segment(text)) {
     const seg = s.segment;
-    if (s.isWordLike === true) words++;
-    // 字词模式：空白段既不是字也不是词，跳过（不依赖 isWordLike）
+    // 空白段既不是字也不是词，跳过（不依赖 isWordLike）
     if (!/\S/.test(seg)) continue;
     if (containsCjk(seg)) {
       // 含 CJK 的段先收集，合并后只调用一次 grapheme 分段
@@ -193,5 +208,5 @@ export function countText(text: string): TextCounts {
       if (!isCjkPunctCluster(g.segment)) hybrid++;
     }
   }
-  return { chars, words, hybrid };
+  return hybrid;
 }

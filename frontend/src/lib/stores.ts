@@ -182,8 +182,13 @@ export const segments$ = writable<HastSegment[]>([]);
 export const blocks$ = writable<PreviewBlock[]>([]);
 /** 大纲（worker 由 mdast + blocks 计算后回传） */
 export const outline$ = writable<OutlineItem[]>([]);
-/** 字数统计（worker 按解析时刻源码快照计算后回传，主线程不再扫全文） */
-export const counts$ = writable<{ chars: number; words: number; hybrid: number }>({ chars: 0, words: 0, hybrid: 0 });
+/**
+ * 字数统计（三策略解耦后为单口径负载）：worker 只计算当前口径
+ * （countMode$），主线程不再持有三种口径的全量快照。
+ * - mode：本次统计值对应的口径（口径切换的回执到达前与 countMode$ 短暂不同步）；
+ * - value：该口径下的统计值（worker 内按内容哈希缓存 + 块级增量维护）。
+ */
+export const counts$ = writable<{ mode: CountMode; value: number }>({ mode: get(countMode$), value: 0 });
 
 /** 预览解析阶段：parsing（worker 解析中）→ idle（结果落地即收敛，无渐进挂载阶段） */
 export const parsePhase$ = writable<ParsePhase>("idle");
@@ -295,6 +300,10 @@ const parseClient = createParseClient({
     // 若调度器有积压 src（worker 在途期间的新编辑），立即补跑
     onWorkerDrained();
   },
+  onCounts: (msg) => {
+    // 口径切换回执：worker 缓存命中 / 重算完成（与 ParseResult.counts 同构落地）
+    counts$.set({ mode: msg.mode, value: msg.value });
+  },
   onWorkerError: (msg) => {
     console.warn("[parse] worker error:", msg.message);
     fullBatchBuffer = null; // 例行全量半途出错：丢弃残缺缓冲
@@ -308,6 +317,12 @@ const parseClient = createParseClient({
     scheduleRebuild(get(doc$), true);
   },
 });
+
+// 字数统计口径切换 → 通知 worker 只算当前口径（三策略解耦；切换回执经
+// onCounts 落地 counts$，同一内容哈希的结果由 worker 缓存命中免重算）。
+// 订阅即回放当前设置（含启动时的后端配置迁移重放）；worker 未创建时仅
+// 记录（parse-client 首次 spawn 补发，保持 worker 惰性创建语义）。
+countMode$.subscribe((m) => parseClient.setCountMode(m));
 
 /** worker 响应回齐后的积压补跑（无在途、有积压 → 重新起防抖） */
 function onWorkerDrained(): void {
@@ -364,7 +379,7 @@ function flushNow(): void {
     segments$.set([]);
     blocks$.set([]);
     outline$.set([]);
-    counts$.set({ chars: 0, words: 0, hybrid: 0 });
+    counts$.set({ mode: get(countMode$), value: 0 });
     parseContext$.set(openNow ? "blank-open" : "edit");
     if (openNow) {
       // 打开空白文档 → 指示器切「准备就绪」：合成一对 parsing/idle 相位事件
@@ -388,15 +403,14 @@ doc$.subscribe((src) => {
 let booted = false;
 
 
-/** 派生：字数统计标签（worker 回传的解析快照统计，主线程不扫全文）。
- * 字词（hybrid）的显示单位跟随界面语言：中文始终「字」、西文始终「词」。 */
+/** 派生：字数统计标签（worker 只算当前口径：解析回执与切换回执均为
+ * 单口径负载；切换瞬间 value 为上一口径的短暂滞后值，worker 缓存/重算
+ * 回执毫秒级到达后校正）。字词（hybrid）的显示单位跟随界面语言：
+ * 中文始终「字」、西文始终「词」。 */
 export const countLabel$ = derived(
   [counts$, countMode$, locale, t],
   ([counts, mode, lang, tt]) => {
-    const n =
-      mode === "character" ? counts.chars
-      : mode === "word" ? counts.words
-      : counts.hybrid;
+    const n = counts.value;
     const unit =
       mode === "character" ? tt("stats.chars")
       : mode === "word" ? tt("stats.words")
@@ -534,7 +548,7 @@ function resetDocRuntime(): void {
   segments$.set([]);
   blocks$.set([]);
   outline$.set([]);
-  counts$.set({ chars: 0, words: 0, hybrid: 0 });
+  counts$.set({ mode: get(countMode$), value: 0 });
   // 编辑区：整体替换为空文档（setDoc 清撤销历史并记干净基线）；
   // doc$ 调度随后走空白重置路径，与 worker 归零语义对齐
   doc$.set("");
