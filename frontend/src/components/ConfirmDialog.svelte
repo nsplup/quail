@@ -159,4 +159,7 @@
     align-items: center;
     gap: 0.375rem;
   }
+  .mask-placeholder {
+    outline: none !important;
+  }
 </style>

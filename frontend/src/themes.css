@@ -295,19 +295,28 @@
   padding: 9px 14px; /* 加大内边距 = 整体增高 */
   line-height: 1.78;
   cursor: cell;
+}
+
+.md-block table.md-editable-table th,
+.md-block table.md-editable-table td {
+  position: relative;               /* ← 必须常驻 */
+}
+
+.md-block table.md-editable-table th::after,
+.md-block table.md-editable-table td::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  box-shadow: inset 0 0 0 1px transparent;   /* 常驻透明 */
+  pointer-events: none;
   transition: box-shadow 0.1s;
 }
 
-/* 编辑态：accent 实线描边（与 hover 同款，但常驻） */
-.md-block table.md-editable-table th.md-cell-active,
-.md-block table.md-editable-table td.md-cell-active {
-  box-shadow: inset 0 0 0 1.5px var(--pv-accent);
-}
-
-/* hover 排除编辑态单元格，避免两套描边叠加 */
-.md-block table.md-editable-table th:not(.md-cell-active):hover,
-.md-block table.md-editable-table td:not(.md-cell-active):hover {
-  box-shadow: inset 0 0 0 1.5px var(--pv-accent);
+.md-block table.md-editable-table th.md-cell-active::after,
+.md-block table.md-editable-table td.md-cell-active::after,
+.md-block table.md-editable-table th:not(.md-cell-active):hover::after,
+.md-block table.md-editable-table td:not(.md-cell-active):hover::after {
+  box-shadow: inset 0 0 0 1px var(--pv-accent);
 }
 
 /* 源码定位失败的静态表格（不可编辑）：不给可编辑光标与悬停提示 */

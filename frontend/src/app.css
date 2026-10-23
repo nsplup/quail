@@ -19,11 +19,12 @@
   --color-active: var(--ui-active-bg);
 
   --font-sans:
-  system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC",
-  "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
 }
 
 @layer base {
+
   html,
   body {
     margin: 0;
@@ -39,7 +40,7 @@
   }
 
   #app {
-  height: 100vh;
+    height: 100vh;
   }
 
   button {
@@ -55,6 +56,7 @@
   :focus-visible {
     outline: 2px solid var(--ui-accent);
   }
+
   /* ---------- 可拖拽分隔线：1px 视觉线（与底栏描边同权重），伪元素扩大热区 ---------- */
   .divider {
     position: relative;
@@ -74,19 +76,21 @@
     position: absolute;
     top: 0;
     bottom: 0;
-    left: -6px;   /* 向左 6px：遮住编辑区滚动条（宽度与 ::-webkit-scrollbar 耦合） */
-    right: -4px;  /* 向右 4px：保留原有拖拽热区 */
+    left: -6px;
+    /* 向左 6px：遮住编辑区滚动条（宽度与 ::-webkit-scrollbar 耦合） */
+    right: -4px;
+    /* 向右 4px：保留原有拖拽热区 */
     /* 线性渐变：左侧 6px 不透明遮罩；6px 之后全透明，让 1px 分隔线
      * 与右侧热区正常透出（不再盖住 .divider 的线色） */
-    background: linear-gradient(
-      to right,
-      var(--ed-bg, var(--ui-bg)) 0,
-                                var(--ed-bg, var(--ui-bg)) 6px,
-                                transparent 6px,
-                                transparent 100%
-    );
-    z-index: -1;              /* 在 handler 之下 */
-    transform: translateZ(0); /* 与 .divider 同步提升合成层 */
+    background: linear-gradient(to right,
+        var(--ed-bg, var(--ui-bg)) 0,
+        var(--ed-bg, var(--ui-bg)) 6px,
+        transparent 6px,
+        transparent 100%);
+    z-index: -1;
+    /* 在 handler 之下 */
+    transform: translateZ(0);
+    /* 与 .divider 同步提升合成层 */
   }
 
   /* 悬停手柄：圆角矩形 + 竖排三个圆点。
@@ -474,10 +478,14 @@
   display: inline-flex;
   flex: 0 0 auto;
   align-items: stretch;
-  border: none;              /* ← 去掉容器边框 */
-  border-radius: 0;          /* ← 不需要了 */
-  overflow: visible;         /* ← 不再裁剪圆角 */
-  background: transparent;   /* ← 背景下移到按钮 */
+  border: none;
+  /* ← 去掉容器边框 */
+  border-radius: 0;
+  /* ← 不需要了 */
+  overflow: visible;
+  /* ← 不再裁剪圆角 */
+  background: transparent;
+  /* ← 背景下移到按钮 */
 }
 
 /* 2) 基础按钮：只留布局/排版，去掉容器式边框 */
@@ -497,25 +505,33 @@
 .cm-search-panel .sp-group .sp-btn {
   position: relative;
   box-sizing: border-box;
-  width: 30px;                              /* 28px 内容 + 左右 1px 边框 */
-  height: 28px;                             /* 26px 内容 + 上下 1px 边框 */
-  border: 1px solid var(--ui-border);       /* ← 唯一的绘制原语 */
+  width: 30px;
+  /* 28px 内容 + 左右 1px 边框 */
+  height: 28px;
+  /* 26px 内容 + 上下 1px 边框 */
+  border: 1px solid var(--ui-border);
+  /* ← 唯一的绘制原语 */
   border-radius: 0;
-  background: var(--ui-inset);              /* ← 从容器搬过来 */
-  margin-left: -1px;                        /* ← 与左邻边框重叠 1px */
+  background: var(--ui-inset);
+  /* ← 从容器搬过来 */
+  margin-left: -1px;
+  /* ← 与左邻边框重叠 1px */
   transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
+
 .cm-search-panel .sp-group .sp-btn:first-child {
   margin-left: 0;
   border-radius: 8px 0 0 8px;
 }
+
 .cm-search-panel .sp-group .sp-btn:last-child {
   border-radius: 0 8px 8px 0;
 }
 
 /* 4) 激活：只换颜色，不换绘制方式 —— 不再有抖动 */
 .cm-search-panel .sp-btn.on {
-  z-index: 1;                               /* 保证激活按钮的边框绘制在邻居之上 */
+  z-index: 1;
+  /* 保证激活按钮的边框绘制在邻居之上 */
   border-color: var(--ui-accent);
   background: var(--ui-active-bg);
   color: var(--ui-accent);
@@ -554,10 +570,13 @@
  */
 
 md-image {
-  --md-image-height: 240px; /* 运行时在任意祖先上覆盖即可同步调整占位高度 */
+  --md-image-height: 240px;
+  /* 运行时在任意祖先上覆盖即可同步调整占位高度 */
 
-  box-sizing: border-box; /* error 态虚线边框不改变 getBoundingClientRect 尺寸 */
-  position: relative; /* loaded 态左上角刷新按钮的定位基准 */
+  box-sizing: border-box;
+  /* error 态虚线边框不改变 getBoundingClientRect 尺寸 */
+  position: relative;
+  /* loaded 态左上角刷新按钮的定位基准 */
 
   display: flex;
   flex-direction: column;
@@ -610,7 +629,8 @@ md-image[data-status="loaded"] .md-img {
 
 .md-img-ph {
   display: flex;
-  flex-direction: column; /* 块级：图标上、文本下（与旧版伪元素布局一致） */
+  flex-direction: column;
+  /* 块级：图标上、文本下（与旧版伪元素布局一致） */
   align-items: center;
   gap: 8px;
 }
@@ -670,7 +690,8 @@ md-image[data-status="error"] {
 
 /* 块级图片 loaded 态：alt 描述文本（caption） */
 .md-img-cap {
-  margin-top: 8px; /* 原容器 gap 的间距改由 caption 提供（占位态居中一致性，见 md-image 注释） */
+  margin-top: 8px;
+  /* 原容器 gap 的间距改由 caption 提供（占位态居中一致性，见 md-image 注释） */
   max-width: 100%;
   padding: 0 10px;
   font-size: 12px;
@@ -748,7 +769,9 @@ md-image[data-inline][data-status="error"] {
 }
 
 @keyframes mdimg-spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* ---------------- 拖拽打开：全窗口放置区遮罩（Wails File Drop） ----------------
@@ -756,11 +779,11 @@ md-image[data-inline][data-status="error"] {
  *  file-drop-target-active 类；仅保留覆盖全窗口的透明遮罩
  *  （无任何视觉样式），pointer-events:none 不拦截拖拽事件。 */
 #app-root.file-drop-target-active::after {
-content: "";
-position: fixed;
-inset: 0;
-z-index: 9999;
-pointer-events: none;
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  pointer-events: none;
 }
 
 /* ---------------- 设置面板：二级页面导航 ----------------
@@ -929,4 +952,8 @@ pointer-events: none;
   line-height: 1.5;
   white-space: pre-line;
   overflow-wrap: anywhere;
+}
+
+::selection {
+  background-color: var(--ed-selection);
 }
