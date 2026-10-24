@@ -310,7 +310,10 @@ export function createEditorApi(
         historyCompartment.of(history({ newGroupDelay: HISTORY_NEW_GROUP_DELAY })),
         indentCompartment.of(indentUnit.of(initialIndent)),
         phrasesCompartment.of(phrasesFor(initialLang)),
-        editableCompartment.of(EditorView.editable.of(true)),
+        editableCompartment.of([
+          EditorView.editable.of(true),
+          EditorState.readOnly.of(false),
+        ]),
         editorTheme,
         search({
           // 用自研面板替代原生查找面板
@@ -491,7 +494,10 @@ export function createEditorApi(
     if (on === overlayOn) return;
     overlayOn = on;
     view.dispatch({
-      effects: editableCompartment.reconfigure(EditorView.editable.of(!on)),
+      effects: editableCompartment.reconfigure([
+        EditorView.editable.of(!on),
+        EditorState.readOnly.of(on),
+      ]),
     });
   };
   const unsubOverlays = [

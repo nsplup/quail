@@ -229,6 +229,7 @@ function mdastToHastRaw(root: Root): RawResult {
   // （全文行号）的 HAST 结构完全一致，渲染层引用对比/快照测试不受干扰。
   for (const n of sanitized.children as HastContent[]) stripHastPosition(n);
   annotateImageContext(sanitized);
+  stripTaskListLeadSpace(sanitized);
   return { hast: sanitized, hasRaw };
 }
 
@@ -381,6 +382,50 @@ function annotateImageContext(root: HastRoot): void {
   for (const c of root.children as HastContent[]) {
     if (c.type === "element") visit(c as HastElement, null, null);
   }
+}
+
+/**
+ * 剥离 GFM 任务列表项中紧跟 checkbox 的 text 节点前导空白。
+ *
+ * mdast-util-to-hast 处理 listItem.checked 时只把 <input type="checkbox">
+ * unshift 到 children 前面，不改写其后的 text——`- [ ] foo` 的 paragraph
+ * 文本是 " foo"，`white-space: pre-wrap` 下会真实占宽，比普通列表项多缩进
+ * 一个空格。这里只改 value、不增删节点，保持「锚数 === 块数」与段/块
+ * 一一对应不变量；幂等（已剥离的 value 不再有前导空白），因此增量路径
+ * 复用 prev.hast 的 head/tail（上一轮已处理）与本轮局部 chunk 再次执行
+ * 都不会产生差异。
+ *
+ * 不处理 raw HTML 手写的任务列表：remark-gfm 不会给它注入 task-list-item
+ * 类，MarkdownNode 的 isTaskListItem 不命中 → 本来就走静态渲染，无
+ * EditableCheckbox、也不存在"和原生列表对齐"的诉求。
+ */
+function stripTaskListLeadSpace(root: HastRoot): void {
+  const visit = (node: HastContent): void => {
+    if (node.type === "element" && (node as HastElement).tagName === "li") {
+      const el = node as HastElement;
+      const cls = el.properties?.className;
+      const isTask = Array.isArray(cls)
+        ? cls.includes("task-list-item")
+        : cls === "task-list-item";
+      if (isTask) {
+        const kids = el.children;
+        const i = kids.findIndex(
+          (c) =>
+            c.type === "element" &&
+            (c as HastElement).tagName === "input" &&
+            (c as HastElement).properties?.type === "checkbox"
+        );
+        const next = i >= 0 ? kids[i + 1] : undefined;
+        if (next?.type === "text") {
+          const t = next as { value: string };
+          t.value = t.value.replace(/^[ \t]+/, "");
+        }
+      }
+    }
+    const kids = (node as { children?: HastContent[] }).children;
+    if (Array.isArray(kids)) for (const c of kids) visit(c);
+  };
+  for (const c of root.children as HastContent[]) visit(c);
 }
 
 /** mdast 根 → HAST 根（含行号锚；raw HTML 已融合） */

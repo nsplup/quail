@@ -255,15 +255,11 @@
   justify-content: center;
   padding: 2px;
   /* 回拉抵消自身 padding，勾选框仍与列表缩进左缘对齐 */
-  margin: 0 0.4em 0 -2px;
+  margin: 0 0.65em 0 -0.6em;
   vertical-align: middle;
   border-radius: 5px;
   cursor: pointer;
   transition: background-color 0.12s ease;
-}
-
-.md-block li.task-list-item .md-task-check:hover {
-  background: var(--ui-hover);
 }
 
 /* 原生 input 视觉隐藏（不可 display:none：需保留可聚焦 / 空格切换） */
@@ -289,24 +285,16 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 16px;
-  height: 16px;
+  width: 1.2em;
+  height: 1.2em;
   flex: none;
-  border: 1px solid var(--pv-border);
+  border: 0.15em solid var(--pv-border);
   border-radius: 4px;
   background: var(--pv-bg);
   color: transparent;
   transition:
     background-color 0.12s ease,
     border-color 0.12s ease;
-}
-
-.md-block li.task-list-item .md-task-check:hover .md-task-box {
-  border-color: var(--ui-accent);
-}
-
-.md-block li.task-list-item .md-task-check:active .md-task-box {
-  transform: scale(0.92);
 }
 
 .md-block li.task-list-item .md-task-check.md-task-checked .md-task-box {
@@ -316,8 +304,8 @@
 }
 
 .md-block li.task-list-item .md-task-box svg {
-  width: 11px;
-  height: 11px;
+  width: 1.2em;
+  height: 1.2em;
   display: block;
 }
 
