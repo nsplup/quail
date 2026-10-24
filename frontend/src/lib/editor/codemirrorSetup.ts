@@ -20,8 +20,8 @@ import {
   defaultKeymap,
   history,
   historyKeymap,
-  undo,
-  redo,
+  undo as cmUndo,
+  redo as cmRedo,
   indentMore,
   indentLess,
 } from "@codemirror/commands";
@@ -44,6 +44,25 @@ import { get } from "svelte/store";
  * 不用 Transaction.remote：那是协同编辑的"远端变更"语义，挪用有隐患。
  */
 const programmaticChange = Annotation.define<"reverseUpdate">();
+
+/**
+ * 全选事务标记：编辑区 Ctrl/Cmd+A 全选时挂载。
+ * 全选把光标头瞬间推到文档末尾，若照常走光标行上报会把预览拽到文档
+ * 底部、并把 App 侧的「编辑意图锚点」（lastCursorActivityAt）误判为
+ * 编辑中。挂载该标记的事务被光标行上报监听器跳过——仅抑制本次全选
+ * 的同步，全选后的编辑/方向键移动恢复常规光标同步。
+ */
+const selectAllNoCursorSync = Annotation.define<boolean>();
+
+/** 编辑区全选命令：等价 CM6 selectAll（0 → 文档末尾），附带抑制标记 */
+function selectAllSuppressCursorSync(view: EditorView): boolean {
+  view.dispatch({
+    selection: EditorSelection.range(0, view.state.doc.length),
+    annotations: selectAllNoCursorSync.of(true),
+    userEvent: "select",
+  });
+  return true;
+}
 
 export interface EditorHandlers {
   /** 文档内容变化（编辑器是源码的唯一编辑入口） */
@@ -97,6 +116,11 @@ export interface EditorApi {
   openSearch(): void;
   /** 记录干净文档引用（初始化/保存成功后调用） */
   markClean(): void;
+  /** 撤销：全局快捷键入口（焦点不在任意 CM6 实例内时由 App 调用，
+   *  始终作用于编辑区实例；无撤销记录时 CM6 命令静默失败） */
+  undo(): void;
+  /** 重做：全局快捷键入口（同上） */
+  redo(): void;
 }
 
 /** 缩进命令包装：执行后把选区头滚入视口（供主编辑器的 Tab/Shift-Tab 用） */
@@ -221,8 +245,8 @@ function commonMarkdownExtensions(): Extension[] {
  *  - 自定义 Mod-z / Mod-y 必须排在 historyKeymap 之前，这里已保证。 */
 function commonKeymap(): KeyBinding[] {
   return [
-    { key: "Mod-z", run: undo, shift: redo },
-    { key: "Mod-y", run: redo },
+    { key: "Mod-z", run: cmUndo, shift: cmRedo },
+    { key: "Mod-y", run: cmRedo },
     ...defaultKeymap,
     ...historyKeymap,
   ];
@@ -297,6 +321,9 @@ export function createEditorApi(
           // 面板已开时 Mod-f 拉取选区到关键词框（须在 searchKeymap 之前拦截）
           { key: "Mod-f", run: searchPanelModF },
           { key: "Mod-s", preventDefault: true, run: () => (handlers.onsave(), true) },
+          // 全选：抑制基于光标的滚动同步（见 selectAllNoCursorSync 注释）。
+          // 只挂在主编辑区——单元格编辑器无光标同步，保持 CM6 默认全选。
+          { key: "Mod-a", run: selectAllSuppressCursorSync },
           { key: "Tab", run: indentWithScroll(indentMore, markProgrammaticScroll) },
           { key: "Shift-Tab", run: indentWithScroll(indentLess, markProgrammaticScroll) },
           ...commonKeymap(),
@@ -325,6 +352,10 @@ export function createEditorApi(
           // lastCursorActivityAt（编辑意图锚点判定）与 pendingCursorLine。
           // 注意：u.transactions 是本次 update 的事务数组，需用 some 聚合判断。
           if (u.transactions.some((tr) => tr.annotation(programmaticChange))) return;
+          // 全选（Ctrl/Cmd+A）：光标头被推到文档末尾属选区操作而非编辑
+          // 意图，跳过本次上报——不把预览拽到文档底部，也不污染
+          // lastCursorActivityAt。仅抑制全选事务本身，后续编辑恢复同步。
+          if (u.transactions.some((tr) => tr.annotation(selectAllNoCursorSync))) return;
           pendingCursorState = u.state;
           if (cursorLineRaf) return;
           cursorLineRaf = requestAnimationFrame(() => {
@@ -665,6 +696,12 @@ export function createEditorApi(
     markClean() {
       cleanDoc = view.state.doc;
       dirty$.set(false);
+    },
+    undo() {
+      cmUndo(view);
+    },
+    redo() {
+      cmRedo(view);
     },
     setPhrases(lang: string) {
       view.dispatch({

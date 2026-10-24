@@ -122,7 +122,7 @@ func main() {
         // 文件绝对路径与目标元素信息 → 转发前端按判定分流：当前实例为
         // 未命名空白文档且无编辑记录 → 原地装载；否则新实例装载
         // （后端不直接 Open：文档装载与编辑器替换是前端/新实例启动流程
-        // StartupDoc 的职责）。
+        // StartupFiles 的职责）。
         win.OnWindowEvent(events.Common.WindowFilesDropped, func(ev *application.WindowEvent) {
                 files := ev.Context().DroppedFiles()
                 if len(files) == 0 {

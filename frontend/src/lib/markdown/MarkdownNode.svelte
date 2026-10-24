@@ -19,10 +19,23 @@
   import MarkdownImage from "./MarkdownImage.svelte";
   import MarkdownNode from "./MarkdownNode.svelte"; // 自导入实现递归（Svelte 5 不支持隐式自引用）
   import EditableTable from "./EditableTable.svelte";
+  import EditableCheckbox from "./EditableCheckbox.svelte";
   import CodeBlock from "../highlight/CodeBlock.svelte";
   import { hastAttrs } from "./hast-attrs";
 
   let { node, blockIndex = null }: { node: RootContent; blockIndex?: number | null } = $props();
+
+  /** GFM 任务列表项（remark-gfm 给 li 注入 task-list-item 类，themes.css 同款判定） */
+  const isTaskListItem = (n: RootContent) =>
+    n.type === "element" &&
+    (n as Element).tagName === "li" &&
+    ((n as Element).properties?.className as unknown[] | undefined)?.includes("task-list-item");
+
+  /** 任务项直子级中的勾选框 input（GFM 保证 input 为 li 直接子元素） */
+  const isTaskCheckbox = (n: RootContent) =>
+    n.type === "element" &&
+    (n as Element).tagName === "input" &&
+    (n as Element).properties?.type === "checkbox";
 
   /** HTML void 元素：无内容模型。hast 中它们 children 恒为空，但若仍走
    *  带 {#each} 子内容的 svelte:element 分支，Svelte 5 运行时会因
@@ -75,6 +88,19 @@
     <!-- 围栏代码块（pre>code）→ CodeBlock（着色 worker + 内容寻址缓存）；
          其余 pre（无 code 子元素，如 raw HTML 场景）走通用分支 -->
     <CodeBlock node={node as Element} />
+  {:else if isTaskListItem(node as Element)}
+    <!-- 任务列表项 → 可编辑复选框（点击预览勾选框反向更新编辑区
+         `- [ ]` / `- [x]` 源码，见 EditableCheckbox 组件头注释）；
+         直子级 input[type=checkbox] 替换渲染，其余子节点照常递归 -->
+    <li {...hastAttrs(node as Element)}>
+      {#each (node as Element).children as child}
+        {#if isTaskCheckbox(child)}
+          <EditableCheckbox node={child as Element} blockIndex={blockIndex} />
+        {:else}
+          <MarkdownNode node={child} blockIndex={blockIndex} />
+        {/if}
+      {/each}
+    </li>
   {:else if VOID_ELEMENTS.has((node as Element).tagName)}
     <!-- void 元素：无子内容，自闭合渲染（避免 dynamic_void_element_content 警告） -->
     <svelte:element this={(node as Element).tagName} {...hastAttrs(node as Element)} />

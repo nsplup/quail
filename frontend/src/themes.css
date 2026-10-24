@@ -244,13 +244,94 @@
   padding-left: 3em;
 }
 
-.md-block li.task-list-item input[type="checkbox"] {
-  /* 加大勾选框（默认 13px）：更易点按、与行高更协调 */
+/* ============ 可编辑任务复选框（EditableCheckbox.svelte） ============ */
+
+/* <label> 包裹原生 input（视觉隐藏但保留语义与键盘可用），label 本身
+   扩大点击热区并自带「点按即切换」语义；样式取界面主色（--ui-accent）
+   与预览边框色（--pv-border），hover / focus 反馈与整体界面风格一致 */
+.md-block li.task-list-item .md-task-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  /* 回拉抵消自身 padding，勾选框仍与列表缩进左缘对齐 */
+  margin: 0 0.4em 0 -2px;
+  vertical-align: middle;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background-color 0.12s ease;
+}
+
+.md-block li.task-list-item .md-task-check:hover {
+  background: var(--ui-hover);
+}
+
+/* 原生 input 视觉隐藏（不可 display:none：需保留可聚焦 / 空格切换） */
+.md-block li.task-list-item .md-task-check input[type="checkbox"] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* 键盘焦点环：跟随界面 accent，落在自绘勾选框外圈 */
+.md-block li.task-list-item .md-task-check input:focus-visible + .md-task-box {
+  outline: 2px solid var(--ui-accent);
+  outline-offset: 1px;
+}
+
+/* 自绘勾选框：圆角方块，主题色填充 + 勾线 */
+.md-block li.task-list-item .md-task-box {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 16px;
   height: 16px;
-  margin-right: 0.55em;
-  accent-color: var(--pv-accent);
-  vertical-align: middle;
+  flex: none;
+  border: 1px solid var(--pv-border);
+  border-radius: 4px;
+  background: var(--pv-bg);
+  color: transparent;
+  transition:
+    background-color 0.12s ease,
+    border-color 0.12s ease;
+}
+
+.md-block li.task-list-item .md-task-check:hover .md-task-box {
+  border-color: var(--ui-accent);
+}
+
+.md-block li.task-list-item .md-task-check:active .md-task-box {
+  transform: scale(0.92);
+}
+
+.md-block li.task-list-item .md-task-check.md-task-checked .md-task-box {
+  background: var(--ui-accent);
+  border-color: var(--ui-accent);
+  color: var(--ui-bg);
+}
+
+.md-block li.task-list-item .md-task-box svg {
+  width: 11px;
+  height: 11px;
+  display: block;
+}
+
+/* 静态模式（源码定位失败 / 无编辑区实例）：退化为普通勾选框观感 */
+.md-block li.task-list-item .md-task-check.md-task-static {
+  cursor: default;
+}
+
+.md-block li.task-list-item .md-task-check.md-task-static:hover {
+  background: transparent;
+}
+
+.md-block li.task-list-item .md-task-check.md-task-static:hover .md-task-box {
+  border-color: var(--pv-border);
 }
 
 .md-block table {

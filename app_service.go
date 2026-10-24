@@ -109,7 +109,7 @@ func (a *AppService) CloseWindow() {
 
 // NewInstance 拉起一个新的 quail 进程实例（Ctrl+N / 打开迁移共用入口）。
 // path 为空 → 新实例以未命名空文档启动；非空 → 新实例启动时装载该文件
-// （复用 StartupDoc 的命令行参数通道，路径无效时新实例静默回落空文档）。
+// （复用 StartupFiles 的命令行参数通道，路径无效时新实例静默回落空文档）。
 // 子进程脱离父进程独立运行，父实例退出不影响新实例。
 func (a *AppService) NewInstance(path string) error {
         return spawnInstance(path)

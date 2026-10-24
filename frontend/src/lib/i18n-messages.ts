@@ -48,6 +48,9 @@ export const zhMessages = {
   doc: {
     untitled: "未命名",
   },
+  task: {
+    toggle: "切换任务状态",
+  },
   outline: {
     title: "大纲",
     filter: "筛选",
@@ -166,6 +169,9 @@ export const enMessages = {
   },
   doc: {
     untitled: "Untitled",
+  },
+  task: {
+    toggle: "Toggle task state",
   },
   outline: {
     title: "Outline",

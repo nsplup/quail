@@ -29,7 +29,7 @@ import type { HastSegment } from "./markdown/markdown-core";
 import { createParseClient } from "./worker/parse-client";
 import { t, locale, setLang } from "./i18n.svelte";
 import { kvGet, kvSet, onConfigReplay, initSettings } from "./settings";
-import { onBackendEvent, openDocument, ready as bridgeReady, saveAsViaDialog, startupDoc, type QuailDocState } from "./bridge";
+import { onBackendEvent, newInstance, openDocument, ready as bridgeReady, saveAsViaDialog, startupFiles, type QuailDocState } from "./bridge";
 import { splitSavePath, isValidMode } from "./docpath";
 import { banner$ } from "./banner";
 import { resetHighlightWorker } from "./highlight/hl-client";
@@ -461,10 +461,21 @@ export async function bootApp(): Promise<void> {
       if (savedMode != null && isValidMode(savedMode)) mode$.set(savedMode);
     }
     subscribeFileEvents();
-    // 启动文档由后端直接提交（命令行路径或空文档），前端不弹对话框
-    state = await startupDoc();
+    // 启动文件列表由后端直接提交（命令行路径或空文档），前端不弹对话框
+    const startup = await startupFiles();
+    state = startup.doc;
+    // 命令行携带多个文件：首个文件由本实例装载（下方），其余文件逐个
+    // 拉起新实例装载（每文件一窗口，与对话框多选 / 拖拽多文件同口径）。
+    // 新实例失败静默（路径无效时新实例自身也会回落空文档）。
+    for (const p of startup.extraFiles) {
+      try {
+        await newInstance(p);
+      } catch {
+        /* ignore */
+      }
+    }
   } catch (e) {
-    console.warn("[boot] startupDoc failed, fallback to empty doc", e);
+    console.warn("[boot] startupFiles failed, fallback to empty doc", e);
   }
   if (state) {
     doc = state.content;

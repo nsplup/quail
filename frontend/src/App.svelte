@@ -21,7 +21,7 @@
     confirmQuit,
     onBackendEvent,
     reportDirty,
-    pickOpenPath,
+    pickOpenPaths,
     openDocument,
     newInstance,
     closeWindow,
@@ -155,6 +155,7 @@
     // 拖拽打开（Wails File Drop 官方通道）：根元素已标 data-file-drop-target，
     // 后端 WindowFilesDropped 转发文件绝对路径 → 与对话框打开同一分流：
     // 当前实例为未命名空白文档且无编辑记录 → 原地装载；否则新实例装载。
+    // 支持文件列表：首个文件走该分流，其余文件逐个拉起新实例装载。
     void onBackendEvent("file:dropped", async (d: { files?: string[] }) => {
       // 遮罩开启期间（设置面板 / confirm 弹窗 / 系统弹窗空白遮罩，与
       // 快捷键的 overlayOpen 同口径）：停止响应拖拽打开，避免遮罩交互
@@ -162,9 +163,7 @@
       if (get(settingsOpen) || get(confirm$) !== null || get(dialogMask)) {
         return;
       }
-      const path = d?.files?.find((p) => !!p);
-      if (!path) return;
-      await openPath(path);
+      await openPaths(d?.files ?? []);
     });
     await bootApp();
   });
@@ -208,6 +207,27 @@
       } else if (k === "q") {
         e.preventDefault();
         void closeWindow();
+      } else if ((k === "z" || k === "y") && !e.altKey) {
+        // 撤销 / 重做全局快捷键（Mod-Z / Mod-Shift-Z / Mod-Y）：
+        // - 焦点在任意 CM6 实例（主编辑区 / 单元格编辑器 / 查找面板）内部
+        //   → 直接跳出，由 CM6 自身 keymap 处理（主编辑区撤销编辑历史、
+        //   单元格编辑器撤销单元格内容，互不串扰）；
+        // - 焦点在 CM6 以外的原生输入控件（大纲筛选框等）→ 跳出，保留其
+        //   自身的原生撤销语义（不劫持）；
+        // - 其余焦点（预览区 / 无焦点）→ 始终由编辑区的 CM6 实例执行
+        //   （编辑区组件常驻挂载，预览/源码模式下均可撤销）。
+        const target = e.target instanceof Element ? e.target : null;
+        if (target?.closest(".cm-editor")) return;
+        if (
+          target instanceof HTMLInputElement ||
+          target instanceof HTMLTextAreaElement ||
+          (target instanceof HTMLElement && target.isContentEditable)
+        ) {
+          return;
+        }
+        e.preventDefault();
+        if (k === "z" && !e.shiftKey) get(editorApi)?.undo();
+        else get(editorApi)?.redo();
       } else if (k === "s" && e.shiftKey) {
         e.preventDefault();
         void saveFileAs();
@@ -333,11 +353,27 @@
     }
   }
 
-  /** 打开文档：对话框选路径 → 统一分流（原地 / 新实例） */
+  /** 打开文档：对话框选路径（可多选）→ 统一分流（原地 / 新实例） */
   async function openFile(): Promise<void> {
-    const path = await pickOpenPath();
-    if (!path) return; // 用户取消
-    await openPath(path);
+    const paths = await pickOpenPaths();
+    if (!paths.length) return; // 用户取消
+    await openPaths(paths);
+  }
+
+  /**
+   * 打开文档列表统一分流（对话框多选 / 拖拽多文件 / 启动命令行文件列表
+   * 共用）：首个文件走原有分流（未命名空白文档且无编辑记录 → 当前实例
+   * 原地装载；否则新实例装载），其余文件逐个拉起新实例装载（每文件一
+   * 窗口，与打开对话框的单窗口单文档模型一致）。
+   */
+  async function openPaths(paths: string[]): Promise<void> {
+    const valid = paths.filter((p) => !!p);
+    if (!valid.length) return;
+    const [first, ...rest] = valid;
+    await openPath(first);
+    for (const p of rest) {
+      await spawnInstance(p);
+    }
   }
 
   /* ---------------- 同步滚动（带程序化滚动抑制 + 光标同步待办，防止回环与丢事件） ----------------

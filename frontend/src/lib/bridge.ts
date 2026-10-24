@@ -30,7 +30,7 @@ const {
   SaveAs,
   Save,
   CloseDoc,
-  StartupDoc,
+  StartupFiles,
   OpenFileWithExternal,
 } = FileService;
 
@@ -148,17 +148,29 @@ export async function openFileWithSystem(path: string): Promise<void> {
 
 /* ---------------- FileService ---------------- */
 
-/** 启动文档：后端按命令行参数提交，无路径则空文档（untitled），不弹对话框 */
-export async function startupDoc(): Promise<QuailDocState | null> {
-  return (await StartupDoc()) as unknown as QuailDocState | null;
+/** 启动文件列表装载结果：首个文件装载为当前实例文档，其余文件路径由
+ *  前端逐个拉起新实例装载（每文件一窗口）。 */
+export interface QuailStartupFiles {
+  /** 首个有效文件装载的文档状态（无有效路径 → 空文档，Name 为空串） */
+  doc: QuailDocState;
+  /** 命令行中除首个文档外的其余有效文件路径（已按出现顺序排列） */
+  extraFiles: string[];
 }
 
-/** 弹系统打开对话框，仅返回所选路径（取消返回 null）。
+/** 启动文件列表：后端按命令行参数装载首个文件并返回其余文件路径，
+ * 无路径则空文档 + 空列表（untitled），不弹对话框 */
+export async function startupFiles(): Promise<QuailStartupFiles> {
+  return (await StartupFiles()) as unknown as QuailStartupFiles;
+}
+
+/** 弹系统打开对话框（可多选），返回所选路径列表（取消返回空数组）。
  * 弹窗期间显示空白遮罩（只有遮罩无面板，不可点击关闭），
  * 等待弹窗得到结果后遮罩关闭。 */
-export async function pickOpenPath(): Promise<string | null> {
-  const path = await withDialogMask<string>(() => PickOpen());
-  return path || null;
+export async function pickOpenPaths(): Promise<string[]> {
+  const paths = await withDialogMask<string[]>(
+    async () => (await PickOpen()) ?? []
+  );
+  return paths.filter((p) => !!p);
 }
 
 /**
@@ -182,8 +194,13 @@ export async function saveDocumentAs(path: string, content: string): Promise<Qua
 /** 弹系统另存对话框并保存（取消返回 null；defaultName 由调用方按界面语言传入）。
  * 系统弹窗存续期间显示空白遮罩（只有遮罩无面板，不可点击关闭），
  * 等待弹窗得到结果后遮罩关闭。 */
-export async function saveAsViaDialog(content: string, defaultName = "untitled.md"): Promise<QuailSaveResult | null> {
-  const path = await withDialogMask<string>(() => PickSave(defaultName));
+export async function saveAsViaDialog(
+  content: string,
+  defaultName = "untitled.md"
+): Promise<QuailSaveResult | null> {
+  const path = await withDialogMask<string | null>(
+    async () => await PickSave(defaultName)
+  );
   if (!path) return null;
   return (await SaveAs(path, content)) as unknown as QuailSaveResult;
 }
@@ -211,8 +228,13 @@ export async function imageFilePath(proxySrc: string): Promise<string | null> {
  * 后端读取源文件（本地资源 / 远程缓存）原子写入，字节不经前端往返。
  * 弹窗期间与文档另存为同口径显示空白遮罩（withDialogMask）。
  */
-export async function saveImageViaDialog(proxySrc: string, defaultName: string): Promise<string | null> {
-  const path = await withDialogMask<string>(() => PickImageSave(defaultName));
+export async function saveImageViaDialog(
+  proxySrc: string,
+  defaultName: string
+): Promise<string | null> {
+  const path = await withDialogMask<string | null>(
+    async () => await PickImageSave(defaultName)
+  );
   if (!path) return null;
   await ImageSaveFile(proxySrc, path);
   return path;

@@ -91,27 +91,49 @@ func (f *FileService) ServiceShutdown() {
         f.stopWatch()
 }
 
-// StartupDoc 启动文档：取命令行传入的第一个文件路径并打开；
-// 无有效路径 → 返回空文档（Name 为空串，窗口标题的"未命名"文案由前端按
-// 界面语言本地化，后端不做 i18n），不弹任何对话框。
-func (f *FileService) StartupDoc() (*DocState, error) {
+// StartupFiles 启动文件列表装载结果（返回给前端）。
+type StartupFiles struct {
+        // Doc 首个有效文件装载的文档状态；无有效路径 → 空文档（Name 为空串，
+        // 窗口标题的"未命名"文案由前端按界面语言本地化，后端不做 i18n）。
+        Doc *DocState `json:"doc"`
+        // ExtraFiles 命令行中除首个文档外的其余有效文件路径（按出现顺序），
+        // 由前端逐个拉起新实例装载（每文件一窗口）。
+        ExtraFiles []string `json:"extraFiles"`
+}
+
+// StartupFiles 启动文件列表：取命令行传入的文件路径列表，首个文件装载为
+// 当前实例的启动文档，其余文件原样返回给前端（逐个拉起新实例装载）；
+// 无有效路径 → 空文档 + 空列表，不弹任何对话框。
+func (f *FileService) StartupFiles() (*StartupFiles, error) {
+        res := &StartupFiles{ExtraFiles: []string{}}
         for _, arg := range os.Args[1:] {
                 if arg == "" || strings.HasPrefix(arg, "-") {
                         continue
                 }
                 if st, err := os.Stat(arg); err == nil && !st.IsDir() {
-                        return f.Open(arg)
+                        if res.Doc == nil {
+                                doc, err := f.Open(arg)
+                                if err != nil {
+                                        return nil, err
+                                }
+                                res.Doc = doc
+                                continue
+                        }
+                        res.ExtraFiles = append(res.ExtraFiles, arg)
                 }
         }
-        return &DocState{
-                Path:     "",
-                Dir:      "",
-                Name:     "",
-                Content:  "",
-                Encoding: "utf-8",
-                Size:     0,
-                ModTime:  0,
-        }, nil
+        if res.Doc == nil {
+                res.Doc = &DocState{
+                        Path:     "",
+                        Dir:      "",
+                        Name:     "",
+                        Content:  "",
+                        Encoding: "utf-8",
+                        Size:     0,
+                        ModTime:  0,
+                }
+        }
+        return res, nil
 }
 
 // CurrentPath 当前打开文档路径；未打开返回空串。
@@ -257,17 +279,21 @@ func (f *FileService) SaveAs(path, content string) (*SaveResult, error) {
         return &SaveResult{Ok: true, Path: abs, Dir: filepath.Dir(abs), Name: filepath.Base(abs)}, nil
 }
 
-// PickOpen 弹出系统"打开文件"对话框，返回所选路径（取消返回空串）。
-func (f *FileService) PickOpen() (string, error) {
+// PickOpen 弹出系统"打开文件"对话框（可多选），返回所选路径列表
+// （取消返回空列表；顺序与用户选择顺序一致）。
+func (f *FileService) PickOpen() ([]string, error) {
         app := application.Get()
         if app == nil {
-                return "", nil
+                return []string{}, nil
         }
         return app.Dialog.OpenFile().
                 SetTitle("打开 Markdown 文档").
                 AddFilter("Markdown", "*.md;*.markdown").
                 AddFilter("Text", "*.txt").
-                PromptForSingleSelection()
+                // 多选由 PromptForMultipleSelection 自身置位
+                //（wails v3：allowsMultipleSelection=true → 平台多选实现），
+                // 平台行为：Windows 走多文件对话框，macOS/Linux 原生多选。
+                PromptForMultipleSelection()
 }
 
 // PickSave 弹出系统"保存文件"对话框，返回目标路径（取消返回空串）。
