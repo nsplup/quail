@@ -99,49 +99,6 @@ export interface EditorApi {
   markClean(): void;
 }
 
-/* Tab 键行为：
- * - 无选区：在光标处插入缩进单位（制表符或空格，由设置决定）；
- * - 有选区：整体缩进选中行（indentMore），随后把光标滚入视口。
- *
- * beforeScroll：程序化滚动抑制钩子（仅主编辑器传入）。两条分支都是
- * 程序化 dispatch——CM6 只对键盘输入管线自动滚到选区，对显式
- * dispatch 不会；须显式 scrollIntoView。钩子必须在引发滚动的
- * dispatch 之前调用（scroll 事件异步到达，armed 标记要先生效）。
- * 不挂 programmaticChange 注解：Tab 是用户编辑意图，光标行上报
- * 必须照常进行，预览侧由 trySyncCursor 跟随。
- * 单元格编辑器不传钩子：自身不滚动，可见性由
- * scrollCaretIntoViewAncestor 负责。 */
-function tabCommand(getUnit: () => string, beforeScroll?: () => void): Command {
-  return (view) => {
-    const { state } = view;
-    if (!state.selection.ranges.some((r) => !r.empty)) {
-      // 无选区：插入缩进单位（语义同 insertText）
-      const unit = getUnit();
-      const head = state.selection.main.head + unit.length;
-      beforeScroll?.();
-      view.dispatch({
-        ...state.replaceSelection(unit),
-        effects: EditorView.scrollIntoView(head, { y: "nearest", yMargin: 6 }),
-        userEvent: "input.type",
-      });
-      return true;
-    }
-    // 有选区：整体缩进选中行，再把选区头滚入视口。
-    // indentMore 不接受 spec，滚动用独立 effect 事务追加：
-    // 该事务无文档/选区变化，不会触发光标行上报，只有滚动本身，
-    // 由 beforeScroll 置位的 armed 标记消费掉其 scroll 事件
-    if (!indentMore(view)) return false;
-    beforeScroll?.();
-    view.dispatch({
-      effects: EditorView.scrollIntoView(
-        view.state.selection.main.head,
-        { y: "nearest", yMargin: 6 },
-      ),
-    });
-    return true;
-  };
-}
-
 /** 缩进命令包装：执行后把选区头滚入视口（供主编辑器的 Tab/Shift-Tab 用） */
 function indentWithScroll(cmd: Command, beforeScroll?: () => void): Command {
   return (view) => {
@@ -340,7 +297,7 @@ export function createEditorApi(
           // 面板已开时 Mod-f 拉取选区到关键词框（须在 searchKeymap 之前拦截）
           { key: "Mod-f", run: searchPanelModF },
           { key: "Mod-s", preventDefault: true, run: () => (handlers.onsave(), true) },
-          { key: "Tab", run: tabCommand(() => indent, markProgrammaticScroll) },
+          { key: "Tab", run: indentWithScroll(indentMore, markProgrammaticScroll) },
           { key: "Shift-Tab", run: indentWithScroll(indentLess, markProgrammaticScroll) },
           ...commonKeymap(),
           ...searchKeymap,
@@ -844,7 +801,7 @@ export function createCellEditor(
         keymap.of([
           { key: "Mod-Enter", preventDefault: true, run: () => (handlers.oncommit(), true) },
           { key: "Escape", preventDefault: true, run: () => (handlers.oncancel(), true) },
-          { key: "Tab", run: tabCommand(() => indentUnitValue) },
+          { key: "Tab", run: indentMore },
           { key: "Shift-Tab", run: indentLess },
           ...commonKeymap(),
         ]),
