@@ -106,6 +106,7 @@
     return api.onBeforeReplace(() => {
       cancelCursorSync();
       lastCursorActivityAt = 0;
+      lastReverseUpdateAt = performance.now();
     });
   });
 
@@ -400,6 +401,7 @@
        记录命中会连 pending 一起销毁，断掉自愈路径导致永久冻结。 */
   let editorProgrammaticUntil = 0;
   let previewProgrammaticUntil = 0;
+  let lastReverseUpdateAt = 0;
 
   // 光标同步待办（null 表示无待办）。rAF 合并：仅保留最后一次光标行
   let pendingCursorLine: number | null = null;
@@ -603,6 +605,7 @@
 
     // 非编辑：抑制中跳过顶行对齐（避免程序化滚动期间覆盖回写结果）
     if (performance.now() < editorProgrammaticUntil) return;
+    if (performance.now() - lastReverseUpdateAt < 1200) return;
 
     // 优先处理 pending 光标同步（编辑意图比滚动锚更精确）
     if (pendingCursorLine != null) {
