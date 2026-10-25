@@ -7,9 +7,22 @@
    *   （三态 / 懒加载 / restricted 判定，行为等价旧自定义元素）；
    * - table（markdown / raw HTML，来源经 data-*-table 标记）→ EditableTable
    *   可编辑表格组件（HAST 显示 + 反向更新编辑区，见组件头注释）；
+   * - pre>code（围栏代码块）→ CodeBlock（着色 worker + 内容寻址缓存）；
+   * - task-list-item 内的 checkbox（tight: li>input / loose: li>p>input）
+   *   → EditableCheckbox；
    * - text → 文本节点（值原样输出，空格/换行由 CSS white-space 控制）；
    * - comment / doctype → 不渲染；
    * - raw → 显式忽略并 warn（指南方案 B 兜底；管线 rehype-raw 融合后不应出现）。
+   *
+   * 【结构无关渲染】children 渲染点统一为「{#each} 内单一 <MarkdownNode>」，
+   * 任务 checkbox 的分派由 inTaskItem prop 驱动、在 element 分支最前面完成，
+   * 不再在 li / p 分支里与相邻节点混排。{#if} / {#each} 的锚点是注释（不占宽），
+   * 块体为单一组件 → Prettier 等格式化工具写不写换行、写不写空格都不会产生
+   * 模板空白 text node，输出 DOM 与模板排版无关。
+   *
+   * 【inTaskItem 传递】li.task-list-item → children 传 true；
+   * 通用 element 在非 li/ul/ol 时继承（p / strong / em / a 等）；
+   * 遇 li/ul/ol 重置为 false（嵌套列表由各自的 li.task-list-item 重新判定）。
    *
    * 增量更新：node 引用未变（增量解析 head/tail 段复用）时 Svelte 跳过该子树；
    * 引用变化但结构相同（同为 paragraph 等）时复用 DOM，仅更新差异文本/属性——
@@ -23,16 +36,27 @@
   import CodeBlock from "../highlight/CodeBlock.svelte";
   import { hastAttrs } from "./hast-attrs";
 
-  let { node, blockIndex = null }: { node: RootContent; blockIndex?: number | null } = $props();
+  let {
+    node,
+    blockIndex = null,
+    inTaskItem = false,
+  }: {
+    node: RootContent;
+    blockIndex?: number | null;
+    /** 当前节点是否处于 task-list-item 的内容上下文（含其段落内） */
+    inTaskItem?: boolean;
+  } = $props();
 
   /** GFM 任务列表项（remark-gfm 给 li 注入 task-list-item 类，themes.css 同款判定） */
-  const isTaskListItem = (n: RootContent) =>
+  const isTaskListItem = (n: RootContent): boolean =>
     n.type === "element" &&
     (n as Element).tagName === "li" &&
-    ((n as Element).properties?.className as unknown[] | undefined)?.includes("task-list-item");
+    ((n as Element).properties?.className as unknown[] | undefined)?.includes(
+      "task-list-item",
+    ) === true;
 
-  /** 任务项直子级中的勾选框 input（GFM 保证 input 为 li 直接子元素） */
-  const isTaskCheckbox = (n: RootContent) =>
+  /** 任务项内的勾选框 input（tight 为 li 直接子元素，loose 在 li > p 内） */
+  const isTaskCheckbox = (n: RootContent): boolean =>
     n.type === "element" &&
     (n as Element).tagName === "input" &&
     (n as Element).properties?.type === "checkbox";
@@ -58,15 +82,29 @@
     "wbr",
   ]);
 
+  /** 通用 element 的 children 是否继承任务项上下文：
+   *  - p / strong / em / a 等保持（loose 任务项 checkbox 在 p 内）；
+   *  - li / ul / ol 重置（嵌套列表由各自的 li.task-list-item 重新判定） */
+  const childInTaskItem = $derived(
+    inTaskItem &&
+      node.type === "element" &&
+      !["li", "ul", "ol"].includes((node as Element).tagName),
+  );
+
   $effect(() => {
     if (node.type === "raw") {
-      console.warn("[MarkdownNode] raw 节点未渲染（管线应已由 rehype-raw 融合）");
+      console.warn(
+        "[MarkdownNode] raw 节点未渲染（管线应已由 rehype-raw 融合）",
+      );
     }
   });
 </script>
 
 {#if node.type === "element"}
-  {#if (node as Element).tagName === "md-image"}
+  {#if inTaskItem && isTaskCheckbox(node)}
+    <!-- 任务项 checkbox：tight / loose 均在此分派，模板无需知道父结构 -->
+    <EditableCheckbox node={node as Element} {blockIndex} />
+  {:else if (node as Element).tagName === "md-image"}
     <!-- data-inline 由管线标注：块级（独立成段，含 <a> 包裹）不标注，行内 = "1" -->
     <MarkdownImage
       src={((node as Element).properties?.["data-src"] ??
@@ -78,36 +116,35 @@
       inline={(node as Element).properties?.["data-inline"] === "1"}
     />
   {:else if (node as Element).tagName === "table"}
-    <!-- 所有来源的表格 → 可编辑表格组件（参考 imgToMdImage 的全量替换思路，
-         markdown / raw HTML 表格统一走 EditableTable；来源经 data-*-table
-         标记在组件内区分反向更新的输出格式）。blockIndex = 段下标（与
-         blocks 一一对应），供反向更新时定位源码行区间 -->
-    <EditableTable node={node as Element} blockIndex={blockIndex} />
-  {:else if (node as Element).tagName === "pre" &&
-      (node as Element).children.some((c) => c.type === "element" && c.tagName === "code")}
-    <!-- 围栏代码块（pre>code）→ CodeBlock（着色 worker + 内容寻址缓存）；
-         其余 pre（无 code 子元素，如 raw HTML 场景）走通用分支 -->
+    <!-- 所有来源的表格 → 可编辑表格组件（markdown / raw HTML 统一走
+         EditableTable；来源经 data-*-table 标记在组件内区分反向更新格式）。
+         blockIndex = 段下标，供反向更新定位源码行区间 -->
+    <EditableTable node={node as Element} {blockIndex} />
+  {:else if (node as Element).tagName === "pre" && (node as Element).children.some((c) => c.type === "element" && c.tagName === "code")}
+    <!-- 围栏代码块（pre>code）→ CodeBlock；其余 pre 走通用分支 -->
     <CodeBlock node={node as Element} />
-  {:else if isTaskListItem(node as Element)}
-    <!-- 任务列表项 → 可编辑复选框（点击预览勾选框反向更新编辑区
-         `- [ ]` / `- [x]` 源码，见 EditableCheckbox 组件头注释）；
-         直子级 input[type=checkbox] 替换渲染，其余子节点照常递归 -->
+  {:else if isTaskListItem(node)}
+    <!-- 任务列表项：children 全部在 inTaskItem=true 上下文递归；
+         checkbox 由 element 分支最前面的 inTaskItem 分派处理，
+         本分支不特判任何子节点 -->
     <li {...hastAttrs(node as Element)}>
-      {#each (node as Element).children as child}
-        {#if isTaskCheckbox(child)}
-          <EditableCheckbox node={child as Element} blockIndex={blockIndex} />
-        {:else}
-          <MarkdownNode node={child} blockIndex={blockIndex} />
-        {/if}
+      {#each (node as Element).children as child (child)}
+        <MarkdownNode node={child} {blockIndex} inTaskItem={true} />
       {/each}
     </li>
   {:else if VOID_ELEMENTS.has((node as Element).tagName)}
     <!-- void 元素：无子内容，自闭合渲染（避免 dynamic_void_element_content 警告） -->
-    <svelte:element this={(node as Element).tagName} {...hastAttrs(node as Element)} />
+    <svelte:element
+      this={(node as Element).tagName}
+      {...hastAttrs(node as Element)}
+    />
   {:else}
-    <svelte:element this={(node as Element).tagName} {...hastAttrs(node as Element)}>
-      {#each (node as Element).children as child}
-        <MarkdownNode node={child} blockIndex={blockIndex} />
+    <svelte:element
+      this={(node as Element).tagName}
+      {...hastAttrs(node as Element)}
+    >
+      {#each (node as Element).children as child (child)}
+        <MarkdownNode node={child} {blockIndex} inTaskItem={childInTaskItem} />
       {/each}
     </svelte:element>
   {/if}

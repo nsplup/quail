@@ -387,19 +387,44 @@ function annotateImageContext(root: HastRoot): void {
 /**
  * 剥离 GFM 任务列表项中紧跟 checkbox 的 text 节点前导空白。
  *
- * mdast-util-to-hast 处理 listItem.checked 时只把 <input type="checkbox">
- * unshift 到 children 前面，不改写其后的 text——`- [ ] foo` 的 paragraph
- * 文本是 " foo"，`white-space: pre-wrap` 下会真实占宽，比普通列表项多缩进
- * 一个空格。这里只改 value、不增删节点，保持「锚数 === 块数」与段/块
- * 一一对应不变量；幂等（已剥离的 value 不再有前导空白），因此增量路径
- * 复用 prev.hast 的 head/tail（上一轮已处理）与本轮局部 chunk 再次执行
- * 都不会产生差异。
+ * 【为什么需要】`- [ ] foo` 的 `[ ]` 是段落内 inline 标记，mdast-util-to-hast
+ * 只把 `<input type="checkbox">` unshift 到 children 前、不改写其后 text，
+ * 文本是 " foo"。`white-space: pre-wrap` 下会真实占宽，比普通列表项多缩进
+ * 一个空格，与原生列表视觉不一致。
  *
- * 不处理 raw HTML 手写的任务列表：remark-gfm 不会给它注入 task-list-item
- * 类，MarkdownNode 的 isTaskListItem 不命中 → 本来就走静态渲染，无
- * EditableCheckbox、也不存在"和原生列表对齐"的诉求。
+ * 【两路结构】
+ * - tight list：li.children = [input, text, ...]
+ * - loose list：li.children = [p(children=[input, text, ...]), p?, ...]
+ * GFM 保证含 checkbox 的段落是 li 的第一个块，故：
+ *   先查 li 直接子级 input（tight），找不到再下钻**一层**到第一个 p（loose）。
+ *   只下钻一层，嵌套任务子列表的 input 在其自己的 li 里，不会被误剥。
+ *
+ * 【不变量】只改 text.value、不增删节点 → 「锚数 === 块数」、
+ * 段/块一一对应、增量 head/tail 引用复用全部不受影响。幂等：已剥的
+ * 值再剥无变化，全量/局部 chunk/重复执行均安全。
  */
 function stripTaskListLeadSpace(root: HastRoot): void {
+  const isCheckbox = (c: HastContent): boolean =>
+    c.type === "element" &&
+    (c as HastElement).tagName === "input" &&
+    (c as HastElement).properties?.type === "checkbox";
+
+  /** 返回 checkbox 所在的 children 容器与下标（tight 直挂 / loose 下钻一层 p） */
+  const locate = (
+    li: HastElement
+  ): { container: HastContent[]; index: number } | null => {
+    const direct = li.children.findIndex(isCheckbox);
+    if (direct >= 0) return { container: li.children, index: direct };
+    for (const c of li.children) {
+      if (c.type !== "element" || (c as HastElement).tagName !== "p") continue;
+      const p = c as HastElement;
+      const idx = p.children.findIndex(isCheckbox);
+      if (idx >= 0) return { container: p.children, index: idx };
+      break; // GFM 保证含 checkbox 的是第一个段落，其余 p 不再看
+    }
+    return null;
+  };
+
   const visit = (node: HastContent): void => {
     if (node.type === "element" && (node as HastElement).tagName === "li") {
       const el = node as HastElement;
@@ -408,14 +433,8 @@ function stripTaskListLeadSpace(root: HastRoot): void {
         ? cls.includes("task-list-item")
         : cls === "task-list-item";
       if (isTask) {
-        const kids = el.children;
-        const i = kids.findIndex(
-          (c) =>
-            c.type === "element" &&
-            (c as HastElement).tagName === "input" &&
-            (c as HastElement).properties?.type === "checkbox"
-        );
-        const next = i >= 0 ? kids[i + 1] : undefined;
+        const found = locate(el);
+        const next = found ? found.container[found.index + 1] : undefined;
         if (next?.type === "text") {
           const t = next as { value: string };
           t.value = t.value.replace(/^[ \t]+/, "");
