@@ -10,10 +10,14 @@
  * - 段内展平文本与 MarkdownNode 渲染文本同源同序（CodeBlock / 表格 /
  *   图片等自渲染分支除外：计数与导航照常，段内精确高亮降级为块级滚动）；
  * - 全词匹配与编辑区口径一致（\b 词界断言）；零宽匹配、超大文本与
- *   匹配数量均有保护上限。
+ *   匹配数量均有保护上限；
+ * - 正则安全校验（参考外部 HTML Playground 的 buildSearchPattern）：
+ *   面板正则先经 safe-regex 做 ReDoS（灾难性回溯）检测，再做零宽守卫
+ *   （模式本身能匹配空字符串则拒绝），不安全模式直接拦截不上岗。
  */
+import safeRegex from "safe-regex";
 import { writable } from "svelte/store";
-import type { RootContent } from "hast";
+import type { RootContent, Element } from "hast";
 import type { HastSegment } from "../markdown/markdown-core";
 
 /** 匹配列表显示上限（超出显示 999+，超出部分不再参与导航/高亮） */
@@ -38,20 +42,46 @@ export interface PreviewPatternOpts {
   wholeWord: boolean;
 }
 
-/** 由查找条件构建预览区匹配正则（null = 空条件；bad = 正则无效） */
+/** 正则安全校验结论（null = 通过；否则为拦截原因） */
+export type RegexSafetyIssue = "redos" | "zeroWidth";
+
+/** 由查找条件构建预览区匹配正则（null = 空条件；bad = 正则语法无效；unsafe = 被安全校验拦截） */
 export function buildPreviewPattern(o: PreviewPatternOpts): {
   re: RegExp | null;
   bad: boolean;
+  unsafe: RegexSafetyIssue | null;
 } {
   const term = o.search;
-  if (!term) return { re: null, bad: false };
+  if (!term) return { re: null, bad: false, unsafe: null };
   let src = o.regexp ? term : escapeRegExp(term);
   if (o.wholeWord) src = `\\b(?:${src})\\b`;
+  let re: RegExp;
   try {
-    return { re: new RegExp(src, o.caseSensitive ? "g" : "gi"), bad: false };
+    re = new RegExp(src, o.caseSensitive ? "g" : "gi");
   } catch {
-    return { re: null, bad: true };
+    return { re: null, bad: true, unsafe: null };
   }
+  /* 安全校验（仅正则模式）：ReDoS 检测 + 零宽守卫，任一命中即拦截 */
+  if (o.regexp) {
+    let isSafe: boolean;
+    try {
+      isSafe = safeRegex(term);
+    } catch {
+      return { re: null, bad: false, unsafe: "redos" };
+    }
+    if (!isSafe) return { re: null, bad: false, unsafe: "redos" };
+  }
+  /* 零宽守卫：模式本身能匹配空字符串 → 拒绝（避免匹配循环空转） */
+  re.lastIndex = 0;
+  const matchesEmpty = re.test("");
+  re.lastIndex = 0;
+  if (matchesEmpty) return { re: null, bad: false, unsafe: "zeroWidth" };
+  return { re, bad: false, unsafe: null };
+}
+
+/** 正则安全校验快捷入口（面板侧在构建匹配列表前先行判断拦截原因） */
+export function checkRegexSafety(o: PreviewPatternOpts): RegexSafetyIssue | null {
+  return buildPreviewPattern(o).unsafe;
 }
 
 /* ------------------------------------------------------------------
@@ -150,10 +180,10 @@ export function computePreviewMatches(
  * ------------------------------------------------------------------ */
 
 export interface PreviewSearchState {
-  /** 面板打开且当前项来源 = 预览区时才激活装饰 */
+  /** 面板打开且预览区存在匹配时激活装饰（与当前项来源无关） */
   active: boolean;
   re: RegExp | null;
-  /** 当前项下标（列表内 0-based；-1 = 无当前项） */
+  /** 当前项下标（列表内 0-based；-1 = 无当前项；当前项来源=编辑区时恒为 -1） */
   current: number;
   info: PreviewMatchInfo;
 }
@@ -268,4 +298,140 @@ export function decorateSegmentNodes(
     return [n];
   };
   return wrapNodes(seg.nodes);
+}
+
+/* ------------------------------------------------------------------
+ *  自渲染分支（CodeBlock 等）的高亮接回工具
+ *
+ *  装饰器（decorateSegmentNodes）会把 mark 切进 pre>code 的 HAST 子树，
+ *  但 CodeBlock 不走 MarkdownNode 通用元素递归渲染，而是自渲染：
+ *  着色路径 {@html worker 输出}、降级路径 {plain}，mark 都不参与。
+ *  下面两个函数供这类组件把 mark「读出来 + 接回去」：
+ *  - extractMarkRanges：从装饰后的 HAST 提取命中区间（plain 文本偏移口径）；
+ *  - injectMarksIntoHtml：对着色 HTML 做 plain 偏移 → HTML 偏移映射后插入标签。
+ * ------------------------------------------------------------------ */
+
+export interface CodeMarkRange {
+  /** 匹配项全局 id（info.ranges 下标，即 data-mid） */
+  id: number;
+  /** 展平纯文本（collectText 同序口径）中的 [start, end) */
+  start: number;
+  end: number;
+}
+
+/**
+ * 从装饰后的 HAST 元素提取 mark 区间。
+ * 遍历顺序与文本展平顺序一致（text 计入偏移，element 递归），
+ * 因此返回的偏移可直接用于 plain.slice / 注射点定位。
+ * 面板关闭 / 无命中时装饰器原样返回子树 → 返回空数组。
+ */
+export function extractMarkRanges(el: Element | undefined): CodeMarkRange[] {
+  const out: CodeMarkRange[] = [];
+  if (!el) return out;
+  let off = 0;
+  const walk = (nodes: RootContent[]): void => {
+    for (const n of nodes) {
+      const node = n as {
+        type?: string;
+        value?: unknown;
+        children?: RootContent[];
+        tagName?: string;
+        properties?: Record<string, unknown>;
+      };
+      if (node.type === "text") {
+        off += String(node.value ?? "").length;
+        continue;
+      }
+      if (node.type !== "element" || !Array.isArray(node.children)) continue;
+      const isMark = node.tagName === "mark";
+      const start = off;
+      walk(node.children);
+      if (isMark) {
+        // 与 markNode 的 properties 写法保持一致（"data-mid"）；
+        // 兜底读 dataMid，防 MarkdownNode 序列化层做驼峰映射
+        const raw = node.properties?.["data-mid"] ?? node.properties?.dataMid;
+        const mid = Number(raw);
+        if (Number.isFinite(mid)) out.push({ id: mid, start, end: off });
+      }
+    }
+  };
+  walk(el.children);
+  return out;
+}
+
+/**
+ * 向着色 HTML 注入 <mark class="pv-search-hl">。
+ *
+ * - ranges：extractMarkRanges 的产物（plain 文本偏移）；
+ * - current：当前项 id（命中则补 pv-search-current 类）；
+ * - 映射规则：跳过 <tag>，实体（&amp; / &#39; / &lt; 等）按 1 个 plain
+ *   字符计；这要求 html 的转义符恰为 hljs 输出的常规集合（仅 class
+ *   属性的 span + 文本转义，无注释、无含 > 的属性值）。
+ * - 输入 html 必须是可信来源（hljs 输出），本函数只插入固定字面量
+ *   <mark ...>/</mark>，不引入注入通道。
+ */
+export function injectMarksIntoHtml(
+  html: string,
+  ranges: CodeMarkRange[],
+  current: number,
+): string {
+  if (!html || ranges.length === 0) return html;
+
+  /* 1) 扫描 html，产出 plain 字符 → html [start, end) 的映射表。
+        spans[i] = 第 i 个 plain 字符在 html 中的区间 */
+  const spans: Array<{ start: number; end: number }> = [];
+  const n = html.length;
+  let i = 0;
+  while (i < n) {
+    if (html[i] === "<") {
+      const gt = html.indexOf(">", i);
+      i = gt === -1 ? n : gt + 1; // 标签整体跳过
+      continue;
+    }
+    let j = i;
+    while (j < n && html[j] !== "<") j++;
+    let k = i;
+    while (k < j) {
+      if (html[k] === "&") {
+        const semi = html.indexOf(";", k);
+        if (semi !== -1 && semi < j &&
+            /^(?:#[0-9]+|#[xX][0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]*)$/.test(
+              html.slice(k + 1, semi))) {
+          spans.push({ start: k, end: semi + 1 }); // 实体 = 1 个 plain 字符
+          k = semi + 1;
+          continue;
+        }
+      }
+      spans.push({ start: k, end: k + 1 }); // 普通 ASCII 字符
+      k += 1;
+    }
+    i = j;
+  }
+
+  /* 2) 匹配区间 → 注入事件（open / close 标签各一条） */
+  const events: Array<{ pos: number; s: string }> = [];
+  for (const r of ranges) {
+    if (r.end <= r.start || r.end > spans.length) continue;
+    const s = spans[r.start];
+    const e = spans[r.end - 1];
+    const cls = r.id === current
+      ? "pv-search-hl pv-search-current"
+      : "pv-search-hl";
+    events.push({ pos: s.start, s: `<mark class="${cls}" data-mid="${r.id}">` });
+    events.push({ pos: e.end, s: "</mark>" });
+  }
+  if (events.length === 0) return html;
+
+  /* 3) 同位置时 close 先于 open（相邻匹配不嵌套） */
+  events.sort((a, b) =>
+    a.pos - b.pos || (a.s === "</mark>" ? 0 : 1) - (b.s === "</mark>" ? 0 : 1));
+
+  /* 4) 拼接 */
+  let out = "";
+  let last = 0;
+  for (const ev of events) {
+    out += html.slice(last, ev.pos) + ev.s;
+    last = ev.pos;
+  }
+  return out + html.slice(last);
 }

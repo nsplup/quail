@@ -18,9 +18,10 @@
   let { seg, index }: { seg: HastSegment; index: number } = $props();
 
   /**
-   * 查找高亮装饰（previewSearch.ts）：查找面板打开且来源=预览区时，
-   * 把命中区间在 HAST 子树内切分成 mark 包裹节点后渲染；面板关闭 /
-   * 来源为编辑区时原样返回（引用不变 → MarkdownNode 跳过子树更新）。
+   * 查找高亮装饰（previewSearch.ts）：查找面板打开且预览区有匹配时，
+   * 把命中区间在 HAST 子树内切分成 mark 包裹节点后渲染（不依赖当前项
+   * 来源，来源只决定 current 高亮位置）；面板关闭 / 无匹配 / 正则被
+   * 安全校验拦截时原样返回（引用不变 → MarkdownNode 跳过子树更新）。
    */
   const renderNodes = $derived(decorateSegmentNodes(seg, index, $previewSearchState));
 </script>

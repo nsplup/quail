@@ -12,13 +12,24 @@
    * - 降级：未标注语言 / 语言包缺失 / 超大块 / worker 不可用 → 恒为纯文本。
    *
    * 安全：着色 HTML 为 highlight.js 输出——代码文本全程转义、仅含 class
-   * 标记的 span（围栏内容在 mdast 中为纯文本，无标记注入通道），可 {@html}。
+   * 标记的 span（围栏内容在 mdast 中为纯文本，无标记注入通道）。
+   * 纯文本 / 搜索 mark 路径在本组件内统一 escapeHtml 后拼接。
+   *
+   * 格式解耦：<code> 内部不写任何模板字面量，内容全部由 $effect 经 innerHTML
+   * 写入；<pre> 与 <code> 之间被 formatter 插入的空白文本节点也会被清除。
+   * 因此本文件可被任意 formatter（Prettier / dprint / biome…）正常格式化，
+   * 不会把缩进/换行泄漏进 <pre> 内容。
    */
   import type { Element } from "hast";
   import Icon from "../../components/Icon.svelte";
   import { t } from "../i18n.svelte";
   import { hastAttrs } from "../markdown/hast-attrs";
   import { requestHighlight } from "./hl-client";
+  import {
+    previewSearchState$ as previewSearchState,
+    extractMarkRanges,
+    injectMarksIntoHtml,
+  } from "../preview/previewSearch";
 
   let { node }: { node: Element } = $props();
 
@@ -37,12 +48,10 @@
   /** 剪贴板写入：优先 Clipboard API，不可用（如 webkitgtk 旧版）时回退 execCommand */
   function writeClipboard(text: string): Promise<boolean> {
     if (navigator.clipboard?.writeText) {
-      return navigator.clipboard
-        .writeText(text)
-        .then(
-          () => true,
-          () => writeClipboardFallback(text)
-        );
+      return navigator.clipboard.writeText(text).then(
+        () => true,
+        () => writeClipboardFallback(text),
+      );
     }
     return Promise.resolve(writeClipboardFallback(text));
   }
@@ -66,12 +75,16 @@
 
   /** pre 的直接子 code 元素（分派方保证存在） */
   const codeEl = $derived(
-    node.children.find((c): c is Element => c.type === "element" && c.tagName === "code"),
+    node.children.find(
+      (c): c is Element => c.type === "element" && c.tagName === "code",
+    ),
   );
 
   function classList(el: Element | undefined): string[] {
     const cls = el?.properties?.className;
-    return (Array.isArray(cls) ? cls : cls != null ? [String(cls)] : []).map(String);
+    return (Array.isArray(cls) ? cls : cls != null ? [String(cls)] : []).map(
+      String,
+    );
   }
 
   /** 围栏信息串语言（class="language-x"，小写；无标注 = ""） */
@@ -102,6 +115,40 @@
   /** 着色 HTML；null = 未着色（纯文本展示） */
   let html = $state<string | null>(null);
 
+  /* ---------- 查找高亮接回（searchPanel / previewSearch 装饰器） ---------- */
+
+  /** 装饰器切进 code 子树的 mark 区间（plain 文本偏移口径；面板关闭/无命中为空） */
+  const matchRanges = $derived(extractMarkRanges(codeEl));
+  const searchCurrent = $derived($previewSearchState.current);
+  const hasMarks = $derived(matchRanges.length > 0);
+
+  /** 着色路径：向 hljs 输出注入 mark；无命中时原样返回 html */
+  const markedHtml = $derived(
+    html !== null && hasMarks
+      ? injectMarksIntoHtml(html, matchRanges, searchCurrent)
+      : html,
+  );
+
+  /** 纯文本路径（首帧 / 降级）：按区间分片渲染 mark（文本内容与 plain 完全一致） */
+  const plainPieces = $derived.by(() => {
+    if (html !== null || !hasMarks) return null;
+    const pieces: Array<{ text: string; id: number; cur: boolean }> = [];
+    let pos = 0;
+    for (const r of matchRanges) {
+      if (r.start > pos)
+        pieces.push({ text: plain.slice(pos, r.start), id: -1, cur: false });
+      pieces.push({
+        text: plain.slice(r.start, r.end),
+        id: r.id,
+        cur: r.id === searchCurrent,
+      });
+      pos = r.end;
+    }
+    if (pos < plain.length)
+      pieces.push({ text: plain.slice(pos), id: -1, cur: false });
+    return pieces;
+  });
+
   let seq = 0;
   let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -122,12 +169,61 @@
     }, delay);
     return () => clearTimeout(debounceTimer);
   });
+
+  /* ---------- 模板内容写入（与格式化无关） ---------- */
+
+  function escapeHtml(s: string): string {
+    return s.replace(/[&<>"']/g, (c) =>
+      c === "&"
+        ? "&amp;"
+        : c === "<"
+          ? "&lt;"
+          : c === ">"
+            ? "&gt;"
+            : c === '"'
+              ? "&quot;"
+              : "&#39;",
+    );
+  }
+
+  /** code 的最终 HTML：着色 / 带 mark 的纯文本 / 纯文本，三者互斥 */
+  const contentHtml = $derived.by(() => {
+    if (html !== null) return markedHtml ?? "";
+    if (plainPieces) {
+      let out = "";
+      for (const p of plainPieces) {
+        if (p.id >= 0) {
+          out += `<mark class="pv-search-hl${p.cur ? " pv-search-current" : ""}" data-mid="${p.id}">${escapeHtml(p.text)}</mark>`;
+        } else {
+          out += escapeHtml(p.text);
+        }
+      }
+      return out;
+    }
+    return escapeHtml(plain);
+  });
+
+  let codeRef = $state<HTMLElement | undefined>(undefined);
+
+  $effect(() => {
+    const content = contentHtml;
+    const code = codeRef;
+    if (!code) return;
+    code.innerHTML = content;
+    // formatter 可能在 <pre> 与 <code> 之间插入空白文本节点：清掉，避免污染内容
+    const pre = code.parentElement;
+    if (pre) {
+      for (const child of Array.from(pre.childNodes)) {
+        if (child !== code) child.remove();
+      }
+    }
+  });
 </script>
 
-<!-- code 内部严禁出现字面空白（pre 上下文，空白即内容）：标签与表达式紧邻书写。
-     外层 wrap 提供 position:relative 定位锚点，复制按钮挂在 wrap 上而非 pre 内，
-     避免 pre 横向滚动时按钮被滚走 -->
-<div class="codeblock-wrap"><pre {...hastAttrs(node)}><code class={codeClass}>{#if html !== null}{@html html}{:else}{plain}{/if}</code></pre><button
+<div class="codeblock-wrap">
+  <pre {...hastAttrs(node)}><code bind:this={codeRef} class={codeClass}
+    ></code></pre>
+  <button
     class="code-copy-btn"
     class:copied
     type="button"
@@ -136,7 +232,8 @@
     onclick={copyCode}
   >
     <Icon name={copied ? "check" : "copy"} size={13} />
-  </button></div>
+  </button>
+</div>
 
 <style>
   .codeblock-wrap {

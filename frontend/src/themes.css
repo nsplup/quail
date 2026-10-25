@@ -47,10 +47,12 @@ body.search-open .pane-editor .cm-scroller {
 /* 预览区查找匹配高亮（previewSearch.ts 注入的 mark，经 MarkdownNode
    通用元素分支渲染）：普通命中柔和色底，当前项 accent 描边强化 */
 .md-block mark.pv-search-hl {
+  color: inherit;
   background: var(--ed-search, rgba(255, 180, 84, 0.3));
 }
 
 .md-block mark.pv-search-hl.pv-search-current {
+  color: inherit;
   background-color: var(--ed-selection);
 }
 

@@ -140,6 +140,8 @@ export const zhMessages = {
     switchSource: "切换当前项来源",
     noResults: "无结果",
     badRegex: "正则无效",
+    unsafeRegex: "不安全正则已拦截（ReDoS 风险）",
+    zeroWidthRegex: "零宽正则已拦截（可能死循环）",
     overflow: "999+",
   },
 } as const;
@@ -279,6 +281,8 @@ export const enMessages = {
     switchSource: "Toggle search source",
     noResults: "No results",
     badRegex: "Bad regex",
+    unsafeRegex: "Unsafe regex blocked (ReDoS risk)",
+    zeroWidthRegex: "Zero-width regex blocked (infinite loop risk)",
     overflow: "999+",
   },
 } as const;

@@ -325,9 +325,14 @@ export function createEditorApi(
           EditorState.readOnly.of(false),
         ]),
         editorTheme,
-        /* 查找/替换面板为独立悬浮卡片（searchPanel.ts），不再注入 CM 面板；
-           search() 仅提供 SearchHighlighter 匹配高亮（读 setSearchQuery 状态） */
-        search(),
+        /** 占位以确保原生行为可用 */
+        search({
+          createPanel: () => {
+            const dom = document.createElement("div");
+            dom.style.display = "none";
+            return { dom, top: true };
+          },
+        }),
         /* 悬浮面板打开时让出的顶部滚动余量（面板不占布局高度，用 facet 动态让位） */
         searchMarginCompartment.of(panelMarginExt(false)),
         keymap.of([

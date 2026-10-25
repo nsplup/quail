@@ -10,7 +10,13 @@
  * - 预览区来源：匹配列表 / 当前项下标与编辑区独立（见
  *   preview/previewSearch.ts），切换当前项的滚动由本模块自行实现；
  * - 当前项来源依赖打开面板时的布局模式：源码/双栏 → 编辑区，
- *   预览 → 预览区；来源切换时目标来源不可用则先切到双栏。
+ *   预览 → 预览区；来源切换时目标来源不可用则先切到双栏；
+ * - 来源只决定当前项（导航/滚动/状态栏下标）在哪边，不影响预览区
+ *   装饰器：面板打开且预览区有匹配时装饰恒生效，来源=编辑区时
+ *   预览区只高亮全部匹配、不标当前项（current = -1）；
+ * - 面板正则安全校验（见 preview/previewSearch.ts checkRegexSafety）：
+ *   ReDoS / 零宽模式被拦截时向编辑区同步空查询停用搜索管线，
+ *   状态栏显示拦截提示，编辑区与预览区均不再执行该正则。
  *
  * 布局（成块从左到右，行内换行在块内处理）：
  *   [查找栏(内嵌三枚匹配条件按钮) / 替换栏]
@@ -24,6 +30,8 @@ import {
   findPrevious,
   replaceNext,
   replaceAll,
+  openSearchPanel,
+  closeSearchPanel,
 } from "@codemirror/search";
 import type { EditorView, ViewUpdate } from "@codemirror/view";
 import { writable, get } from "svelte/store";
@@ -33,10 +41,12 @@ import type { Mode } from "../types";
 import { t } from "../i18n.svelte";
 import {
   buildPreviewPattern,
+  checkRegexSafety,
   computePreviewMatches,
   setPreviewSearchState,
   resetPreviewSearchState,
   type PreviewMatchInfo,
+  type RegexSafetyIssue,
   type SearchSource,
 } from "../preview/previewSearch";
 
@@ -168,6 +178,8 @@ let editorStats: { n: number; cur: number; overflow: boolean; bad: boolean } = {
 /* 预览区匹配列表与当前项（与编辑区完全独立） */
 let previewInfo: PreviewMatchInfo | null = null;
 let previewCur = 0;
+/* 面板正则安全校验结论（null = 通过；非 null = 当前输入被拦截） */
+let regexUnsafe: RegexSafetyIssue | null = null;
 
 /* ---- 面板内部 DOM 引用 ---- */
 let findInput!: HTMLInputElement;
@@ -253,6 +265,7 @@ export function closeSearchPanelFloating(): void {
   document.body.style.removeProperty("--search-panel-h");
   resetPreviewSearchState();
   searchPanelOpen$.set(false);
+  if (view) closeSearchPanel(view);
 }
 
 export function isSearchPanelOpen(): boolean {
@@ -274,6 +287,8 @@ function openPanel(): void {
   document.body.classList.add("search-open");
   document.body.style.setProperty("--search-panel-h", `${panelEl!.offsetHeight}px`);
   searchPanelOpen$.set(true);
+  if (view) openSearchPanel(view);   // ← 让 searchState.panel 变为非空
+  syncQueryToEditor();
   applySourceUI();
   applyI18n();
   syncCaseBtnState();
@@ -323,20 +338,37 @@ function buildQuery(): SearchQuery {
 function syncQueryToEditor(): void {
   if (!view) return;
   try {
-    view.dispatch({ effects: setSearchQuery.of(buildQuery()) });
+    // 不安全正则：向编辑区同步空查询，停用 CM6 搜索管线（防 getCursor 回溯失控）
+    view.dispatch({
+      effects: setSearchQuery.of(
+        regexUnsafe ? new SearchQuery({ search: "" }) : buildQuery()
+      ),
+    });
   } catch {
     /* 编辑器可能尚未就绪 */
   }
 }
 
+/** 重算面板正则安全校验结论（仅正则模式有意义） */
+function updateRegexSafety(): void {
+  regexUnsafe = checkRegexSafety({
+    search: findInput.value,
+    caseSensitive: globalCaseSensitive,
+    regexp: globalRegexp,
+    wholeWord: globalWholeWord,
+  });
+}
+
 /** 查找条件/关键词变化：同步编辑区管线 + 刷新统计与装饰 */
 function applyQuery(): void {
+  updateRegexSafety();
   syncQueryToEditor();
   refreshAll();
 }
 
 /** 全量刷新：编辑区统计、预览区匹配列表、状态文本、装饰状态 */
 function refreshAll(): void {
+  updateRegexSafety();
   updateEditorStats();
   updatePreviewMatches();
   updateStatusDisplay();
@@ -348,6 +380,11 @@ function updateEditorStats(): void {
   if (!view) return;
   const q = buildQuery();
   if (!q.search) return;
+  // 安全校验拦截（双方生效）：编辑区统计直接标记为无效正则，不再执行 getCursor
+  if (regexUnsafe) {
+    editorStats.bad = true;
+    return;
+  }
   const upto = view.state.selection.main.to;
   try {
     const cursor = q.getCursor(view.state.doc);
@@ -368,17 +405,14 @@ function updateEditorStats(): void {
 }
 
 function updatePreviewMatches(): void {
-  if (source !== "preview") {
-    previewInfo = null;
-    return;
-  }
-  const { re, bad } = buildPreviewPattern({
+  // 匹配列表恒计算（与当前项来源无关）：装饰器不依赖来源，来源只决定当前项在哪边
+  const { re, bad, unsafe } = buildPreviewPattern({
     search: findInput.value,
     caseSensitive: globalCaseSensitive,
     regexp: globalRegexp,
     wholeWord: globalWholeWord,
   });
-  const info = bad || !re ? null : computePreviewMatches(get(segments$), re);
+  const info = bad || unsafe || !re ? null : computePreviewMatches(get(segments$), re);
   previewInfo = info;
   if (info) {
     previewCur = Math.max(0, Math.min(previewCur, info.total - 1));
@@ -392,6 +426,13 @@ function updateStatusDisplay(): void {
   const q = findInput.value;
   if (!q) {
     setStatusNote(ph("search.noResults"));
+    return;
+  }
+  // 正则安全校验拦截（双方生效）：优先于两侧来源的常规状态显示
+  if (regexUnsafe) {
+    setStatusNote(
+      ph(regexUnsafe === "redos" ? "search.unsafeRegex" : "search.zeroWidthRegex")
+    );
     return;
   }
   if (source === "editor") {
@@ -436,7 +477,8 @@ function setStatusCounts(cur: string, total: string): void {
 
 /** 预览装饰状态下发（面板驱动；MarkdownSegment 派生消费） */
 function pushPreviewState(): void {
-  if (!open || source !== "preview" || !previewInfo || previewInfo.total === 0) {
+  // 装饰器生效条件与当前项来源无关：面板打开且预览区有匹配即下发
+  if (!open || !previewInfo || previewInfo.total === 0) {
     resetPreviewSearchState();
     return;
   }
@@ -453,7 +495,8 @@ function pushPreviewState(): void {
   setPreviewSearchState({
     active: true,
     re,
-    current: previewCur,
+    // 来源只决定当前项在哪边：来源=编辑区时预览区不标当前项（-1）
+    current: source === "preview" ? previewCur : -1,
     info: previewInfo,
   });
 }
@@ -721,9 +764,9 @@ locale.subscribe(() => {
   if (panelEl && open) applyI18n();
 });
 
-/* 段列表更新（解析增量落地）：来源=预览区时重算匹配列表 */
+/* 段列表更新（解析增量落地）：重算匹配列表（装饰器不依赖当前项来源） */
 segments$.subscribe(() => {
-  if (panelEl && open && source === "preview") {
+  if (panelEl && open) {
     updatePreviewMatches();
     updateStatusDisplay();
     pushPreviewState();

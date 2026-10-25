@@ -31,6 +31,7 @@
     "remark-gfm": "^4.0.1",
     "remark-parse": "^11.0.0",
     "remark-slug": "^7.0.1",
+    "safe-regex": "^2.1.1",
     "svelte-i18n": "^4.0.1",
     "unified": "^11.0.5"
   },
