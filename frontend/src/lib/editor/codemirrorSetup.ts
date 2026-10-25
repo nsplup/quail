@@ -30,7 +30,13 @@ import { markdown } from "@codemirror/lang-markdown";
 import { syntaxHighlighting, HighlightStyle, bracketMatching, indentUnit } from "@codemirror/language";
 import { tags } from "@lezer/highlight";
 import type { Command } from "@codemirror/view";
-import { createModernSearchPanel, searchPanelModF, openSearchPanelExternal } from "./searchPanel";
+import {
+  registerSearchView,
+  unregisterSearchView,
+  handleEditorModF,
+  notifyEditorUpdate,
+  getPanelTopMargin,
+} from "./searchPanel";
 import { markdownEmphasis } from "./emphasis"
 import { dirty$, setImeComposing, settingsOpen$ } from "../stores";
 import { confirm$, dialogMask$ } from "../confirm";
@@ -111,9 +117,9 @@ export interface EditorApi {
   setPhrases(lang: string): void;
   /** 字号变化后请求重新测量布局（CSS 变量变化不会自动触发 CM 测量） */
   requestMeasure(): void;
-  /** 全局 Ctrl+F 入口（CM6 以外触发）：只打开查找面板，不把选区传入关键词框；
-      面板已开时仅聚焦（选区拉取只保留给 CM6 内的重复 Mod-f） */
-  openSearch(): void;
+  /** 全局 Ctrl+F 入口已由独立悬浮面板接管（searchPanel.ts），此处仅提供
+      面板开合时编辑区顶部余量的动态重配置（悬浮面板不占布局高度） */
+  setSearchPanelMargin(enabled: boolean): void;
   /** 记录干净文档引用（初始化/保存成功后调用） */
   markClean(): void;
   /** 撤销：全局快捷键入口（焦点不在任意 CM6 实例内时由 App 调用，
@@ -136,6 +142,13 @@ function indentWithScroll(cmd: Command, beforeScroll?: () => void): Command {
     });
     return true;
   };
+}
+
+/** 查找悬浮面板打开时的顶部滚动余量（面板高度 + 间距；关闭时为 null 不让位） */
+function panelMarginExt(enabled: boolean): Extension {
+  return EditorView.scrollMargins.of(() =>
+    enabled ? { top: getPanelTopMargin() } : null
+  );
 }
 
 /* 输入停顿多久后合并为新的撤销组（CM6 默认 500ms，收紧为 200ms）。
@@ -186,12 +199,6 @@ const editorTheme = EditorView.theme({
     backgroundColor: "var(--ed-selection)",
   },
   ".cm-activeLine": { backgroundColor: "var(--ed-activeline)" },
-  ".cm-panels": {
-    backgroundColor: "transparent",
-    color: "var(--ed-fg)",
-    zIndex: "2",
-  },
-  ".cm-panels.cm-panels-top": { borderBottom: "1px solid var(--ui-border)" },
 });
 
 const mdHighlight = HighlightStyle.define([
@@ -295,6 +302,9 @@ export function createEditorApi(
      空白遮罩）开启期间切换为不可编辑，全部关闭后恢复
      （响应 settingsOpen$ / confirm$ / dialogMask$ 开关状态） */
   const editableCompartment = new Compartment();
+  /* 查找悬浮面板顶部余量 Compartment：面板开合时动态重配置
+     scrollMargins（悬浮卡片不占布局高度，改由 facet 让编辑器滚动留边） */
+  const searchMarginCompartment = new Compartment();
   /* 干净文档引用：初始化或保存后记录 state.doc，用 Text.eq 判定脏状态 */
   let cleanDoc: Text | null = null;
   const phrasesFor = (lang: string) =>
@@ -315,14 +325,14 @@ export function createEditorApi(
           EditorState.readOnly.of(false),
         ]),
         editorTheme,
-        search({
-          // 用自研面板替代原生查找面板
-          createPanel: createModernSearchPanel,
-          top: true,
-        }),
+        /* 查找/替换面板为独立悬浮卡片（searchPanel.ts），不再注入 CM 面板；
+           search() 仅提供 SearchHighlighter 匹配高亮（读 setSearchQuery 状态） */
+        search(),
+        /* 悬浮面板打开时让出的顶部滚动余量（面板不占布局高度，用 facet 动态让位） */
+        searchMarginCompartment.of(panelMarginExt(false)),
         keymap.of([
-          // 面板已开时 Mod-f 拉取选区到关键词框（须在 searchKeymap 之前拦截）
-          { key: "Mod-f", run: searchPanelModF },
+          // Mod-f：统一由悬浮面板接管（面板已开时拉取选区到关键词框）
+          { key: "Mod-f", run: () => handleEditorModF() },
           { key: "Mod-s", preventDefault: true, run: () => (handlers.onsave(), true) },
           // 全选：抑制基于光标的滚动同步（见 selectAllNoCursorSync 注释）。
           // 只挂在主编辑区——单元格编辑器无光标同步，保持 CM6 默认全选。
@@ -343,6 +353,8 @@ export function createEditorApi(
             }
           }
         }),
+        /* 查找面板统计（当前项下标随选区/文档变化刷新） */
+        EditorView.updateListener.of((u) => notifyEditorUpdate(u)),
         /* 光标行上报（编辑器→预览 光标行同步的信号源）：
            选区变化（点击/方向键）与编辑（光标头随输入前移）都会触发；
            经 rAF 合并，连续输入只上报当帧最终光标行。setDoc（打开/外部
@@ -511,8 +523,12 @@ export function createEditorApi(
    随编辑器销毁一并失效 */
   const beforeReplaceHooks = new Set<() => void>();
 
+  /* 视图注册到查找悬浮面板（面板通过它驱动 CM6 搜索管线） */
+  registerSearchView(view);
+
   return {
     destroy() {
+      unregisterSearchView();
       for (const unsub of unsubOverlays) unsub();
       if (topLineRaf) cancelAnimationFrame(topLineRaf);
       if (cursorLineRaf) cancelAnimationFrame(cursorLineRaf);
@@ -695,8 +711,11 @@ export function createEditorApi(
     requestMeasure() {
       view.requestMeasure();
     },
-    openSearch() {
-      openSearchPanelExternal(view);
+    /** 查找悬浮面板开合：动态重配置编辑区顶部滚动余量 */
+    setSearchPanelMargin(enabled: boolean) {
+      view.dispatch({
+        effects: searchMarginCompartment.reconfigure(panelMarginExt(enabled)),
+      });
     },
     /** 记录干净文档引用（初始化/保存成功后调用），并同步脏状态 */
     markClean() {

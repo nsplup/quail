@@ -125,6 +125,23 @@ export const zhMessages = {
     avg: "平均耗时 {ms}ms",
     min: "最小耗时 {ms}ms",
   },
+  search: {
+    findInEditor: "在编辑区中查找",
+    findInPreview: "在预览区中查找",
+    replace: "替换",
+    replaceOne: "替换",
+    replaceAll: "全部替换",
+    prev: "上一个",
+    next: "下一个",
+    close: "关闭",
+    matchCase: "区分大小写",
+    regexp: "正则表达式",
+    wholeWord: "全词匹配",
+    switchSource: "切换当前项来源",
+    noResults: "无结果",
+    badRegex: "正则无效",
+    overflow: "999+",
+  },
 } as const;
 
 export const enMessages = {
@@ -246,6 +263,23 @@ export const enMessages = {
     max: "Max time {ms}ms",
     avg: "Avg time {ms}ms",
     min: "Min time {ms}ms",
+  },
+  search: {
+    findInEditor: "Find in editor",
+    findInPreview: "Find in preview",
+    replace: "Replace",
+    replaceOne: "Replace",
+    replaceAll: "Replace all",
+    prev: "Previous",
+    next: "Next",
+    close: "Close",
+    matchCase: "Match case",
+    regexp: "Regular expression",
+    wholeWord: "Whole words",
+    switchSource: "Toggle search source",
+    noResults: "No results",
+    badRegex: "Bad regex",
+    overflow: "999+",
   },
 } as const;
 

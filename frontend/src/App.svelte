@@ -60,6 +60,12 @@
   import { setLang, currentLang, t } from "./lib/i18n.svelte";
   import type { Mode, OutlineItem, PreviewApi } from "./lib/types";
   import type { EditorApi } from "./lib/editor/codemirrorSetup";
+  import {
+    openSearchPanelFloating,
+    getPreviewSelectionText,
+    setPanelModeSwitch,
+    searchPanelOpen$ as searchPanelOpen,
+  } from "./lib/editor/searchPanel";
   import { get } from "svelte/store";
 
   const indentUnit: Record<string, string> = {
@@ -176,6 +182,19 @@
     void reportDirty($guardDirty);
   });
 
+  // 查找悬浮面板开合联动：
+  // - 把 App 的 setMode（含预览滚动位置保存/恢复）交给面板，
+  //   供「来源切换目标在当前布局不可用 → 切双栏」使用；
+  // - 编辑区顶部余量随面板开合动态重配置（预览模式下编辑区不可见，跳过）。
+  $effect(() => {
+    setPanelModeSwitch(setMode);
+  });
+  $effect(() => {
+    const open = $searchPanelOpen;
+    if ($mode === "preview") return;
+    $editorApi?.setSearchPanelMargin(open);
+  });
+
   // 窗口标题与文档名同步：守卫脏状态（guardDirty）时在文档名前加星号
   // （星号与文档名以空格连接；与打开/退出的脏状态守卫同口径，见 guardDirty$）
   $effect(() => {
@@ -242,21 +261,15 @@
         void save();
         return;
       } else if (k === "f" && !e.altKey) {
-        // Ctrl/Cmd+F：全局打开查找替换面板。CM6 聚焦时其 keymap（Mod-f）已
-        // 处理并 preventDefault（面板已开 → 拉取 CM6 选区；未开 → 带选区打开），
+        // Ctrl/Cmd+F：全局打开查找替换悬浮面板（右上角卡片，独立于编辑区
+        // 挂载点，预览模式无需切回双栏）。CM6 聚焦时其 keymap（Mod-f）已
+        // 处理并 preventDefault（面板已开 → 拉取 CM6 选区；未开 → 打开），
         // 事件冒泡到 window 时 defaultPrevented 为 true，此处跳过；非 CM6
-        // 聚焦状态（预览区 / 无焦点）由此触发：只打开面板，不把
-        // CM6 以外的选区传入关键词框；面板已开时仅聚焦，同样不做选区拉取。
+        // 聚焦状态（预览区 / 无焦点）由此触发：预览区有单行选区则填入
+        // 关键词框；面板已开时仅聚焦。
         if (e.defaultPrevented) return;
         e.preventDefault();
-        // 面板位于编辑区内（.cm-panels）：预览模式下编辑区 display:none，
-        // 先回双栏让面板可见（保留预览滚动位置），待布局生效后再打开
-        if (get(mode) === "preview") {
-          setMode("split");
-          requestAnimationFrame(() => get(editorApi)?.openSearch());
-          return;
-        }
-        get(editorApi)?.openSearch();
+        openSearchPanelFloating({ pull: getPreviewSelectionText() });
       }
     };
     window.addEventListener("keydown", onKey);

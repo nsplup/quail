@@ -405,155 +405,250 @@
 }
 
 /* ============================================================
- *  CM6 自定义查找/替换面板（DOM 由 searchPanel.ts 创建，样式集中于此）
- *  —— 扁平化：无阴影，与分栏布局一致的边框语言
+ *  查找/替换悬浮面板（DOM 由 searchPanel.ts 创建，样式集中于此）
+ *  —— 绝对定位悬浮卡片：右上角，不占编辑区高度；打开时顶部余量
+ *     由编辑区 EditorView.scrollMargins / 预览区 .md-first padding 让出
  *  ============================================================ */
-.cm-panels {
-  background: var(--ui-bg-soft) !important;
-  border-bottom: 1px solid var(--ui-border) !important;
-}
-
-.cm-search-panel {
-  /* 四列网格（共享于两行）：第 1 列输入框 1fr；
-   *    第 2/3 列取两行同列的最大内容宽 → 上下天然对齐；
-   *    第 4 列固定 30px = 关闭按钮宽（第二行放等宽占位）→ 两行输入框齐宽 */
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto 30px;
-  gap: 6px;
-  padding: 8px 14px;
+.sp-float {
+  position: fixed;
+  top: 10px;
+  right: 12px;
+  z-index: 60;
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+  width: 480px;
+  max-width: calc(100vw - 24px);
+  padding: 8px;
   background: var(--ui-bg-soft);
-  /* 底部描边只由 .cm-panels 画一条，与分栏分隔线同粗细（1px） */
-  border-bottom: none;
-  z-index: 10;
+  border: 1px solid var(--ui-border);
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  font-size: 12px;
 }
 
-/* 行容器不参与布局，子元素直接落入面板网格 */
-.cm-search-panel .sp-row {
-  display: contents;
-}
-
-/* 第二行第 4 列：与关闭按钮等宽的透明占位 */
-.cm-search-panel .sp-tail {
-  width: 30px;
-}
-
-.cm-search-panel .sp-input {
-  height: 28px;
+/* ---- 块 1：查找栏 / 替换栏（纵向堆叠） ---- */
+.sp-float .sp-inputs {
   flex: 1 1 auto;
-  min-width: 60px;
-  padding: 0 10px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+}
+
+/* 输入条容器：查找栏内嵌三枚匹配条件按钮 */
+.sp-float .sp-bar {
+  display: flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 2px 0 10px;
+  background: var(--ui-inset);
   border: 1px solid var(--ui-border);
   border-radius: 8px;
-  background: var(--ui-inset);
-  color: var(--ui-fg);
-  font-size: 13px;
-  outline: none;
   transition: border-color 0.15s;
 }
 
-.cm-search-panel .sp-input:focus {
+.sp-float .sp-bar:focus-within {
   border-color: var(--ui-accent);
 }
 
-.cm-search-panel .sp-input::placeholder {
-  color: var(--ui-muted);
+/* 来源=预览区：替换栏与对应按钮禁用（整体降透明度并阻断交互） */
+.sp-float .sp-bar.sp-disabled {
+  opacity: 0.45;
+  pointer-events: none;
 }
 
-.cm-search-panel .sp-count {
-  flex: 0 0 auto;
-  min-width: 52px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-  color: var(--ui-muted);
-  white-space: nowrap;
-}
-
-/* ---- 组按钮（segmented）：两两分组，组内共享边框、按钮间以 1px 细线分隔 ---- */
-/* 1) 容器：不再承担描边，也不再裁剪 */
-.cm-search-panel .sp-group {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: stretch;
-  border: none;
-  /* ← 去掉容器边框 */
-  border-radius: 0;
-  /* ← 不需要了 */
-  overflow: visible;
-  /* ← 不再裁剪圆角 */
-  background: transparent;
-  /* ← 背景下移到按钮 */
-}
-
-/* 2) 基础按钮：只留布局/排版，去掉容器式边框 */
-.cm-search-panel .sp-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
+.sp-float .sp-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
   padding: 0;
-  cursor: pointer;
-  color: var(--ui-muted);
-  user-select: none;
-  -webkit-user-select: none;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--ui-fg);
+  font-size: 12.5px;
 }
 
-/* 3) 组内按钮：自带描边，相邻边框用负 margin 折叠成 1px */
-.cm-search-panel .sp-group .sp-btn {
-  position: relative;
-  box-sizing: border-box;
-  width: 30px;
-  /* 28px 内容 + 左右 1px 边框 */
-  height: 28px;
-  /* 26px 内容 + 上下 1px 边框 */
-  border: 1px solid var(--ui-border);
-  /* ← 唯一的绘制原语 */
-  border-radius: 0;
-  background: var(--ui-inset);
-  /* ← 从容器搬过来 */
-  margin-left: -1px;
-  /* ← 与左邻边框重叠 1px */
+.sp-float .sp-input::placeholder {
+  color: var(--ui-muted);
+}
+
+/* 匹配条件按钮：去掉按钮样式集成到查找栏中，不应用成组样式；
+   激活样式保留（accent 文字 + 激活底色） */
+.sp-float .sp-cond {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin-right: 3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ui-muted);
+  cursor: pointer;
   transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
 
-.cm-search-panel .sp-group .sp-btn:first-child {
-  margin-left: 0;
-  border-radius: 8px 0 0 8px;
+.sp-float .sp-cond svg {
+  display: block;
+  font-size: 14px;
 }
 
-.cm-search-panel .sp-group .sp-btn:last-child {
-  border-radius: 0 8px 8px 0;
-}
-
-/* 4) 激活：只换颜色，不换绘制方式 —— 不再有抖动 */
-.cm-search-panel .sp-btn.on {
-  z-index: 1;
-  /* 保证激活按钮的边框绘制在邻居之上 */
+.sp-float .sp-cond.on {
+  color: var(--ui-accent);
   border-color: var(--ui-accent);
   background: var(--ui-active-bg);
-  color: var(--ui-accent);
 }
 
-/* 独立按钮（关闭）保持描边样式 */
-.cm-search-panel .sp-close {
-  border: 1px solid var(--ui-border);
-  border-radius: 8px;
-  height: 28px;
-  align-self: center;
-}
-
-/* 只改这一行选择器，加 :not(.on) */
-.cm-search-panel .sp-btn:not(.on):hover {
+.sp-float .sp-cond:not(.on):hover {
   color: var(--ui-fg);
   background: var(--ui-hover);
 }
 
+/* ---- 块 2：跨行结果提示文本 ----
+ * 无结果：单行文本居中（cur/total/分隔线隐藏，note 显示）；
+ * 有匹配项：上=当前项下标、下=列表数量，中间 1px 分隔线，
+ *           两行向中间靠拢（紧凑 margin/行高） */
+.sp-float .sp-status {
+  flex: 0 0 64px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  text-align: center;
+  font-size: 12.5px;
+  line-height: 1.35;
+  color: var(--ui-muted);
+  font-variant-numeric: tabular-nums;
+}
 
-.cm-search-panel .sp-btn svg {
+.sp-float .sp-status .sp-cur,
+.sp-float .sp-status .sp-total {
+  display: none;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sp-float .sp-status.has-matches .sp-cur {
   display: block;
+  margin-bottom: 2px;
+}
+
+.sp-float .sp-status.has-matches .sp-total {
+  display: block;
+  margin-top: 2px;
+}
+
+.sp-float .sp-status .sp-sep {
+  display: none;
+  align-self: stretch;
+  height: 0;
+  margin: 0 6px;
+  border-top: 1px solid var(--ui-border);
+}
+
+.sp-float .sp-status.has-matches .sp-sep {
+  display: block;
+}
+
+/* ---- 块 3：两份按钮组（组样式保留，行 1 = ↑↓，行 2 = 替换组） ---- */
+.sp-float .sp-nav {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+}
+
+.sp-float .sp-group {
+  display: inline-flex;
+  flex: none;
+  align-items: stretch;
+  height: 28px;
+  border: 1px solid var(--ui-border);
+  border-radius: 8px;
+  background: var(--ui-inset);
+  overflow: hidden;
+}
+
+.sp-float .sp-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  padding: 0;
+  border: none;
+  border-right: 1px solid var(--ui-border);
+  background: transparent;
+  color: var(--ui-muted);
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: background 0.15s, color 0.15s;
+}
+
+.sp-float .sp-btn:last-child {
+  border-right: none;
+}
+
+.sp-float .sp-btn svg {
+  display: block;
+}
+
+.sp-float .sp-btn:not(.on):not(:disabled):hover {
+  color: var(--ui-fg);
+  background: var(--ui-hover);
+}
+
+.sp-float .sp-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* ---- 块 4：两枚独立按钮（行 1 = 关闭，行 2 = 切换当前项来源） ---- */
+.sp-float .sp-ends {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+}
+
+.sp-float .sp-close,
+.sp-float .sp-src {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--ui-border);
+  border-radius: 8px;
+  background: var(--ui-inset);
+  color: var(--ui-muted);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.sp-float .sp-close:hover,
+.sp-float .sp-src:not(.on):hover {
+  color: var(--ui-fg);
+  background: var(--ui-hover);
+}
+
+/* 来源按钮激活状态 = 当前项来源为编辑区（而非图标 title 描述的预览区） */
+.sp-float .sp-src.on {
+  border-color: var(--ui-accent);
+  background: var(--ui-active-bg);
+  color: var(--ui-accent);
 }
 
 /* ---------- md-image（MarkdownImage 组件容器，预览图片三态） ----------

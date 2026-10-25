@@ -1,83 +1,56 @@
 /**
- * 自定义「现代风格」查找/替换面板，替代 @codemirror/search 的原生面板。
- * 通过 search({ createPanel }) 注入，仍是 CM6 原生搜索管线（SearchQuery / searchKeymap）。
+ * 查找/替换悬浮面板（右上角绝对定位卡片，不再占用编辑区高度）。
  *
- * 样式约定（app.css .cm-search-panel）：
- * - 扁平化：无阴影，底部描边与分栏分隔线同为 1px；
- * - 按钮按功能两两分组（组按钮样式）：[替换|全部替换] [Aa|.*] [↑|↓]；
- * - 替换单个 / 全部替换使用可区分的图标；
- * - 计数区默认显示「无结果 / No results」（无论是否有关键词），命中时显示数字。
+ * - 面板 DOM 由本模块全权管理（挂在 body 上），不再走 CM6 的
+ *   search({ createPanel }) 挂载点——预览模式下依然可见可用；
+ * - 编辑区仍走 CM6 原生搜索管线：SearchQuery / setSearchQuery /
+ *   findNext / replaceNext（匹配高亮由 search() 扩展的 SearchHighlighter
+ *   提供，无需面板在场）；面板打开时编辑区顶部余量由
+ *   EditorView.scrollMargins 动态让出（见 codemirrorSetup）；
+ * - 预览区来源：匹配列表 / 当前项下标与编辑区独立（见
+ *   preview/previewSearch.ts），切换当前项的滚动由本模块自行实现；
+ * - 当前项来源依赖打开面板时的布局模式：源码/双栏 → 编辑区，
+ *   预览 → 预览区；来源切换时目标来源不可用则先切到双栏。
+ *
+ * 布局（成块从左到右，行内换行在块内处理）：
+ *   [查找栏(内嵌三枚匹配条件按钮) / 替换栏]
+ *   [跨行结果提示文本：上=当前项下标，下=列表数量，中=分隔线]
+ *   [↑↓ 按钮组 / 替换按钮组] [关闭按钮 / 切换当前项来源按钮]
  */
 import {
   SearchQuery,
   setSearchQuery,
-  getSearchQuery,
   findNext,
   findPrevious,
   replaceNext,
   replaceAll,
-  closeSearchPanel,
-  openSearchPanel,
 } from "@codemirror/search";
-import type { EditorView, Panel } from "@codemirror/view";
+import type { EditorView, ViewUpdate } from "@codemirror/view";
+import { writable, get } from "svelte/store";
+import { locale } from "svelte-i18n";
+import { mode$, previewApi$, segments$, topIndex$ } from "../stores";
+import type { Mode } from "../types";
+import { t } from "../i18n.svelte";
+import {
+  buildPreviewPattern,
+  computePreviewMatches,
+  setPreviewSearchState,
+  resetPreviewSearchState,
+  type PreviewMatchInfo,
+  type SearchSource,
+} from "../preview/previewSearch";
 
-/** 面板 DOM 上的扩展钩子 */
-interface SearchPanelDom extends HTMLElement {
-  /** CM6 内重复 Mod-f：从编辑器选区拉取并聚焦 */
-  __spPull?: () => void;
-  /** 外部入口：按需填入给定文本后聚焦（null 表示仅聚焦、保留既有查询词） */
-  __spActivate?: (text: string | null) => void;
-}
+/** 面板开合状态（App 侧联动编辑区 scrollMargins 用） */
+export const searchPanelOpen$ = writable(false);
 
-/**
- * 全局 Ctrl/F 入口（CM6 以外触发）的挂起状态：
- * - 面板未开 → 打开面板；`pull` 为预览区单行选区文本（或无）。
- * - 面板已开 → 直接 __spActivate，不用此变量。
- * null 表示非外部打开。
- */
-let pendingExternal: { pull: string | null } | null = null;
+/** 面板打开时给滚动定位留出的顶部余量（面板高 + 间距） */
+const PANEL_GAP = 12;
+/** 匹配列表显示上限（与旧面板/预览区口径一致） */
+const MATCH_CAP = 999;
 
-/**
- * 从 window 选区取文本；仅当：
- * - 选区非空；
- * - 选区公共祖先落在 .pane-preview 内；
- * - 文本非空且为单行。
- * 否则返回 null。同步抓取（供 openSearchPanelExternal 在 focus 前调用）。
- */
-function getPreviewSelectionText(): string | null {
-  const sel = window.getSelection();
-  if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
-  const range = sel.getRangeAt(0);
-  const node = range.commonAncestorContainer;
-  const el =
-  node.nodeType === Node.ELEMENT_NODE
-  ? (node as Element)
-  : node.parentElement;
-  if (!el || !el.closest(".pane-preview")) return null;
-  // 排除预览区内的可编辑控件，避免误取输入框选区
-  if (el.closest("input, textarea")) return null;
-  const text = sel.toString().trim();
-  if (!text || text.includes("\n")) return null;
-  return text;
-}
-
-/**
- * 外部（CM6 以外，全局 Ctrl+F）触发的打开入口：
- * - 面板未开 → 打开面板；若预览区有单行选区则填入关键词框，否则保留既有查询词；
- * - 面板已开 → 同上（预览区有选区则填入，否则仅聚焦）。
- * CM6 内的「重复 Mod-f 拉取编辑器选区」行为（searchPanelModF / __spPull）
- * 不在 CM6 以外的区域触发。
- */
-export function openSearchPanelExternal(view: EditorView): void {
-  const panel = view.dom.querySelector<SearchPanelDom>(".cm-search-panel");
-  const pull = getPreviewSelectionText();
-  if (panel?.__spActivate) {
-    panel.__spActivate(pull);
-    return;
-  }
-  pendingExternal = { pull };
-  openSearchPanel(view);
-}
+/* ------------------------------------------------------------------
+ *  DOM 工具与图标
+ * ------------------------------------------------------------------ */
 
 function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -107,6 +80,14 @@ function svgFill(inner: string, size = 15, style = ""): string {
   );
 }
 
+/** 用户提供的匹配条件图标（16×16 fill 风格，1em 尺寸随字号） */
+function svgCond(inner: string): string {
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" ` +
+    `viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">${inner}</svg>`
+  );
+}
+
 const ICONS = {
   up: svg('<polyline points="18 15 12 9 6 15"></polyline>'),
   down: svg('<polyline points="6 9 12 15 18 9"></polyline>'),
@@ -121,254 +102,644 @@ const ICONS = {
   replaceAll: svgFill(
     '<g><path d="M14 13v-3c0-1.65-1.35-3-3-3H5.12l-1 1H11c1.1 0 2 .9 2 2v4c.55 0 1-.45 1-1"/><path fill-rule="evenodd" d="M10.999 5.5V2.75c0-.985-.879-1.5-1.749-1.5c-.888 0-1.261.303-1.354.396a.515.515 0 0 0-.014.719a.483.483 0 0 0 .693.013c.012-.008.197-.128.674-.128c.03 0 .75.006.75.5v.306A5 5 0 0 0 9.249 3c-1.313 0-2 .754-2 1.5s.687 1.5 2 1.5c.372 0 .661-.063.895-.149a.5.5 0 0 0 .855-.351M9.25 4c.372 0 .606.038.75.074v.737c-.093.074-.303.189-.75.189c-.649 0-1-.258-1-.5s.351-.5 1-.5" clip-rule="evenodd"/><path d="M5.001 13.074a3 3 0 0 0-.75-.074c-.649 0-1 .258-1 .5s.351.5 1 .5c.447 0 .657-.115.75-.189z"/><path fill-rule="evenodd" d="M12 15v-5a1 1 0 0 0-1-1H2a1 1 0 0 0-1 1v5a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1m-7.749-4.75c.87 0 1.749.515 1.749 1.5v2.75a.5.5 0 0 1-.855.351A2.6 2.6 0 0 1 4.25 15c-1.313 0-2-.754-2-1.5s.687-1.5 2-1.5c.302 0 .546.023.75.056v-.306c0-.494-.72-.5-.75-.5c-.463 0-.65.113-.672.127l-.002.001a.483.483 0 0 1-.693-.013a.515.515 0 0 1 .014-.719c.093-.093.466-.396 1.354-.396m4.079 1.361A1.62 1.62 0 0 0 8 12.625c0 .388.117.748.33 1.014c.369.462.98.343 1.209.139a.499.499 0 1 1 .669.742C9.86 14.834 9.442 15 9 15c-.555 0-1.071-.261-1.451-.736A2.63 2.63 0 0 1 7 12.625c0-.614.195-1.196.549-1.639c.684-.852 1.873-.966 2.66-.256a.5.5 0 1 1-.669.742c-.229-.206-.839-.325-1.21.139M14 6c1.103 0 2-1.009 2-2.25s-.897-2.25-2-2.25c-.366 0-.705.119-1 .313V.5a.5.5 0 0 0-1 0v5a.5.5 0 0 0 .5.5c.217 0 .397-.14.466-.334c.303.207.654.334 1.034.334m0-3.5c.552 0 1 .561 1 1.25S14.552 5 14 5s-1-.561-1-1.25s.448-1.25 1-1.25" clip-rule="evenodd"/><path d="M2 4.5C2 3.673 2.673 3 3.5 3h2.002a.5.5 0 0 1 0 1h-2a.5.5 0 0 0-.5.5v1.793l1.146-1.146a.5.5 0 0 1 .707.707l-2 2a.5.5 0 0 1-.708 0l-2-2a.5.5 0 0 1 .707-.707L2 6.293z"/></g>'
   ),
+  /* 匹配条件按钮图标（用户提供）：区分大小写 / 正则 / 全词匹配 */
+  caseSensitive: svgCond(
+    '<path fill="currentColor" fill-rule="evenodd" d="M4.026 3.342c.136-.408.812-.408.948 0l2 6l.004.013l.996 2.988A.5.5 0 0 1 7.5 13a.5.5 0 0 1-.474-.342L6.14 10H2.86l-.886 2.658a.501.501 0 0 1-.948-.317l.996-2.987l.004-.012zM3.194 9h2.612L4.5 5.081zm8.664-2.332c1.307.065 2.085.816 2.139 2.028l.003.137v3.675a.5.5 0 0 1-.432.487L13.5 13a.5.5 0 0 1-.495-.432L13 12.5v-.07c-.66.377-1.268.57-1.833.57C9.94 13 9 12.137 9 10.833c0-1.15.792-2.004 2.106-2.163A5 5 0 0 1 13 8.81c-.008-.738-.371-1.103-1.19-1.144c-.642-.032-1.093.058-1.357.243a.5.5 0 1 1-.574-.818c.438-.308 1.036-.444 1.789-.43zm.938 3.147a4 4 0 0 0-1.57-.128c-.822.1-1.227.537-1.227 1.17c0 .731.475 1.167 1.167 1.167c.454 0 1.012-.21 1.668-.642l.165-.112V9.876z" clip-rule="evenodd"/>'
+  ),
+  regexp: svgCond(
+    '<path fill="currentColor" d="M11.498 5H9.705l1.268-1.268a.5.5 0 0 0-.707-.707L8.998 4.293V2.5a.5.5 0 0 0-1 0v1.793L6.73 3.025a.5.5 0 0 0-.707.707L7.291 5H5.498a.5.5 0 0 0 0 1h1.793L6.023 7.268a.5.5 0 0 0 .708.707l1.268-1.268V8.5a.5.5 0 0 0 1 0V6.707l1.268 1.268a.5.5 0 0 0 .708 0a.5.5 0 0 0 0-.707L9.707 6H11.5a.5.5 0 0 0 0-1zM5 12a1 1 0 1 1-2 0a1 1 0 0 1 2 0"/>'
+  ),
+  wholeWord: svgCond(
+    '<g fill="currentColor"><path d="M15.5 12.5a.5.5 0 0 1 .5.5v.5c0 .827-.673 1.5-1.5 1.5h-13C.673 15 0 14.327 0 13.5V13a.5.5 0 0 1 1 0v.5a.5.5 0 0 0 .5.5h13a.5.5 0 0 0 .5-.5V13a.5.5 0 0 1 .5-.5"/><path fill-rule="evenodd" d="M4.858 5.67c1.307.066 2.085.817 2.14 2.03L7 7.835v3.675a.5.5 0 0 1-.432.487l-.068.005a.5.5 0 0 1-.495-.432L6 11.503v-.07c-.659.377-1.268.57-1.833.57C2.941 12.003 2 11.14 2 9.836c0-1.15.792-2.004 2.106-2.163A5 5 0 0 1 6 7.813c-.007-.738-.371-1.103-1.191-1.144c-.641-.032-1.092.058-1.356.243a.5.5 0 1 1-.574-.818c.439-.308 1.036-.444 1.789-.43zm.939 3.148a4 4 0 0 0-1.571-.128c-.822.1-1.227.537-1.227 1.17c0 .731.475 1.167 1.167 1.167c.454 0 1.012-.21 1.668-.642l.165-.112V8.879zM9.55 2.006a.5.5 0 0 1 .45.497v4.1c.418-.377.937-.6 1.5-.6c1.381 0 2.5 1.343 2.5 3s-1.119 3-2.5 3c-.563 0-1.082-.223-1.5-.6v.1a.5.5 0 0 1-.45.497q-.024.004-.05.003a.5.5 0 0 1-.5-.5v-9q0-.026.003-.05a.5.5 0 0 1 .548-.447m1.885 4.998c-.404.028-.858.311-1.145.818a2.44 2.44 0 0 0-.288 1.073q-.003.053-.002.107l.002.107c.016.4.12.767.287 1.07c.287.508.742.794 1.146.821a1 1 0 0 0 .13 0c.404-.027.859-.312 1.146-.82c.167-.304.271-.672.287-1.07q.003-.054.002-.108l-.002-.107a2.44 2.44 0 0 0-.288-1.073c-.287-.507-.74-.79-1.146-.818q-.03-.003-.064-.002q-.033 0-.065.002" clip-rule="evenodd"/></g>'
+  ),
+  /* 切换当前项来源按钮图标（与 replaceAll 同尺寸：15px / 16×16 viewBox）：
+   圆角矩形，左半实心、右半描边，中间竖线穿过 */
+  source: svgFill(
+    '<g>' +
+    // 左半实心：外边界 x1.5→7，y3→13，圆角 2
+    '<path d="M3.5 3H7v10H3.5A2 2 0 0 1 1.5 11V5a2 2 0 0 1 2-2Z"/>' +
+    // 右半描边：中心线 x10→14，y3.5→12.5；外边界 x9.5→14.5 / y3→13，与左半关于 x=8 对称
+    '<path d="M10 3.5H12.5A1.5 1.5 0 0 1 14 5v6a1.5 1.5 0 0 1-1.5 1.5H10" ' +
+    'fill="none" stroke="currentColor" stroke-width="1" ' +
+    'stroke-linecap="round" stroke-linejoin="round"/>' +
+    // 中间竖线：x=8，纵向 1→15 穿过矩形
+    '<path d="M8 1v14" fill="none" stroke="currentColor" stroke-width="1" ' +
+    'stroke-linecap="round"/>' +
+    '</g>'
+  ),
 };
 
-/**
- * Mod-f 拦截：面板已开 → 从编辑器选区拉取内容填入关键词框（并聚焦选中）；
- * 面板未开 → 返回 false 落回 searchKeymap 的 openSearchPanel 正常打开。
- * 需排在 ...searchKeymap 之前。
- */
-export function searchPanelModF(view: EditorView): boolean {
-  const dom = view.dom.querySelector<SearchPanelDom>(".cm-search-panel");
-  if (dom?.__spPull) {
-    dom.__spPull();
-    return true;
+/* ------------------------------------------------------------------
+ *  模块状态
+ * ------------------------------------------------------------------ */
+
+/** 编辑器视图注册（codemirrorSetup 创建/销毁时调用） */
+let view: EditorView | null = null;
+export function registerSearchView(v: EditorView | null): void {
+  view = v;
+  if (panelEl && open) {
+    syncQueryToEditor();
+    updateStatusDisplay();
   }
-  return false;
+}
+export function unregisterSearchView(): void {
+  view = null;
 }
 
-/* 匹配条件（区分大小写 / 正则）全局状态：跨面板实例保留，
- *  不随面板关闭重开或语言切换（phrases 重配）而重置 */
+/** 匹配条件（区分大小写 / 正则 / 全词）全局状态：跨开关保留 */
 let globalCaseSensitive = false;
 let globalRegexp = false;
+let globalWholeWord = false;
 
-export function createModernSearchPanel(view: EditorView): Panel {
-  const dom = el("div", "cm-search-panel");
+let panelEl: HTMLDivElement | null = null;
+let open = false;
+let source: SearchSource = "editor";
 
-  /* ---- 第一行：查找输入 + 计数 + 上下导航 + 关闭 ---- */
-  const row1 = el("div", "sp-row flex items-center gap-1.5");
-  const input = el("input", "sp-input sp-find") as HTMLInputElement;
-  input.type = "text";
-  input.spellcheck = false;
+/** 面板需要的 App 侧模式切换（保留预览滚动位置的那份 setMode） */
+let modeSwitch: ((m: Mode) => void) | null = null;
+export function setPanelModeSwitch(fn: (m: Mode) => void): void {
+  modeSwitch = fn;
+}
 
-  const count = el("span", "sp-count");
+/* 编辑区匹配统计（仅展示用；导航由 CM6 管线驱动） */
+let editorStats: { n: number; cur: number; overflow: boolean; bad: boolean } = {
+  n: 0, cur: 0, overflow: false, bad: false,
+};
+/* 预览区匹配列表与当前项（与编辑区完全独立） */
+let previewInfo: PreviewMatchInfo | null = null;
+let previewCur = 0;
 
+/* ---- 面板内部 DOM 引用 ---- */
+let findInput!: HTMLInputElement;
+let replaceInput!: HTMLInputElement;
+let caseBtn!: HTMLButtonElement;
+let regexBtn!: HTMLButtonElement;
+let wordBtn!: HTMLButtonElement;
+let statusEl!: HTMLDivElement;
+let noteEl!: HTMLDivElement;
+let curEl!: HTMLDivElement;
+let totalEl!: HTMLDivElement;
+let sepEl!: HTMLDivElement;
+let replaceBar!: HTMLDivElement;
+let replaceOneBtn!: HTMLButtonElement;
+let replaceAllBtn!: HTMLButtonElement;
+let prevBtn!: HTMLButtonElement;
+let nextBtn!: HTMLButtonElement;
+let closeBtn!: HTMLButtonElement;
+let srcBtn!: HTMLButtonElement;
+
+/** 取界面文案（svelte-i18n；面板为脱离组件树的 DOM，直接读 store 快照） */
+const ph = (key: string): string => {
+  try {
+    return get(t)(key) ?? key;
+  } catch {
+    return key;
+  }
+};
+
+/* ------------------------------------------------------------------
+ *  打开 / 关闭 / 来源
+ * ------------------------------------------------------------------ */
+
+/** 从 window 选区取预览区单行选区文本（供全局 Ctrl+F 拉取），否则 null */
+export function getPreviewSelectionText(): string | null {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
+  const range = sel.getRangeAt(0);
+  const node = range.commonAncestorContainer;
+  const elx =
+    node.nodeType === Node.ELEMENT_NODE
+      ? (node as Element)
+      : node.parentElement;
+  if (!elx || !elx.closest(".pane-preview")) return null;
+  // 排除预览区内的可编辑控件，避免误取输入框选区
+  if (elx.closest("input, textarea")) return null;
+  const text = sel.toString().trim();
+  if (!text || text.includes("\n")) return null;
+  return text;
+}
+
+/** 当前布局模式下面板默认可用的来源 */
+function availableSource(m: Mode): SearchSource {
+  return m === "preview" ? "preview" : "editor";
+}
+
+/**
+ * 全局入口（CM6 内外通用）：
+ * - 面板未开 → 按布局模式确定来源后打开；pull（预览区单行选区）非空则填入；
+ * - 面板已开 → pull 非空则填入，否则仅聚焦。
+ */
+export function openSearchPanelFloating(opts?: { pull?: string | null }): void {
+  if (!open) {
+    source = availableSource(get(mode$));
+    buildPanel();
+    openPanel();
+  }
+  const pull = opts?.pull ?? null;
+  if (pull) {
+    findInput.value = pull;
+    applyQuery();
+  }
+  updateStatusDisplay();
+  findInput.focus();
+  findInput.select();
+}
+
+export function closeSearchPanelFloating(): void {
+  if (!open) return;
+  open = false;
+  if (panelEl) panelEl.style.display = "none";
+  document.body.classList.remove("search-open");
+  document.body.style.removeProperty("--search-panel-h");
+  resetPreviewSearchState();
+  searchPanelOpen$.set(false);
+}
+
+export function isSearchPanelOpen(): boolean {
+  return open;
+}
+
+/**
+ * 面板打开时编辑区需要让出的顶部余量（供 EditorView.scrollMargins 读值）。
+ * 面板未开返回 0。facet 回调在测量期执行，读 DOM 高度安全。
+ */
+export function getPanelTopMargin(): number {
+  if (!open || !panelEl) return 0;
+  return panelEl.offsetHeight + PANEL_GAP;
+}
+
+function openPanel(): void {
+  open = true;
+  panelEl!.style.display = "flex";
+  document.body.classList.add("search-open");
+  document.body.style.setProperty("--search-panel-h", `${panelEl!.offsetHeight}px`);
+  searchPanelOpen$.set(true);
+  applySourceUI();
+  applyI18n();
+  syncCaseBtnState();
+  refreshAll();
+  if (source === "preview" && previewInfo && previewInfo.total > 0) {
+    // 初始当前项：取预览视口顶段（topIndex$）之后的第一处匹配，避免跳走
+    const top = get(topIndex$);
+    const idx = previewInfo.segOf.findIndex((s) => s >= top);
+    previewCur = idx >= 0 ? idx : 0;
+    pushPreviewState();
+  }
+}
+
+/** 切换当前项来源；目标来源在当前布局不可用时先切到双栏 */
+function toggleSource(): void {
+  const target: SearchSource = source === "editor" ? "preview" : "editor";
+  const m = get(mode$);
+  if ((target === "editor" && m === "preview") || (target === "preview" && m === "source")) {
+    // 目标来源在当前布局模式不可用：切双栏（预览滚动位置由 App.setMode 保留）
+    modeSwitch?.("split");
+  }
+  source = target;
+  previewCur = 0;
+  applySourceUI();
+  refreshAll();
+  if (source === "preview" && previewInfo && previewInfo.total > 0) {
+    scrollToPreviewMatch(previewCur);
+  }
+  findInput.focus();
+}
+
+/* ------------------------------------------------------------------
+ *  查询应用与统计
+ * ------------------------------------------------------------------ */
+
+function buildQuery(): SearchQuery {
+  return new SearchQuery({
+    search: findInput.value,
+    replace: replaceInput.value,
+    caseSensitive: globalCaseSensitive,
+    regexp: globalRegexp,
+    wholeWord: globalWholeWord,
+  });
+}
+
+/** 把当前查询同步给编辑区（无论来源——保证切回编辑区时高亮即时可用） */
+function syncQueryToEditor(): void {
+  if (!view) return;
+  try {
+    view.dispatch({ effects: setSearchQuery.of(buildQuery()) });
+  } catch {
+    /* 编辑器可能尚未就绪 */
+  }
+}
+
+/** 查找条件/关键词变化：同步编辑区管线 + 刷新统计与装饰 */
+function applyQuery(): void {
+  syncQueryToEditor();
+  refreshAll();
+}
+
+/** 全量刷新：编辑区统计、预览区匹配列表、状态文本、装饰状态 */
+function refreshAll(): void {
+  updateEditorStats();
+  updatePreviewMatches();
+  updateStatusDisplay();
+  pushPreviewState();
+}
+
+function updateEditorStats(): void {
+  editorStats = { n: 0, cur: 0, overflow: false, bad: false };
+  if (!view) return;
+  const q = buildQuery();
+  if (!q.search) return;
+  const upto = view.state.selection.main.to;
+  try {
+    const cursor = q.getCursor(view.state.doc);
+    for (; ;) {
+      const r = cursor.next();
+      if (r.done) break;
+      editorStats.n++;
+      if (r.value.to <= upto) editorStats.cur = editorStats.n;
+      if (editorStats.n > MATCH_CAP) {
+        editorStats.overflow = true;
+        editorStats.n = MATCH_CAP;
+        break;
+      }
+    }
+  } catch {
+    editorStats.bad = true;
+  }
+}
+
+function updatePreviewMatches(): void {
+  if (source !== "preview") {
+    previewInfo = null;
+    return;
+  }
+  const { re, bad } = buildPreviewPattern({
+    search: findInput.value,
+    caseSensitive: globalCaseSensitive,
+    regexp: globalRegexp,
+    wholeWord: globalWholeWord,
+  });
+  const info = bad || !re ? null : computePreviewMatches(get(segments$), re);
+  previewInfo = info;
+  if (info) {
+    previewCur = Math.max(0, Math.min(previewCur, info.total - 1));
+  } else {
+    previewCur = 0;
+  }
+}
+
+/** 跨行结果提示文本：无结果/异常时单行居中，有匹配项时两行 + 分隔线 */
+function updateStatusDisplay(): void {
+  const q = findInput.value;
+  if (!q) {
+    setStatusNote(ph("search.noResults"));
+    return;
+  }
+  if (source === "editor") {
+    if (editorStats.bad) {
+      setStatusNote(ph("search.badRegex"));
+      return;
+    }
+    if (editorStats.n === 0) {
+      setStatusNote(ph("search.noResults"));
+      return;
+    }
+    if (editorStats.overflow) {
+      setStatusNote(ph("search.overflow"));
+      return;
+    }
+    setStatusCounts(String(editorStats.cur), String(editorStats.n));
+    return;
+  }
+  // 预览区来源
+  if (!previewInfo || previewInfo.total === 0) {
+    setStatusNote(ph("search.noResults"));
+    return;
+  }
+  if (previewInfo.overflow) {
+    setStatusNote(ph("search.overflow"));
+    return;
+  }
+  setStatusCounts(String(previewCur + 1), String(previewInfo.total));
+}
+
+function setStatusNote(text: string): void {
+  statusEl.classList.remove("has-matches");
+  noteEl.textContent = text;
+}
+
+function setStatusCounts(cur: string, total: string): void {
+  statusEl.classList.add("has-matches");
+  curEl.textContent = cur;
+  totalEl.textContent = total;
+  noteEl.textContent = "";
+}
+
+/** 预览装饰状态下发（面板驱动；MarkdownSegment 派生消费） */
+function pushPreviewState(): void {
+  if (!open || source !== "preview" || !previewInfo || previewInfo.total === 0) {
+    resetPreviewSearchState();
+    return;
+  }
+  const { re } = buildPreviewPattern({
+    search: findInput.value,
+    caseSensitive: globalCaseSensitive,
+    regexp: globalRegexp,
+    wholeWord: globalWholeWord,
+  });
+  if (!re) {
+    resetPreviewSearchState();
+    return;
+  }
+  setPreviewSearchState({
+    active: true,
+    re,
+    current: previewCur,
+    info: previewInfo,
+  });
+}
+
+/* ------------------------------------------------------------------
+ *  导航（编辑区走 CM6 管线；预览区自行实现滚动）
+ * ------------------------------------------------------------------ */
+
+function gotoMatch(delta: number): void {
+  if (source === "editor") {
+    if (!view || !findInput.value) return;
+    if (delta > 0) findNext(view);
+    else findPrevious(view);
+    updateEditorStats();
+    updateStatusDisplay();
+    return;
+  }
+  const info = previewInfo;
+  if (!info || info.total === 0) return;
+  previewCur = (previewCur + delta + info.total) % info.total;
+  updateStatusDisplay();
+  pushPreviewState();
+  scrollToPreviewMatch(previewCur);
+}
+
+/** 把第 id 项匹配滚动到预览视口内（未挂载段先跳块，挂载后按 mark 精调） */
+function scrollToPreviewMatch(id: number): void {
+  const info = previewInfo;
+  if (!info) return;
+  const seg = info.segOf[id];
+  const sc = document.querySelector<HTMLElement>(".preview-scroll");
+  if (!sc) return;
+  const margin = (panelEl?.offsetHeight ?? 0) + PANEL_GAP;
+  const adjust = (mark: HTMLElement | null): boolean => {
+    if (!mark) return false;
+    const scRect = sc.getBoundingClientRect();
+    const mRect = mark.getBoundingClientRect();
+    if (mRect.top < scRect.top + margin || mRect.bottom > scRect.bottom) {
+      sc.scrollTop += mRect.top - (scRect.top + margin);
+    }
+    return true;
+  };
+  const findMark = (): HTMLElement | null =>
+    sc.querySelector<HTMLElement>(
+      `.md-item[data-index="${seg}"] mark.pv-search-hl[data-mid="${id}"]`,
+    );
+
+  let mark = findMark();
+  if (mark && adjust(mark)) return;
+  // 段未挂载（虚拟滚动）：先对齐段顶，随后等 mark 渲染完成再精调
+  try {
+    get(previewApi$)?.scrollToIndex(seg, { offset: 0 });
+  } catch {
+    /* 预览可能未挂载 */
+  }
+  let frames = 0;
+  const tick = (): void => {
+    mark = findMark();
+    if (mark) {
+      adjust(mark);
+      return;
+    }
+    if (++frames < 60) requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}
+
+/* ------------------------------------------------------------------
+ *  CM6 编辑器联动入口（codemirrorSetup 调用）
+ * ------------------------------------------------------------------ */
+
+/** 编辑器事务后刷新（docChanged / selectionSet；仅来源=编辑区时开销） */
+export function notifyEditorUpdate(_u: ViewUpdate): void {
+  if (!open || source !== "editor") return;
+  updateEditorStats();
+  updateStatusDisplay();
+}
+
+/**
+ * 编辑区 Mod-f：面板已开 → 拉取编辑器选区到关键词框；未开 → 打开面板。
+ * 恒返回 true（必须排在 searchKeymap 之前，吞掉 CM 原生面板入口）。
+ */
+export function handleEditorModF(): boolean {
+  const sel = view?.state.selection.main;
+  const text =
+    sel && !sel.empty && view
+      ? view.state.doc.sliceString(sel.from, sel.to)
+      : "";
+  openSearchPanelFloating({ pull: text && !text.includes("\n") ? text : null });
+  return true;
+}
+
+/* ------------------------------------------------------------------
+ *  面板 DOM 构建
+ * ------------------------------------------------------------------ */
+
+function buildPanel(): void {
+  if (panelEl) return;
+
+  panelEl = el("div", "sp-float");
+  panelEl.setAttribute("role", "search");
+  panelEl.style.display = "none";
+
+  /* ---- 块 1：查找栏 / 替换栏 ---- */
+  const inputs = el("div", "sp-inputs");
+
+  const findBar = el("div", "sp-bar");
+  findInput = el("input", "sp-input");
+  findInput.type = "text";
+  findInput.spellcheck = false;
+  const conds = el("div", "sp-conds");
+  caseBtn = el("button", "sp-cond", "");
+  caseBtn.type = "button";
+  caseBtn.innerHTML = ICONS.caseSensitive;
+  regexBtn = el("button", "sp-cond", "");
+  regexBtn.type = "button";
+  regexBtn.innerHTML = ICONS.regexp;
+  wordBtn = el("button", "sp-cond", "");
+  wordBtn.type = "button";
+  wordBtn.innerHTML = ICONS.wholeWord;
+  conds.append(caseBtn, regexBtn, wordBtn);
+  findBar.append(findInput, conds);
+
+  replaceBar = el("div", "sp-bar sp-replace-bar");
+  replaceInput = el("input", "sp-input");
+  replaceInput.type = "text";
+  replaceInput.spellcheck = false;
+  replaceBar.append(replaceInput);
+
+  inputs.append(findBar, replaceBar);
+
+  /* ---- 块 2：跨行结果提示文本 ---- */
+  statusEl = el("div", "sp-status");
+  curEl = el("div", "sp-cur");
+  sepEl = el("div", "sp-sep");
+  totalEl = el("div", "sp-total");
+  noteEl = el("div", "sp-note");
+  statusEl.append(curEl, sepEl, totalEl, noteEl);
+
+  /* ---- 块 3：两份按钮组 ---- */
+  const nav = el("div", "sp-nav");
   const navGroup = el("div", "sp-group");
-  const prevBtn = el("button", "sp-btn");
+  prevBtn = el("button", "sp-btn");
   prevBtn.type = "button";
   prevBtn.innerHTML = ICONS.up;
-  const nextBtn = el("button", "sp-btn");
+  nextBtn = el("button", "sp-btn");
   nextBtn.type = "button";
   nextBtn.innerHTML = ICONS.down;
   navGroup.append(prevBtn, nextBtn);
 
-  const closeBtn = el("button", "sp-btn sp-close");
-  closeBtn.type = "button";
-  closeBtn.innerHTML = ICONS.close;
-
-  row1.append(input, count, navGroup, closeBtn);
-
-  /* ---- 第二行：替换输入 + 替换按钮组 + 匹配条件按钮组 ---- */
-  const row2 = el("div", "sp-row flex items-center gap-1.5");
-  const replaceInput = el("input", "sp-input sp-replace") as HTMLInputElement;
-  replaceInput.type = "text";
-  replaceInput.spellcheck = false;
-
-  const replaceGroup = el("div", "sp-group");
-  const replaceOneBtn = el("button", "sp-btn");
+  const repGroup = el("div", "sp-group");
+  replaceOneBtn = el("button", "sp-btn");
   replaceOneBtn.type = "button";
   replaceOneBtn.innerHTML = ICONS.replaceOne;
-
-  const replaceAllBtn = el("button", "sp-btn");
+  replaceAllBtn = el("button", "sp-btn");
   replaceAllBtn.type = "button";
   replaceAllBtn.innerHTML = ICONS.replaceAll;
-  replaceGroup.append(replaceOneBtn, replaceAllBtn);
+  repGroup.append(replaceOneBtn, replaceAllBtn);
+  nav.append(navGroup, repGroup);
 
-  const matchGroup = el("div", "sp-group");
-  const caseBtn = el("button", "sp-btn sp-toggle text-[11px] font-semibold", "Aa");
-  caseBtn.type = "button";
-  const regexBtn = el("button", "sp-btn sp-toggle text-[11px] font-semibold", ".*");
-  regexBtn.type = "button";
-  matchGroup.append(caseBtn, regexBtn);
+  /* ---- 块 4：两枚独立按钮 ---- */
+  const ends = el("div", "sp-ends");
+  closeBtn = el("button", "sp-close");
+  closeBtn.type = "button";
+  closeBtn.innerHTML = ICONS.close;
+  srcBtn = el("button", "sp-src");
+  srcBtn.type = "button";
+  srcBtn.innerHTML = ICONS.source;
+  ends.append(closeBtn, srcBtn);
 
-  /* 与第一行关闭按钮等宽的占位（grid 第 4 列），保证上下两个输入框齐宽 */
-  const row2Tail = el("div", "sp-tail");
-  row2.append(replaceInput, replaceGroup, matchGroup, row2Tail);
-
-  /* ---- 文案：经 CM6 phrases（EditorState.phrases 由 i18n-messages 的 cmPhrases 注入，
-   *        语言切换时 reconfigure 后本函数在 update 中重跑即生效） ---- */
-  const ph = (s: string): string => view.state.phrase(s) ?? s;
-
-  let caseSensitive = globalCaseSensitive;
-  let regexp = globalRegexp;
-
-  const applyI18n = (): void => {
-    input.placeholder = ph("Find");
-    caseBtn.title = ph("Match case");
-    regexBtn.title = ph("Regular expression");
-    prevBtn.title = ph("Previous (Shift+Enter)");
-    nextBtn.title = ph("Next (Enter)");
-    closeBtn.title = ph("Close (Esc)");
-    replaceInput.placeholder = ph("Replace");
-    replaceOneBtn.title = ph("Replace");
-    replaceAllBtn.title = ph("Replace all");
-  };
-  applyI18n();
+  panelEl.append(inputs, statusEl, nav, ends);
+  const app = document.querySelector('#app-root') as Element;
+  app.appendChild(panelEl);
 
   /* ---- 行为 ---- */
-  const buildQuery = () =>
-  new SearchQuery({
-    search: input.value,
-    replace: replaceInput.value,
-    caseSensitive,
-    regexp,
-  });
-
-  function updateCount(): void {
-    const q = getSearchQuery(view.state);
-    if (!q || !q.search) {
-      // 无关键词也默认显示「无结果」，而非留空/横杠
-      count.textContent = ph("No results");
-      return;
-    }
-    let n = 0;
-    let current = 0;
-    const upto = view.state.selection.main.to;
-    try {
-      const cursor = q.getCursor(view.state.doc);
-      for (;;) {
-        const r = cursor.next();
-        if (r.done) break;
-        n++;
-        if (r.value.to <= upto) current = n;
-        if (n > 999) {
-          count.textContent = ph("999+");
-          return;
-        }
-      }
-    } catch {
-      count.textContent = ph("Bad regex");
-      return;
-    }
-    count.textContent = n === 0 ? ph("No results") : `${current}/${n}`;
-  }
-
-  function applyQuery(): void {
-    view.dispatch({ effects: setSearchQuery.of(buildQuery()) });
-    updateCount();
-  }
-
-  input.addEventListener("input", applyQuery);
-  input.addEventListener("keydown", (e) => {
+  findInput.addEventListener("input", applyQuery);
+  findInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
       e.preventDefault();
-      if (e.shiftKey) findPrevious(view);
-      else findNext(view);
+      gotoMatch(e.shiftKey ? -1 : 1);
     } else if (e.key === "Escape") {
-      closeSearchPanel(view);
+      e.preventDefault();
+      closeSearchPanelFloating();
     }
   });
-
-  replaceInput.addEventListener("input", applyQuery);
+  replaceInput.addEventListener("input", () => {
+    syncQueryToEditor();
+  });
   replaceInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
       e.preventDefault();
-      replaceNext(view);
+      if (source === "editor" && view) replaceNext(view);
     } else if (e.key === "Escape") {
-      closeSearchPanel(view);
+      e.preventDefault();
+      closeSearchPanelFloating();
     }
   });
 
   caseBtn.addEventListener("click", () => {
-    caseSensitive = !caseSensitive;
-    globalCaseSensitive = caseSensitive;
-    caseBtn.classList.toggle("on", caseSensitive);
+    globalCaseSensitive = !globalCaseSensitive;
+    syncCaseBtnState();
     applyQuery();
   });
   regexBtn.addEventListener("click", () => {
-    regexp = !regexp;
-    globalRegexp = regexp;
-    regexBtn.classList.toggle("on", regexp);
+    globalRegexp = !globalRegexp;
+    syncCaseBtnState();
     applyQuery();
   });
-  prevBtn.addEventListener("click", () => findPrevious(view));
-  nextBtn.addEventListener("click", () => findNext(view));
-  replaceOneBtn.addEventListener("click", () => replaceNext(view));
-  replaceAllBtn.addEventListener("click", () => replaceAll(view));
-  closeBtn.addEventListener("click", () => closeSearchPanel(view));
+  wordBtn.addEventListener("click", () => {
+    globalWholeWord = !globalWholeWord;
+    syncCaseBtnState();
+    applyQuery();
+  });
 
-  dom.append(row1, row2);
-
-  return {
-    dom,
-    top: true,
-    mount() {
-      const d = dom as SearchPanelDom;
-      const focusInput = (): void => {
-        input.focus();
-        input.select();
-      };
-
-      // 面板已开时再次按 Ctrl+F（CM6 内）：从当前编辑器选区拉取内容同步给关键词输入框。
-      // 在键盘事件回调里执行，同步 dispatch 合法。
-      d.__spPull = () => {
-        const sel = view.state.selection.main;
-        const text = sel.empty ? "" : view.state.doc.sliceString(sel.from, sel.to);
-        if (text) {
-          input.value = text;
-          applyQuery();
-        }
-        focusInput();
-      };
-
-      // 外部入口（全局 Ctrl+F 等）已开兜底：预览区有选区则填入，否则仅聚焦。
-      // pull 已由 openSearchPanelExternal 同步取好（此时 window 选区尚未被 focus 清掉）。
-      d.__spActivate = (text) => {
-        if (text) {
-          input.value = text;
-          applyQuery();
-        }
-        focusInput();
-      };
-
-      caseBtn.classList.toggle("on", globalCaseSensitive);
-      regexBtn.classList.toggle("on", globalRegexp);
-      applyI18n();
-
-      // 打开时带入搜索词：
-      // - 外部打开：预览区单行选区优先，否则保留既有查询词；
-      // - 内部打开：既有查询词优先，否则用编辑器单行选区。
-      // 注意：mount 处于 CM 更新流程内，禁止同步 dispatch（会中断面板 DOM 插入），
-      // 因此 query 的写入延后到微任务。
-      const ext = pendingExternal;
-      pendingExternal = null;
-      const sel = view.state.selection.main;
-      const selText = sel.empty ? "" : view.state.doc.sliceString(sel.from, sel.to);
-      const existing = getSearchQuery(view.state)?.search ?? "";
-      const initial = ext
-      ? ext.pull ?? existing
-      : existing || (selText && !selText.includes("\n") ? selText : "");
-      if (initial) {
-        input.value = initial;
-        queueMicrotask(() => {
-          try {
-            view.dispatch({ effects: setSearchQuery.of(buildQuery()) });
-            updateCount();
-          } catch { /* 面板可能已关闭 */ }
-        });
-      }
-      updateCount();
-      input.focus();
-      input.select();
-    },
-    update(u) {
-      caseBtn.classList.toggle("on", globalCaseSensitive);
-      regexBtn.classList.toggle("on", globalRegexp);
-      applyI18n();
-      if (u.docChanged || u.selectionSet) updateCount();
-    },
-    destroy() {
-      /* noop */
-    },
-  };
+  prevBtn.addEventListener("click", () => gotoMatch(-1));
+  nextBtn.addEventListener("click", () => gotoMatch(1));
+  replaceOneBtn.addEventListener("click", () => {
+    if (source !== "editor" || !view) return;
+    replaceNext(view);
+  });
+  replaceAllBtn.addEventListener("click", () => {
+    if (source !== "editor" || !view) return;
+    replaceAll(view);
+  });
+  closeBtn.addEventListener("click", closeSearchPanelFloating);
+  srcBtn.addEventListener("click", toggleSource);
 }
+
+function syncCaseBtnState(): void {
+  caseBtn.classList.toggle("on", globalCaseSensitive);
+  regexBtn.classList.toggle("on", globalRegexp);
+  wordBtn.classList.toggle("on", globalWholeWord);
+}
+
+/** 来源变化后的 UI 联动 */
+function applySourceUI(): void {
+  const preview = source === "preview";
+  findInput.placeholder = preview ? ph("search.findInPreview") : ph("search.findInEditor");
+  replaceInput.disabled = preview;
+  replaceBar.classList.toggle("sp-disabled", preview);
+  replaceOneBtn.disabled = preview;
+  replaceAllBtn.disabled = preview;
+  // 激活状态为编辑区（而非图标 title 描述的预览区）
+  srcBtn.classList.toggle("on", !preview);
+  applyI18n();
+}
+
+function applyI18n(): void {
+  findInput.placeholder = source === "preview" ? ph("search.findInPreview") : ph("search.findInEditor");
+  caseBtn.title = ph("search.matchCase");
+  regexBtn.title = ph("search.regexp");
+  wordBtn.title = ph("search.wholeWord");
+  prevBtn.title = ph("search.prev");
+  nextBtn.title = ph("search.next");
+  closeBtn.title = ph("search.close");
+  replaceInput.placeholder = ph("search.replace");
+  replaceOneBtn.title = ph("search.replaceOne");
+  replaceAllBtn.title = ph("search.replaceAll");
+  srcBtn.title = ph("search.switchSource");
+  updateStatusDisplay();
+}
+
+/* 语言切换：面板常驻 body 之外组件树，订阅 locale 重刷文案 */
+locale.subscribe(() => {
+  if (panelEl && open) applyI18n();
+});
+
+/* 段列表更新（解析增量落地）：来源=预览区时重算匹配列表 */
+segments$.subscribe(() => {
+  if (panelEl && open && source === "preview") {
+    updatePreviewMatches();
+    updateStatusDisplay();
+    pushPreviewState();
+  }
+});
+
+/* 全局 Escape 关闭（面板内部输入框 / 编辑器 / 预览区 / 空焦点）。
+   弹层（设置、确认、菜单）内的 Escape 事件不在此处理，避免双重响应 */
+document.addEventListener("keydown", (e) => {
+  if (!open || e.key !== "Escape" || e.defaultPrevented) return;
+  const t = e.target;
+  const inPanel = panelEl !== null && t instanceof Node && panelEl.contains(t);
+  const inEditor = t instanceof Element && !!t.closest(".cm-editor");
+  const inPreview = t instanceof Element && !!t.closest(".pane-preview");
+  if (inPanel || inEditor || inPreview || t === document.body || t == null) {
+    e.preventDefault();
+    closeSearchPanelFloating();
+  }
+});

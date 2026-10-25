@@ -34,6 +34,26 @@
   padding-top: 24px;
 }
 
+/* 查找悬浮面板打开：在原有 padding-top 上增加面板高度（--search-panel-h
+   由 searchPanel.ts 开合时写在 body 上），首段内容不再被右上角悬浮卡片遮住 */
+body.search-open .md-item.md-first {
+  padding-top: calc(24px + var(--search-panel-h, 96px));
+}
+
+body.search-open .pane-editor .cm-scroller {
+  padding-top: var(--search-panel-h, 96px);
+}
+
+/* 预览区查找匹配高亮（previewSearch.ts 注入的 mark，经 MarkdownNode
+   通用元素分支渲染）：普通命中柔和色底，当前项 accent 描边强化 */
+.md-block mark.pv-search-hl {
+  background: var(--ed-search, rgba(255, 180, 84, 0.3));
+}
+
+.md-block mark.pv-search-hl.pv-search-current {
+  background-color: var(--ed-selection);
+}
+
 /* 块级间距。注：预览为虚拟滚动（VirtualList），未挂载段的高度为估计值，
    挂载段由 ResizeObserver 实测；块间距用 padding（不用 margin）——
    绝对定位项包装不破坏间距，也不存在相邻 margin 折叠 */
