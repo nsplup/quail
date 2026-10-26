@@ -37,6 +37,7 @@ import type { EditorView, ViewUpdate } from "@codemirror/view";
 import { writable, get } from "svelte/store";
 import { locale } from "svelte-i18n";
 import { mode$, previewApi$, segments$, topIndex$ } from "../stores";
+import { confirm$, dialogMask$ } from "../confirm";
 import type { Mode } from "../types";
 import { t } from "../i18n.svelte";
 import {
@@ -674,6 +675,7 @@ function buildPanel(): void {
   /* ---- 行为 ---- */
   findInput.addEventListener("input", applyQuery);
   findInput.addEventListener("keydown", (e) => {
+    if (get(confirm$) || get(dialogMask$)) return;
     if (e.key === "Enter") {
       e.preventDefault();
       gotoMatch(e.shiftKey ? -1 : 1);
@@ -686,6 +688,7 @@ function buildPanel(): void {
     syncQueryToEditor();
   });
   replaceInput.addEventListener("keydown", (e) => {
+    if (get(confirm$) || get(dialogMask$)) return;
     if (e.key === "Enter") {
       e.preventDefault();
       if (source === "editor" && view) replaceNext(view);
@@ -776,7 +779,7 @@ segments$.subscribe(() => {
 /* 全局 Escape 关闭（面板内部输入框 / 编辑器 / 预览区 / 空焦点）。
    弹层（设置、确认、菜单）内的 Escape 事件不在此处理，避免双重响应 */
 document.addEventListener("keydown", (e) => {
-  if (!open || e.key !== "Escape" || e.defaultPrevented) return;
+  if (!open || e.key !== "Escape" || e.defaultPrevented || get(confirm$) || get(dialogMask$)) return;
   const t = e.target;
   const inPanel = panelEl !== null && t instanceof Node && panelEl.contains(t);
   const inEditor = t instanceof Element && !!t.closest(".cm-editor");

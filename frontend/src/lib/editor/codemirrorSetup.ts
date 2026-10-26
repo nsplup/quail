@@ -199,6 +199,7 @@ const editorTheme = EditorView.theme({
     backgroundColor: "var(--ed-selection)",
   },
   ".cm-activeLine": { backgroundColor: "var(--ed-activeline)" },
+  ".cm-panels-top": { display: "none" },
 });
 
 const mdHighlight = HighlightStyle.define([
@@ -345,7 +346,6 @@ export function createEditorApi(
           { key: "Tab", run: indentWithScroll(indentMore, markProgrammaticScroll) },
           { key: "Shift-Tab", run: indentWithScroll(indentLess, markProgrammaticScroll) },
           ...commonKeymap(),
-          ...searchKeymap,
         ]),
         EditorView.updateListener.of((u) => {
           if (u.docChanged) {

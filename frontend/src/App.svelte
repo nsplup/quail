@@ -728,16 +728,12 @@
   let dragKind = $state<"none" | "split">("none");
   let contentEl = $state<HTMLElement | null>(null);
 
-  /* 编辑区最小宽度（px）：查找/替换面板的网格布局（两行输入 + 按钮组 +
-     计数 + 关闭）完整排布约需 300px，取整留余量。极窄窗口下不再把面板
-     挤成一团（输入框 min-width: 60px 只是下限，网格列仍会互相挤压） */
-  const EDITOR_MIN_WIDTH_PX = 320;
+  /* 仅保留百分比钳制，不再依赖内容区像素宽度 */
+  const SPLIT_MIN_PCT = 10;
+  const SPLIT_MAX_PCT = 90;
 
-  /** 双栏比例钳制：编辑区宽度 ≥ EDITOR_MIN_WIDTH_PX（按内容区宽度换算
-      百分比；极窄窗口下最多占 90%，预览保底 10%），常规窗口上限仍 80% */
-  function clampSplitPct(pct: number, width: number): number {
-    const minPct = Math.min((EDITOR_MIN_WIDTH_PX / width) * 100, 90);
-    return Math.min(Math.max(80, minPct), Math.max(minPct, pct));
+  function clampSplitPct(pct: number): number {
+    return Math.min(Math.max(pct, SPLIT_MIN_PCT), SPLIT_MAX_PCT);
   }
 
   function startSplitDrag(e: PointerEvent): void {
@@ -747,7 +743,7 @@
     dragKind = "split";
     const move = (ev: PointerEvent): void => {
       const pct = ((ev.clientX - rect.left) / rect.width) * 100;
-      splitPct = clampSplitPct(pct, rect.width);
+      splitPct = clampSplitPct(pct);
     };
     const up = (): void => {
       dragKind = "none";
@@ -814,9 +810,8 @@
             aria-label="拖拽调整比例，双击重置等分"
             onpointerdown={startSplitDrag}
             ondblclick={() => {
-              // 双击重置等分（同样受最小宽度钳制：极窄窗口下等分不成立）
               const r = contentEl?.getBoundingClientRect();
-              if (r) splitPct = clampSplitPct(50, r.width);
+              if (r) splitPct = clampSplitPct(50);
             }}
           ></div>
         {/if}

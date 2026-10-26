@@ -24,17 +24,29 @@ export interface LicenseEntry {
 }
 
 /** LOGO 美术资产（frontend/public/bird.svg）：来源 Firefox OS Emoji，CC BY 4.0 */
-const assetEntry: LicenseEntry = {
-  name: "Firefox OS Emoji",
-  version: "",
-  license: "CC BY 4.0",
-  copyright:
-    "Firefox OS Emoji is a colored Emoji collection designed by Sabrina Smelko and licensed under CC-BY-4.0\nCopyright (c) Mozilla Corporation and contributors",
-  url: "https://github.com/mozilla/fxemoji",
-};
+const assetEntry: LicenseEntry[] = [
+  {
+    name: "Firefox OS Emoji",
+    version: "",
+    license: "CC BY 4.0",
+    copyright:
+      "Firefox OS Emoji is a colored Emoji collection designed by Sabrina Smelko and licensed under CC-BY-4.0\n" +
+      "Copyright (c) Mozilla Corporation and contributors",
+    url: "https://github.com/mozilla/fxemoji",
+  },
+  {
+    name: "VS Code Codicons",
+    version: "",
+    license: "CC BY 4.0",
+    copyright:
+      "VS Code Codicons icon set © Microsoft Corporation and other contributors.\n" +
+      "Licensed under the Creative Commons Attribution 4.0 International (CC-BY-4.0).",
+    url: "https://github.com/microsoft/vscode-codicons",
+  },
+];
 
 export const licenseEntries: LicenseEntry[] = [
   ...(frontendDepsJson as LicenseEntry[]),
   ...(backendDepsJson as LicenseEntry[]),
-  assetEntry,
+  ...assetEntry,
 ].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
