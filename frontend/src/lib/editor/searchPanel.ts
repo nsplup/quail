@@ -286,7 +286,7 @@ function openPanel(): void {
   open = true;
   panelEl!.style.display = "flex";
   document.body.classList.add("search-open");
-  document.body.style.setProperty("--search-panel-h", `${panelEl!.offsetHeight}px`);
+  document.body.style.setProperty("--search-panel-h", `${getPanelTopMargin()}px`);
   searchPanelOpen$.set(true);
   if (view) openSearchPanel(view);   // ← 让 searchState.panel 变为非空
   syncQueryToEditor();
