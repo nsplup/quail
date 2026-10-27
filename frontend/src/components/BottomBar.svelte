@@ -104,7 +104,7 @@
           oninsert={(rows, cols) => {
             const text = emptyMarkdownTable(rows, cols);
             /* 光标落在首个表头单元格内（"| " 之后） */
-            $editorApi?.insertText(text, 2);
+            $editorApi?.insertBlock(text, 2);
           }}
           onclose={() => (tableInsertOpen = false)}
         />

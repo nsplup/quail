@@ -14,6 +14,7 @@ import {
   parseTableSource,
   serializeMarkdownTable,
   markdownCell,
+  blockInsertPrefix,
   type CellSource,
 } from "../table-source";
 
@@ -131,5 +132,37 @@ describe("table codec：HTML 表格来源语言统一（P4）", () => {
       "data-x": "1",
     });
     expect(parsed?.aligns[0]).toBe("center");
+  });
+});
+
+describe("blockInsertPrefix：块插入前缀映射", () => {
+  it("列表标记 → 等宽空白", () => {
+    expect(blockInsertPrefix("- item")).toBe("  ");
+    expect(blockInsertPrefix("* item")).toBe("  ");
+    expect(blockInsertPrefix("+ item")).toBe("  ");
+    expect(blockInsertPrefix("1. item")).toBe("   ");
+    expect(blockInsertPrefix("10. item")).toBe("    ");
+  });
+
+  it("引用原样保留", () => {
+    expect(blockInsertPrefix("> quote")).toBe("> ");
+    expect(blockInsertPrefix("> > nested")).toBe("> > ");
+  });
+
+  it("引用 + 列表：引用保留，列表转空白", () => {
+    expect(blockInsertPrefix("> - item")).toBe(">   ");
+    expect(blockInsertPrefix("> 1. item")).toBe(">    ");
+  });
+
+  it("缩进原样保留（含 tab）", () => {
+    expect(blockInsertPrefix("  text")).toBe("  ");
+    expect(blockInsertPrefix("\ttext")).toBe("\t");
+    expect(blockInsertPrefix("  \ttext")).toBe("  \t");
+  });
+
+  it("无前缀 / 空行", () => {
+    expect(blockInsertPrefix("text")).toBe("");
+    expect(blockInsertPrefix("")).toBe("");
+    expect(blockInsertPrefix("  ")).toBe("  ");
   });
 });

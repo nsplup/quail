@@ -104,6 +104,23 @@ export function extractLinePrefixes(text: string): string[] {
 }
 
 /**
+ * 块插入前缀：把光标所在行的「结构前缀」转换为表格/代码块等块级内容
+ * 应使用的每行前缀。
+ *
+ * - 纯空白 / 引用前缀：原样保留（引用块内块级内容合法）；
+ * - 列表标记（- / * / + / 1. 及后随空白）：替换为等宽空白——列表项内容层
+ *   不能以列表标记开头，等宽空白使块成为列表项内容且与 1. 的多位标记对齐；
+ * - 混合（> - item）：引用部分保留，列表标记部分替换。
+ *
+ * 与 extractLinePrefix 共用同一语义源（LINE_PREFIX_RE）。
+ */
+export function blockInsertPrefix(lineText: string): string {
+  const prefix = extractLinePrefix(lineText);
+  // 仅匹配「前缀末尾的列表标记 + 其后空白」，替换为等宽空白
+  return prefix.replace(/([-*+]|\d+\.)\s+$/, (m) => " ".repeat(m.length));
+}
+
+/**
  * @deprecated 兼容视图：TableSource.rows 已结构化为 CellSource[][]。
  * 新代码直接读写 CellSource（raw / lang / spans / attrs）；本视图仅供
  * 渐进迁移期的只读消费，禁止依赖它做反向更新。

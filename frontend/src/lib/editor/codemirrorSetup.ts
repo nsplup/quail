@@ -43,7 +43,7 @@ import { confirm$, dialogMask$ } from "../confirm";
 import { get } from "svelte/store";
 /* 行前缀语义单一源（markdown/table-source）：replaceLines 的
    preservePrefix 与表格源码解析共用同一前缀提取规则 */
-import { extractLinePrefix } from "../markdown/table-source";
+import { extractLinePrefix, blockInsertPrefix } from "../markdown/table-source";
 
 /**
  * 程序性反向更新标记：预览区可编辑表格等场景中，由代码驱动的
@@ -102,6 +102,14 @@ export interface EditorApi {
    *  光标落点相对插入文本起点的偏移（缺省 = 文本末尾）。用于底栏表格
    *  插入（光标落进首个表头单元格）。 */
   insertText(text: string, cursorOffset?: number): void;
+  /** 在当前光标处插入块级内容（表格 / 代码块等），多行内容每行继承
+   *  光标所在行的结构前缀：引用/缩进原样保留；列表标记替换为等宽空白，
+   *  使块成为列表项内容。语义：
+   *  - 空行 → 整行替换（继承该行空白前缀）；
+   *  - 行尾（无选区）→ 光标处换行后插入（列表项/引用下方新起一块）；
+   *  - 行中 / 有选区 → 退化为 insertText（直接替换，不加前缀）。
+   *  cursorOffset：相对「裸 text」的光标落点，前缀自动计入。 */
+  insertBlock(text: string, cursorOffset?: number): void;
   /** 替换指定行区间（1-based，含端点）为给定文本。用于预览区可编辑表格
    * 的反向更新（整表源码替换，行数可增减，undo 可整体回退）。
    * cursorOffsetInText：光标在替换文本内的字符偏移（可选）。 */
@@ -626,6 +634,49 @@ export function createEditorApi(
       markProgrammaticScroll();
       view.dispatch({
         changes: { from: sel.from, to: sel.to, insert: text },
+        selection: { anchor: pos },
+        effects: EditorView.scrollIntoView(pos, { y: "nearest", yMargin: 6 }),
+        userEvent: "input.insert",
+      });
+      view.focus();
+    },
+    insertBlock(text: string, cursorOffset?: number) {
+      const sel = view.state.selection.main;
+      const line = view.state.doc.lineAt(sel.from);
+      const atLineEnd = sel.from === line.to;
+      const lineEmpty = line.text.trim() === "";
+      const hasSelection = sel.from !== sel.to;
+      const rawOffset = cursorOffset == null
+        ? text.length
+        : Math.max(0, Math.min(cursorOffset, text.length));
+
+      let from = sel.from;
+      let to = sel.to;
+      let insert: string;
+      let off: number;
+
+      if (hasSelection || (!lineEmpty && !atLineEnd)) {
+        // 有选区 / 光标在行中：退化到 insertText 语义（无前缀）
+        insert = text;
+        off = rawOffset;
+      } else if (lineEmpty) {
+        // 空行：整行替换，继承该行空白前缀（用户手动缩进）
+        const prefix = blockInsertPrefix(line.text);
+        insert = text.split("\n").map((l) => prefix + l).join("\n");
+        from = line.from;
+        to = line.to;
+        off = prefix.length + rawOffset;
+      } else {
+        // 行尾无选区：在光标处新起一行，前缀继承（列表标记转缩进）
+        const prefix = blockInsertPrefix(line.text);
+        insert = "\n" + text.split("\n").map((l) => prefix + l).join("\n");
+        off = 1 + prefix.length + rawOffset;
+      }
+
+      const pos = from + off;
+      markProgrammaticScroll();
+      view.dispatch({
+        changes: { from, to, insert },
         selection: { anchor: pos },
         effects: EditorView.scrollIntoView(pos, { y: "nearest", yMargin: 6 }),
         userEvent: "input.insert",
