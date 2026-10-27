@@ -38,6 +38,31 @@ describe("前缀提取（preservePrefix 的单一语义源）", () => {
       "    ",
     ]);
   });
+
+  it("locateTableSource：引用块内表格可定位（> 前缀剥离）", () => {
+    const doc = "> | a | b |\n> | - | - |\n> | 1 | 2 |\n";
+    const src = locateTableSource(doc, null, "markdown");
+    expect(src).not.toBeNull();
+    expect(src?.rows[0][0].raw).toBe("a");
+    expect(src?.linePrefixes).toEqual(["> ", "> ", "> "]);
+  });
+
+  it("locateTableSource：tab 缩进的表格可定位（\\t 前缀）", () => {
+    const doc = "\t| a | b |\n\t| - | - |\n\t| 1 | 2 |\n";
+    const src = locateTableSource(doc, null, "markdown");
+    expect(src).not.toBeNull();
+    expect(src?.rows[0][0].raw).toBe("a");
+    expect(src?.linePrefixes).toEqual(["\t", "\t", "\t"]);
+  });
+
+  it("前缀提取：tab 与 tab 混合形态", () => {
+    expect(extractLinePrefix("\t| a |")).toBe("\t");
+    expect(extractLinePrefix("\t\t| a |")).toBe("\t\t");
+    expect(extractLinePrefix("  \t| a |")).toBe("  \t");
+    expect(extractLinePrefix("-\t| a |")).toBe("-\t");
+    expect(extractLinePrefix("1.\t| a |")).toBe("1.\t");
+    expect(extractLinePrefix(">\t| a |")).toBe(">\t");
+  });
 });
 
 describe("幂等：serialize → parseTableSource → serialize", () => {

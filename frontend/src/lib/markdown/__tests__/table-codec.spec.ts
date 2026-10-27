@@ -12,6 +12,8 @@ import {
   emptyCell,
   encodeCell,
   parseTableSource,
+  serializeMarkdownTable,
+  markdownCell,
   type CellSource,
 } from "../table-source";
 
@@ -77,6 +79,15 @@ describe("table codec：markdown ↔ html 单元格可逆编解码", () => {
 
   it("encode（markdown）原样返回（转义由 serializeMarkdownTable 处理）", () => {
     expect(encodeCell("a|b\n**x**", "markdown")).toBe("a|b\n**x**");
+  });
+
+  it("serializeMarkdownTable：单元格首尾空白被 trim（GFM 语义）", () => {
+    const out = serializeMarkdownTable(
+      [[markdownCell("h")], [markdownCell("  text")]],
+      [],
+    );
+    expect(out.text).not.toContain("   text");
+    expect(out.text).toContain("| text");
   });
 });
 

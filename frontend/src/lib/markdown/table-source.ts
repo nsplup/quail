@@ -93,7 +93,7 @@ export interface TableSource {
  * 列表标记（含其后空格）。与 replaceLines 的 preservePrefix 共用同一语义
  * （单一事实源；codemirrorSetup 从本模块导入）。
  */
-const LINE_PREFIX_RE = /^(\s*(?:>\s*)*(?:[-*+]\s+|\d+\.\s+)?\s*)/;
+const LINE_PREFIX_RE = /^([ \t]*(?:>[ \t]*)*(?:[-*+][ \t]+|\d+\.[ \t]+)?[ \t]*)/;
 export function extractLinePrefix(line: string): string {
   return LINE_PREFIX_RE.exec(line)?.[1] ?? "";
 }
@@ -234,8 +234,15 @@ function splitPipeCells(t: string): string[] {
 }
 
 /** 表格行源码 → 原始单元格源（去掉首尾包裹管道，去转义） */
+// table-source.ts
 function markdownRowCells(line: string): string[] {
-  let t = line.trim();
+  // 行前缀（缩进 / > / 列表标记）先行剥离：引用块内表格行形如
+  // "> | a | b |"，line.trim() 去不掉 "> "，不走 extractLinePrefix
+  // 就会把 ">" 当成第一个单元格内容，isDelimiterRow 随之永远 false，
+  // extractMarkdownTableRange 返回 null → locateTableSource 返回 null
+  // → ensureSource 返回 null → startEdit 静默返回（无法进入编辑）。
+  const prefixLen = extractLinePrefix(line).length;
+  let t = line.slice(prefixLen).trim();
   if (t.startsWith("|")) t = t.slice(1);
   const hasTrailing = /(^|[^\\])\|$/.test(t) || t === "|";
   const cells = splitPipeCells(t);
@@ -318,8 +325,8 @@ export function extractHtmlTableRange(lines: string[]): { start: number; end: nu
  * 返回 staticReason: "attrs"，调用方整表降级静态。 */
 function parseHtmlTable(text: string): { rows: CellSource[][]; aligns: (TableAlign | null)[]; hasHeader: boolean; staticReason?: "attrs" } {
   const doc = new DOMParser().parseFromString(text, "text/html");
-  const table = doc.body.querySelector("table");
-  if (!table) return { rows: [[]], aligns: [], hasHeader: false };
+  const table = doc.querySelector("table");
+  if (!table) return { rows: [] as CellSource[][], aligns: [], hasHeader: false };
   const rows: CellSource[][] = [];
   let aligns: (TableAlign | null)[] = [];
   let alignsFilled = false;
@@ -393,20 +400,20 @@ function cellAlignOf(c: CellSource): TableAlign | null {
 function decodeInline(nodes: Node[]): string | null {
   let out = "";
   for (const n of nodes) {
-    /* 3 = TEXT_NODE，1 = ELEMENT_NODE，8 = COMMENT_NODE 等 */
     if (n.nodeType === 3) {
-      out += (n.textContent ?? "").replace(/\u00A0/g, " "); // &nbsp; → 空格
+      out += (n.textContent ?? "").replace(/\u00A0/g, " ");
       continue;
     }
-    if (n.nodeType !== 1) return null; // 注释等非元素内容 → 保守失败
+    if (n.nodeType === 8) continue;          // ← 注释节点跳过，不视为失败
+    if (n.nodeType !== 1) return null;
     const el = n as Element;
     const tag = (el.tagName || "").toLowerCase();
-    if (tag === "br") {
-      out += "\n";
-      continue;
-    }
-    const wrap = tag === "strong" ? "**" : tag === "em" ? "*" : tag === "code" ? "`" : null;
-    if (wrap == null) return null; // 未知标签 → 反编译失败
+    if (tag === "br") { out += "\n"; continue; }
+    const wrap =
+      tag === "strong" ? "**" :
+      tag === "em" ? "*" :
+      tag === "code" ? "`" : null;
+    if (wrap == null) return null;           // 未知标签 → 失败
     const inner = decodeInline(Array.from(el.childNodes));
     if (inner == null) return null;
     out += wrap + inner + wrap;
@@ -424,16 +431,29 @@ function decodeInline(nodes: Node[]): string | null {
  */
 export function decodeCell(c: CellSource): string {
   if (c.lang !== "html") return c.raw;
-  const host = new DOMParser().parseFromString(`<td>${c.raw}</td>`, "text/html");
-  const td = host.body.firstElementChild;
-  const decoded = td ? decodeInline(Array.from(td.childNodes)) : null;
+
+  // 单元格 raw 是内联 HTML 片段（strong/em/code/br/文本）。
+  // 用 div.innerHTML 解析是片段解析的标准路径，避开各 DOM 实现
+  // 对 table 上下文 / 孤儿 <td> 的解析差异（happy-dom 下
+  // DOMParser 解析完整 table 后 querySelector("td") 会返回 null）。
+  let decoded: string | null = null;
+  try {
+    const box = document.createElement("div");
+    box.innerHTML = c.raw;
+    decoded = decodeInline(Array.from(box.childNodes));
+  } catch {
+    decoded = null;
+  }
+
   if (decoded == null) {
-    c.lang = "html"; // 保留原始 HTML 片段，调用方据此降级（P4）
+    c.lang = "html";            // 保留原始 HTML 片段，调用方据此降级（P4）
     return c.raw;
   }
-  /* 剥离块级排版残留的首尾空白（含换行的多行源码格式）；纯空格运行保留
-   *（&#32; 实体与「单元格以空格开头」的合法语义），与 encode 的首尾补回互逆 */
-  const cleaned = decoded.replace(/^[ \t]*\n[ \t]*/, "").replace(/[ \t]*\n[ \t]*$/, "");
+
+  // 剥离块级排版残留的首尾空白（含换行的多行源码格式）；纯空格运行保留
+  const cleaned = decoded
+    .replace(/^[ \t]*\n[ \t]*/, "")
+    .replace(/[ \t]*\n[ \t]*$/, "");
   c.lang = "markdown";
   c.raw = cleaned;
   return cleaned;
@@ -476,7 +496,8 @@ export function encodeCell(s: string, origin: TableOrigin): string {
   if (origin === "markdown") return s;
   const root = compileMarkdown(s);
   const children: HastContent[] = [];
-  root.children.forEach((n, i) => {
+  const visible = root.children.filter((n) => n.type !== "comment");
+  visible.forEach((n, i) => {
     if (i > 0) {
       children.push({ type: "element", tagName: "br", properties: {}, children: [] });
     }
@@ -497,7 +518,13 @@ export function encodeCell(s: string, origin: TableOrigin): string {
 /** 往返性质检查（测试/开发断言）：decodeCell(encodeCell(x)) === x */
 export function assertRoundTrip(s: string, origin: TableOrigin): boolean {
   if (origin === "markdown") return decodeCell(markdownCell(s)) === s;
-  return decodeCell({ ...emptyCell(), raw: encodeCell(s, "html") }) === s;
+  const c: CellSource = {
+    raw: encodeCell(s, "html"),
+    lang: "html",                       // ← 必须显式置为 html
+    spans: { colspan: 1, rowspan: 1 },
+    attrs: {},
+  };
+  return decodeCell(c) === s;
 }
 
 /** 单元格属性白名单（DOM 节点 → CellSource.attrs）：align / style / data-* */
@@ -574,7 +601,10 @@ function padCell(s: string, width: number, align: TableAlign | null): string {
 }
 
 function escapeMarkdownCell(s: string): string {
-  return s.replace(/\|/g, "\\|").replace(/\r?\n/g, "<br>");
+  // GFM 单元格首尾空白无意义（回读必然 trim），序列化时先归一化：
+  // 否则源码写入 "|   text |" 而回读得 "text"，源码与内存矩阵分叉，
+  // 用户侧看到的就是"用例 B 第 2 步不满足"。
+  return s.trim().replace(/\|/g, "\\|").replace(/\r?\n/g, "<br>");
 }
 
 /** rows → 对齐填充的 GFM 表格源码（rows[0] = 表头；恒输出分隔行）。
