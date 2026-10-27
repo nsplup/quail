@@ -39,3 +39,19 @@ export function hastAttrs(el: Element): Record<string, string> {
   }
   return out;
 }
+
+/**
+ * 读取数值属性（colspan / rowspan）：兼容 kebab-case 与 property-information
+ * 规范化后的 camelCase 键名、number 与 string 值类型；缺失 / 非法 / < 1 一律
+ * 回落为 1（无合并）。只认「数值且 ≥ 2」为真实合并。
+ */
+export function readNumberAttr(
+  props: Record<string, unknown> | undefined,
+  name: "colspan" | "rowspan",
+): number {
+  const p = props ?? {};
+  const camel = name === "colspan" ? "colSpan" : "rowSpan";
+  const v = p[name] ?? p[camel];
+  const n = typeof v === "number" ? v : Number(String(v ?? ""));
+  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1;
+}

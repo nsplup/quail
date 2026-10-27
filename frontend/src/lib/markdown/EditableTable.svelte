@@ -41,7 +41,10 @@
   import { openContextMenu } from "../contextmenu";
   import { t } from "../i18n.svelte";
   import {
+    emptyCell,
+    isStaticTable,
     locateTableSource,
+    parseTableSource,
     relocateNearest,
     rangeMatches,
     serializeMarkdownTable,
@@ -103,19 +106,30 @@
     displayRows.reduce((m, r) => Math.max(m, r.cells.length), 0),
   );
   const origin = $derived(tableOriginFromEl(node));
-  /** colspan/rowspan 表格不做原地编辑（朴素序列化会破坏合并结构） */
-  const hasSpan = $derived(
-    displayRows.some((r) =>
-      r.cells.some((c) => {
-        const p = c.properties as Record<string, unknown> | undefined;
-        const col = Number(p?.colspan ?? 1);
-        const row = Number(p?.rowspan ?? 1);
-        return (
-          (Number.isFinite(col) && col > 1) || (Number.isFinite(row) && row > 1)
-        );
-      }),
-    ),
-  );
+
+  /**
+   * 源码侧静态拒绝标记：ensureSource 定位源码后发现单元格反编译失败
+   * （HTML 来源含未知标签/属性，见 table-source 的 CellSource.lang）→
+   * 整表降级静态（isStatic 的 "attrs" 分支）。node 回流时随缓存一并复位。
+   */
+  let srcRejected = $state(false);
+
+  /**
+   * 静态化判定统一入口（单一事实源，模板与交互守卫共用）：
+   * - "span"：colspan/rowspan 合并（isStaticTable 纯函数，span 读取经
+   *   readNumberAttr 兼容 colSpan/colspan 键名与 number/string 值）；
+   * - "nested"：嵌套表格（raw HTML 单元格内的表格，DOM 判定）；
+   * - "attrs"：源码侧单元格反编译失败（HTML 来源单元格含未知标签/属性，
+   *   P4 接入：ensureSource 定位后发现 → 整表静态）。
+   * 命中任一条件 → 整表只读渲染，禁止原地编辑与行/列操作。
+   */
+  function isStatic(node: Element): { static: boolean; reason?: "span" | "nested" | "attrs" } {
+    if (isStaticTable(node).static) return { static: true, reason: "span" };
+    if (nested) return { static: true, reason: "nested" };
+    if (srcRejected) return { static: true, reason: "attrs" };
+    return { static: false };
+  }
+  const staticInfo = $derived(isStatic(node));
 
   /** 列对齐（显示用；HAST 单元格自带 align 属性，直接透传） */
   function alignStyle(cell: Element | undefined): string | undefined {
@@ -152,10 +166,12 @@
   });
 
   /* node 引用变化（worker 重解析回流）→ 源码缓存失效，交互时重新定位；
-   * 本地解析样式同时失效（worker 产物自此接管显示） */
+   * 本地解析样式同时失效（worker 产物自此接管显示）；源码侧静态拒绝
+   * 标记一并复位（新回流可能已能反编译） */
   $effect(() => {
     void node;
     src = null;
+    srcRejected = false;
     localDisplay = null;
   });
 
@@ -177,7 +193,7 @@
     if (!editing || !editorHost) return;
     const e = editing;
     const s = untrack(() => ensureSource());
-    const initial = s?.rows[e.r]?.[e.c] ?? "";
+    const initial = s?.rows[e.r]?.[e.c]?.raw ?? "";
     if (!cellEditor) {
       cellEditor = createCellEditor(editorHost, initial, {
         onchange: (doc) => {
@@ -197,8 +213,23 @@
 
   /** 懒定位表格源码（缓存在交互期间复用；node 变化后自动失效） */
   function ensureSource(): TableSource | null {
-    if (src) return src;
-    if (hasSpan || nested) return null;
+    if (src) {
+      if (src.staticReason) {
+        /* 回读后发现反编译失败（如单元格产生 md-image 等未知标签）：
+         * 整表静态，缓存弃用 */
+        srcRejected = true;
+        src = null;
+        return null;
+      }
+      if (src.dirty) {
+        /* 回读失败的缓存（dirty）：强制重定位（就近全文搜索重建区间） */
+        src = null;
+      } else {
+        return src;
+      }
+    }
+    /* 静态表格（span 合并 / 嵌套 / 源码侧反编译失败）不定位、不缓存 */
+    if (isStatic(node).static) return null;
     const api = get(editorApi$);
     if (!api) return null;
     const doc = api.getDoc();
@@ -209,10 +240,16 @@
       : null;
     const found = locateTableSource(doc, seed, origin);
     if (!found) return null;
+    if (found.staticReason) {
+      /* P4：HTML 来源单元格反编译失败（未知标签 / 白名单外属性）→
+       * 整表降级静态（isStatic 的 "attrs" 分支），不缓存 */
+      srcRejected = true;
+      return null;
+    }
     /* 行列对齐显示尺寸（源解析与 HAST 显示在正常情况下一致；补齐兜底） */
     while (found.rows.length < displayRows.length) found.rows.push([]);
     for (const row of found.rows) {
-      while (row.length < colCount) row.push("");
+      while (row.length < colCount) row.push(emptyCell());
     }
     while (found.aligns.length < colCount) found.aligns.push(null);
     src = found;
@@ -220,7 +257,12 @@
   }
 
   /** 回写：内部状态 → 格式化源码 → 编辑器（反向更新）。
-   * anchor：锚定单元格 → 序列化时记录其偏移作为替换后光标落点。 */
+   * anchor：锚定单元格 → 序列化时记录其偏移作为替换后光标落点。
+   * P3：序列化产物为「裸」内容行，replaceLines(preservePrefix=true) 按
+   * 现文档逐行保留前缀（缩进 / 引用 > / 列表标记），表格上下文不再被
+   * 反向更新冲掉；回写后立即整表回读（parseTableSource），以解析结果
+   * 覆盖内存矩阵——源码为唯一事实源（"  text" 回读为 "text" 等
+   * 归一化差异在此对齐），连续编辑不再累积漂移。 */
   function writeBack(s: TableSource, anchor?: { r: number; c: number }): void {
     const api = get(editorApi$);
     if (!api) return;
@@ -229,7 +271,11 @@
     let range = rangeMatches(lines, s, s.text)
       ? { startLine: s.startLine, endLine: s.endLine }
       : relocateNearest(doc, s.text, s.startLine);
-    if (!range) return;
+    if (!range) {
+      /* 定位彻底失败（区块被外部改动吞掉）：标记脏，下次交互强制重定位 */
+      s.dirty = true;
+      return;
+    }
 
     const serialized =
       s.origin === "markdown"
@@ -246,27 +292,50 @@
           );
 
     /* 三条抑制（deadline/注解/显式选区）都在 replaceLines 内部完成；
-     * 残留同步状态由 App 注册的 onBeforeReplace 钩子清理 */
+     * 残留同步状态由 App 注册的 onBeforeReplace 钩子清理；
+     * preservePrefix：按现文档逐行保留行前缀（内容区 = 序列化的裸行） */
     api.replaceLines(
       range.startLine,
       range.endLine,
       serialized.text,
       serialized.cellOffset,
+      true,
     );
 
+    /* 整表回读：replaceLines 的 dispatch 同步生效，getDoc 即新文档；
+     * 行数不变（前缀不增减行），区间右端 = 起点 + 裸行数 - 1 */
+    const newLineCount = serialized.text.split("\n").length;
     s.startLine = range.startLine;
-    s.endLine = range.startLine + serialized.text.split("\n").length - 1;
-    s.text = serialized.text;
+    s.endLine = range.startLine + newLineCount - 1;
+    s.text = api
+      .getDoc()
+      .split("\n")
+      .slice(s.startLine - 1, s.endLine)
+      .join("\n");
+    const fresh = parseTableSource(s.text, s.origin);
+    if (fresh) {
+      s.rows = fresh.rows;
+      s.aligns = fresh.aligns;
+      s.hasHeader = fresh.hasHeader;
+      s.linePrefixes = fresh.linePrefixes;
+      s.staticReason = fresh.staticReason;
+      s.dirty = false;
+    } else {
+      /* 回读失败（理论不可达：刚写入的就是本模块序列化的合法表格）：
+       * 保守标记脏，下次交互强制重定位 */
+      s.dirty = true;
+    }
   }
 
   /* ---------------- 单元格编辑 ---------------- */
 
   function startEdit(r: number, c: number): void {
+    if (isStatic(node).static) return; // 静态表格禁止进入编辑（前置拦截）
     if (editing) return; // 已有编辑态（blur 提交后才会触发新的 startEdit）
     const s = ensureSource();
     if (!s || r >= s.rows.length) return;
     editing = { r, c };
-    editValue = s.rows[r]?.[c] ?? "";
+    editValue = s.rows[r]?.[c]?.raw ?? "";
   }
 
   function commitEdit(): void {
@@ -275,11 +344,16 @@
     editing = null;
     const s = ensureSource();
     if (!s || e.r >= s.rows.length) return;
-    while (s.rows[e.r].length <= e.c) s.rows[e.r].push("");
+    while (s.rows[e.r].length <= e.c) s.rows[e.r].push(emptyCell());
     /* 编辑结束 → 应用解析后的样式（本地即时，不等 worker 回流） */
     applyParsedStyle(s, e);
-    if (s.rows[e.r][e.c] === editValue) return; // 内容未变不回写
-    s.rows[e.r][e.c] = editValue;
+    if (s.rows[e.r][e.c].raw === editValue) return; // 内容未变不回写
+    /* 暂存新值供 writeBack 序列化（结构化单元格：保留 spans/attrs，只替换
+     * raw；用户输入恒为 markdown 源（单元格编辑器 = md 源码视图），lang
+     * 统一标 "markdown"——HTML 来源表格序列化时经 encodeCell 编译回
+     * inline HTML（P4 单元格语言统一）；P3 回写后以整表回读结果为准） */
+    s.rows[e.r][e.c].raw = editValue;
+    s.rows[e.r][e.c].lang = "markdown";
     /* 反向更新依旧保持在编辑结束后 */
     writeBack(s, { r: e.r, c: e.c });
   }
@@ -322,8 +396,12 @@
     const rows = s.rows.map((row) => [...row]);
     while (rows.length <= editingCell.r) rows.push([]);
     while (rows[editingCell.r].length <= editingCell.c)
-      rows[editingCell.r].push("");
-    rows[editingCell.r][editingCell.c] = value;
+      rows[editingCell.r].push(emptyCell());
+    /* 结构化矩阵：编辑单元格以「替换 raw」覆盖（保留 lang/spans/attrs） */
+    rows[editingCell.r][editingCell.c] = {
+      ...rows[editingCell.r][editingCell.c],
+      raw: value,
+    };
 
     // serialize* 返回 { text, cellOffset }，这里只需要 text
     const serialized =
@@ -390,9 +468,10 @@
       fn(cur);
       writeBack(cur, { r, c });
     };
-    const emptyRow = () => new Array(colCount).fill("");
+    const emptyRow = () =>
+      Array.from({ length: colCount }, () => emptyCell());
     const addCol = (at: number) => (t: TableSource) => {
-      for (const row of t.rows) row.splice(at, 0, "");
+      for (const row of t.rows) row.splice(at, 0, emptyCell());
       t.aligns.splice(at, 0, null);
     };
     /* 移动（带方向性）：与相邻行/列交换位置；列移动同步交换列对齐 */
@@ -417,12 +496,13 @@
     };
     /* 复制（无方向性）：副本固定插到当前行/列之后。
      * 插入位置 from+1 始终落在 [1, rows.length] 区间内，永不失序；
-     * 列复制同步复制列对齐。 */
+     * 列复制同步复制列对齐。复制单元格做浅拷贝（结构体不再共享引用）。 */
     const copyRow = (from: number) => (t: TableSource) => {
-      t.rows.splice(from + 1, 0, [...(t.rows[from] ?? [])]);
+      t.rows.splice(from + 1, 0, (t.rows[from] ?? []).map((cell) => ({ ...cell })));
     };
     const copyCol = (from: number) => (t: TableSource) => {
-      for (const row of t.rows) row.splice(from + 1, 0, row[from] ?? "");
+      for (const row of t.rows)
+        row.splice(from + 1, 0, row[from] ? { ...row[from] } : emptyCell());
       t.aligns.splice(from + 1, 0, t.aligns[from] ?? null);
     };
     const delCol = (at: number) => (t: TableSource) => {
@@ -524,7 +604,7 @@
   bind:this={tableEl}
   class="md-editable-table"
   data-origin={origin}
-  class:md-table-static={hasSpan || nested}
+  class:md-table-static={staticInfo.static}
 >
   {#if headRows.length > 0}
     <thead>

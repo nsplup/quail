@@ -41,6 +41,9 @@ import { markdownEmphasis } from "./emphasis"
 import { dirty$, setImeComposing, settingsOpen$ } from "../stores";
 import { confirm$, dialogMask$ } from "../confirm";
 import { get } from "svelte/store";
+/* 行前缀语义单一源（markdown/table-source）：replaceLines 的
+   preservePrefix 与表格源码解析共用同一前缀提取规则 */
+import { extractLinePrefix } from "../markdown/table-source";
 
 /**
  * 程序性反向更新标记：预览区可编辑表格等场景中，由代码驱动的
@@ -103,7 +106,7 @@ export interface EditorApi {
    * 的反向更新（整表源码替换，行数可增减，undo 可整体回退）。
    * cursorOffsetInText：光标在替换文本内的字符偏移（可选）。 */
   replaceLines(startLine: number, endLine: number, text: string,
-    cursorOffsetInText?: number): void;
+    cursorOffsetInText?: number, preservePrefix?: boolean): void;
   /** 注册反向更新前置钩子：replaceLines 每次调用前触发。
    * 供 App 清理残留的光标同步状态（pendingCursorLine /
    * lastCursorActivityAt），防止 blocks 重建后旧光标行拽动预览。
@@ -655,22 +658,70 @@ export function createEditorApi(
      * 允许的行为边界：替换后 blocks 重建，若行数变化导致块偏移漂移
      * 超过去重阈值（8px），允许一次小幅重对齐；禁止的是跳回光标行
      * 或文档顶部。
+     *
+     * preservePrefix（P3，缺省 false，向后兼容）：为 true 时按行保留
+     * 被替换区间的「行前缀」（缩进 / 引用 > / 列表标记及其后空格，语义
+     * 单一源 = markdown/table-source 的 extractLinePrefix），只替换每行
+     * 的内容区——反向更新不再冲掉表格所在的缩进/引用/列表上下文。
+     * - 前缀取自【当前文档】的对应行（权威来源，非调用方缓存）；替换后
+     *   新增行（行数变多）沿用最后一个原行的前缀，删除行自然消失；
+     * - cursorOffsetInText 语义不变：仍是【text（内容区拼接）内】的偏移，
+     *   按行号 + 列号映射到加前缀后的最终文本（前缀长度自动计入）。
      */
     replaceLines(startLine: number, endLine: number, text: string,
-      cursorOffsetInText?: number): void {
+      cursorOffsetInText?: number, preservePrefix = false): void {
       for (const fn of beforeReplaceHooks) fn();
       const doc = view.state.doc;
       if (doc.lines === 0) return;
       const a = Math.max(1, Math.min(startLine, doc.lines));
       const b = Math.max(a, Math.min(endLine, doc.lines));
       const from = doc.line(a).from;
-      const off = cursorOffsetInText == null
-        ? 0
-        : Math.max(0, Math.min(cursorOffsetInText, text.length));
+      if (!preservePrefix) {
+        const off = cursorOffsetInText == null
+          ? 0
+          : Math.max(0, Math.min(cursorOffsetInText, text.length));
+        markProgrammaticScroll();
+        view.dispatch({
+          changes: { from, to: doc.line(b).to, insert: text },
+          selection: { anchor: from + off },
+          annotations: programmaticChange.of("reverseUpdate"),
+          userEvent: "input.replace",
+        });
+        return;
+      }
+      /* 前缀保留路径：text 视为「裸」内容行（无前缀） */
+      const contentLines = text.split("\n");
+      const prefixCount = b - a + 1;
+      const prefixes: string[] = [];
+      for (let i = 0; i < prefixCount; i++) {
+        prefixes.push(extractLinePrefix(doc.line(a + i).text));
+      }
+      const prefixAt = (i: number): string =>
+        prefixes[Math.min(i, prefixes.length - 1)] ?? "";
+      const finalText = contentLines
+        .map((l, i) => prefixAt(i) + l)
+        .join("\n");
+      /* 内容区偏移 → 最终文本偏移：定位偏移所在的行/列，加前缀长度 */
+      let off = 0;
+      if (cursorOffsetInText != null) {
+        const off0 = Math.max(0, Math.min(cursorOffsetInText, text.length));
+        let line = 0;
+        let col = off0;
+        for (; line < contentLines.length - 1; line++) {
+          const len = contentLines[line].length + 1;
+          if (col < len) break;
+          col -= len;
+        }
+        let finalOff = col;
+        for (let i = 0; i <= line && i < contentLines.length; i++) {
+          finalOff += prefixAt(i).length + contentLines[i].length + 1;
+        }
+        off = finalOff - 1; /* 循环多加了一个行终止符 */
+      }
       markProgrammaticScroll();
       view.dispatch({
-        changes: { from, to: doc.line(b).to, insert: text },
-        selection: { anchor: from + off },
+        changes: { from, to: doc.line(b).to, insert: finalText },
+        selection: { anchor: from + Math.min(off, finalText.length) },
         annotations: programmaticChange.of("reverseUpdate"),
         userEvent: "input.replace",
       });

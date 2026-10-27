@@ -13,7 +13,10 @@
  * （单元格内的 markdown 解析不在此重复做）；本模块只服务于「反向更新」
  * 需要的原始源文本读写。
  */
-import type { Element as HastElement } from "hast";
+import type { Element as HastElement, Root as HastRoot, RootContent as HastContent } from "hast";
+import { toHtml } from "hast-util-to-html";
+import { readNumberAttr } from "./hast-attrs";
+import { compileMarkdown } from "./markdown-core";
 
 export type TableOrigin = "markdown" | "html";
 export type TableAlign = "left" | "center" | "right";
@@ -30,20 +33,83 @@ export interface SerializedTable {
 }
 
 
+/**
+ * 结构化单元格源（P1）：
+ * - raw：单元格原始源文本（lang 决定其语言——markdown inline 或 HTML 片段）；
+ * - lang：HTML 来源单元格反编译成功 → "markdown"（raw 为可逆 md inline）；
+ *   失败 → "html"（raw 保留原始 HTML 片段，整表降级静态，见 P4）；
+ * - spans：合并跨度（HTML 来源从 DOM 读取；markdown 来源恒为 1）；
+ * - attrs：属性白名单（align / style / data-*，HTML 来源序列化时写回）。
+ */
+export interface CellSource {
+  raw: string;
+  lang: "markdown" | "html";
+  spans: { colspan: number; rowspan: number };
+  attrs: Record<string, string>;
+}
+
+/** 空单元格（补齐矩阵 / 新增行列用；默认 markdown 语言） */
+export function emptyCell(): CellSource {
+  return { raw: "", lang: "markdown", spans: { colspan: 1, rowspan: 1 }, attrs: {} };
+}
+
+/** markdown inline 单元格（GFM 来源；无合并、无属性） */
+export function markdownCell(raw: string): CellSource {
+  return { raw, lang: "markdown", spans: { colspan: 1, rowspan: 1 }, attrs: {} };
+}
+
 /** 表格源码定位 + 解析结果（rows[0] = 表头行；markdown 来源恒有表头） */
 export interface TableSource {
   origin: TableOrigin;
   /** 表格在源码中的行区间（1-based，含端点） */
   startLine: number;
   endLine: number;
-  /** 当前表格源码文本（行区间漂移校验 / 就近重定位的锚文本） */
+  /** 当前表格源码文本（行区间漂移校验 / 就近重定位的锚文本，含行前缀） */
   text: string;
-  /** 原始单元格源（未渲染的 markdown / html 片段文本） */
-  rows: string[][];
+  /** 结构化原始单元格源矩阵（未渲染的 markdown / html 片段） */
+  rows: CellSource[][];
   /** 列对齐（来自 markdown 分隔行或 HTML align/text-align；null = 默认） */
   aligns: (TableAlign | null)[];
   /** 是否含表头行（HTML 来源可能纯 tbody） */
   hasHeader: boolean;
+  /**
+   * 行前缀（与行区间一一对应：缩进 / 引用 > / 列表标记及其后空格）。
+   * 序列化产物是「裸」行内容；回写时由 replaceLines(preservePrefix) 按
+   * 现文档逐行保留前缀（见 P3），避免缩进/引用上下文被反向更新冲掉。
+   */
+  linePrefixes: string[];
+  /** 源码缓存失效标记（回读失败等）：ensureSource 见 true 时强制重定位 */
+  dirty: boolean;
+  /**
+   * 源码侧静态原因（P4）：HTML 来源任一单元格反编译失败（未知标签 /
+   * 白名单外属性，CellSource.lang === "html"）→ "attrs"，整表降级
+   * 静态（EditableTable.isStatic 的 "attrs" 分支）。markdown 来源恒无。
+   */
+  staticReason?: "attrs";
+}
+
+/**
+ * 行前缀提取：行首到首个非空白内容之间的「结构前缀」——缩进、引用标记、
+ * 列表标记（含其后空格）。与 replaceLines 的 preservePrefix 共用同一语义
+ * （单一事实源；codemirrorSetup 从本模块导入）。
+ */
+const LINE_PREFIX_RE = /^(\s*(?:>\s*)*(?:[-*+]\s+|\d+\.\s+)?\s*)/;
+export function extractLinePrefix(line: string): string {
+  return LINE_PREFIX_RE.exec(line)?.[1] ?? "";
+}
+
+/** 表格各行的前缀列表（行内容区 = 去前缀后的部分） */
+export function extractLinePrefixes(text: string): string[] {
+  return text.split("\n").map(extractLinePrefix);
+}
+
+/**
+ * @deprecated 兼容视图：TableSource.rows 已结构化为 CellSource[][]。
+ * 新代码直接读写 CellSource（raw / lang / spans / attrs）；本视图仅供
+ * 渐进迁移期的只读消费，禁止依赖它做反向更新。
+ */
+export function rawRows(s: TableSource): string[][] {
+  return s.rows.map((row) => row.map((c) => c.raw));
 }
 
 /* ---------------- 来源标记读取（与 markdown-core.ts 的标记约定对齐） ---------------- */
@@ -57,24 +123,34 @@ function flagValue(el: HastElement, flag: string): unknown {
   return props[flag] ?? props[camel];
 }
 
+/** 标记属性存在性：兼容字符串 / 数字 / 布尔值（false / "false" / 0 / 空串视为无标记） */
+function hasTableFlag(el: HastElement, flag: string): boolean {
+  const v = flagValue(el, flag);
+  if (v == null || v === false || v === "" || v === 0) return false;
+  if (typeof v === "string" && v.trim().toLowerCase() === "false") return false;
+  return true;
+}
+
 /** HAST table 元素 → 表格来源（缺标记时按 markdown 处理：GFM 表格是常态） */
 export function tableOriginFromEl(el: HastElement): TableOrigin {
-  if (flagValue(el, HTML_TABLE_FLAG)) return "html";
+  if (hasTableFlag(el, HTML_TABLE_FLAG)) return "html";
   return "markdown";
 }
 
-/** 单元格是否带合并（colspan/rowspan）——合并表格禁止反向编辑，避免破坏结构 */
-export function hasSpanCells(el: HastElement): boolean {
-  return collectRows(el).some((row) =>
+/**
+ * HAST 表格静态化判定（纯函数，可单测）：
+ * colspan / rowspan 合并的表格禁止原地编辑——朴素序列化会破坏合并结构。
+ * span 读取经 readNumberAttr（兼容 colSpan/colspan 键名、number/string 值，
+ * 非法值回落 1），与 domRowCells 的 DOM 侧读取保持同一语义。
+ */
+export function isStaticTable(el: HastElement): { static: boolean; reason?: "span" } {
+  const hasSpan = collectRows(el).some((row) =>
     row.cells.some((c) => {
-      const p = c.properties ?? {};
-      const span = (k: string) => {
-        const v = p[k] ?? p[k[0].toUpperCase() + k.slice(1)];
-        return v != null && String(v) !== "1";
-      };
-      return span("colspan") || span("rowspan");
+      const p = (c.properties ?? {}) as Record<string, unknown>;
+      return readNumberAttr(p, "colspan") > 1 || readNumberAttr(p, "rowspan") > 1;
     })
   );
+  return hasSpan ? { static: true, reason: "span" } : { static: false };
 }
 
 /* ---------------- HAST → 显示结构（thead/tbody 分组的行列表） ---------------- */
@@ -203,10 +279,10 @@ export function extractMarkdownTableRange(lines: string[]): { start: number; end
   return null;
 }
 
-/** markdown 表格源码文本 → 行矩阵 + 对齐（rows[0] = 表头） */
-function parseMarkdownTable(text: string): { rows: string[][]; aligns: (TableAlign | null)[] } {
+/** markdown 表格源码文本 → 结构化行矩阵 + 对齐（rows[0] = 表头） */
+function parseMarkdownTable(text: string): { rows: CellSource[][]; aligns: (TableAlign | null)[] } {
   const lines = text.split("\n");
-  const rows: string[][] = [];
+  const rows: CellSource[][] = [];
   let aligns: (TableAlign | null)[] = [];
   lines.forEach((line, i) => {
     if (i === 1) {
@@ -215,7 +291,7 @@ function parseMarkdownTable(text: string): { rows: string[][]; aligns: (TableAli
       aligns = parseAlignsFromDelimiter(line, first.length);
       return;
     }
-    rows.push(markdownRowCells(line));
+    rows.push(markdownRowCells(line).map(markdownCell));
   });
   return { rows, aligns };
 }
@@ -237,12 +313,14 @@ export function extractHtmlTableRange(lines: string[]): { start: number; end: nu
   return null;
 }
 
-/** HTML 表格源码文本 → 行矩阵 + 对齐 + 表头判定（DOMParser 解析） */
-function parseHtmlTable(text: string): { rows: string[][]; aligns: (TableAlign | null)[]; hasHeader: boolean } {
+/** HTML 表格源码文本 → 结构化行矩阵 + 对齐 + 表头判定（DOMParser 解析）。
+ * P4：单元格逐格反编译（decodeCell）；任一格失败（lang 停留 "html"）→
+ * 返回 staticReason: "attrs"，调用方整表降级静态。 */
+function parseHtmlTable(text: string): { rows: CellSource[][]; aligns: (TableAlign | null)[]; hasHeader: boolean; staticReason?: "attrs" } {
   const doc = new DOMParser().parseFromString(text, "text/html");
   const table = doc.body.querySelector("table");
   if (!table) return { rows: [[]], aligns: [], hasHeader: false };
-  const rows: string[][] = [];
+  const rows: CellSource[][] = [];
   let aligns: (TableAlign | null)[] = [];
   let alignsFilled = false;
   let hasHeader = false;
@@ -257,18 +335,18 @@ function parseHtmlTable(text: string): { rows: string[][]; aligns: (TableAlign |
       for (const tr of Array.from(section.children)) {
         if ((tr.tagName || "").toLowerCase() !== "tr") continue;
         const cells = domRowCells(tr);
-        rows.push(cells.map((c) => c.text));
+        rows.push(cells);
         /* 列对齐取自首个收集到的行（thead 行或首行），与序列化写回一致 */
         if (!alignsFilled) {
-          aligns = cells.map((c) => c.align);
+          aligns = cells.map((c) => cellAlignOf(c));
           alignsFilled = true;
         }
       }
     } else if (tag === "tr") {
       const cells = domRowCells(section);
-      rows.push(cells.map((c) => c.text));
+      rows.push(cells);
       if (!alignsFilled) {
-        aligns = cells.map((c) => c.align);
+        aligns = cells.map((c) => cellAlignOf(c));
         alignsFilled = true;
       }
     }
@@ -284,26 +362,193 @@ function parseHtmlTable(text: string): { rows: string[][]; aligns: (TableAlign |
       break;
     }
   }
-  return { rows, aligns, hasHeader };
+  /* P4：任一格反编译失败（lang 停留 "html"）→ 整表静态（不可原地编辑，
+   * 朴素序列化无法保真未知标签/白名单外属性） */
+  const staticReason = rows.some((r) => r.some((c) => c.lang === "html"))
+    ? ("attrs" as const)
+    : undefined;
+  return { rows, aligns, hasHeader, staticReason };
 }
 
-/** 收集一个 <tr> 的直接子级单元格（文本 + 对齐） */
-function domRowCells(tr: Element): { text: string; align: TableAlign | null }[] {
+/** CellSource → 列对齐（align 属性优先，其次 style 的 text-align） */
+function cellAlignOf(c: CellSource): TableAlign | null {
+  const a = (c.attrs.align ?? "").toLowerCase();
+  if (a === "left" || a === "center" || a === "right") return a;
+  const m = /text-align\s*:\s*(left|center|right)/i.exec(c.attrs.style ?? "");
+  return m ? (m[1].toLowerCase() as TableAlign) : null;
+}
+
+/* ---------------- 可逆 Codec（P2）：单元格 markdown inline ↔ HTML 片段 ----------------
+ * 约定（与方案一致）：
+ * - decode 方向（HTML → md）只认 <br>/<strong>/<em>/<code> 与 &nbsp;/
+ *   &#32; 实体；遇未知标签 / 注释 → 返回原始 HTML 并标记 c.lang = "html"
+ *   （调用方降级为静态，见 P4）；
+ * - encode 方向（md → HTML）复用 compileMarkdown（与 worker 同一条编译
+ *   链路，不引入第二套解析）取 inline 子节点，soft line break 显式转
+ *   <br>；首尾空格以 &#32; 数字字符引用补回（markdown 编译会剥离首尾
+ *   空白，实体解码后与源串逐字相等）；
+ * - 双向互逆：decodeCell(encodeCell(x)) === x（assertRoundTrip 性质检查）。 */
+
+/** DOM 内联子节点 → markdown inline 文本；未知标签返回 null（保守失败） */
+function decodeInline(nodes: Node[]): string | null {
+  let out = "";
+  for (const n of nodes) {
+    /* 3 = TEXT_NODE，1 = ELEMENT_NODE，8 = COMMENT_NODE 等 */
+    if (n.nodeType === 3) {
+      out += (n.textContent ?? "").replace(/\u00A0/g, " "); // &nbsp; → 空格
+      continue;
+    }
+    if (n.nodeType !== 1) return null; // 注释等非元素内容 → 保守失败
+    const el = n as Element;
+    const tag = (el.tagName || "").toLowerCase();
+    if (tag === "br") {
+      out += "\n";
+      continue;
+    }
+    const wrap = tag === "strong" ? "**" : tag === "em" ? "*" : tag === "code" ? "`" : null;
+    if (wrap == null) return null; // 未知标签 → 反编译失败
+    const inner = decodeInline(Array.from(el.childNodes));
+    if (inner == null) return null;
+    out += wrap + inner + wrap;
+  }
+  return out;
+}
+
+/**
+ * 单元格源解码（HTML → markdown inline）：
+ * - c.lang === "markdown"：原样返回（幂等）；
+ * - c.lang === "html"：解析 c.raw 为 HTML 片段做显式反编译（<br>→\n、
+ *   &nbsp;→空格、<strong>/<em>/<code> → md 记号）——不再依赖 textContent
+ *   恰好保留换行的隐式行为；成功后 c.raw 更新为 md 文本、c.lang = "markdown"；
+ *   失败（未知标签/结构）返回原始 HTML 并保持 c.lang = "html"。
+ */
+export function decodeCell(c: CellSource): string {
+  if (c.lang !== "html") return c.raw;
+  const host = new DOMParser().parseFromString(`<td>${c.raw}</td>`, "text/html");
+  const td = host.body.firstElementChild;
+  const decoded = td ? decodeInline(Array.from(td.childNodes)) : null;
+  if (decoded == null) {
+    c.lang = "html"; // 保留原始 HTML 片段，调用方据此降级（P4）
+    return c.raw;
+  }
+  /* 剥离块级排版残留的首尾空白（含换行的多行源码格式）；纯空格运行保留
+   *（&#32; 实体与「单元格以空格开头」的合法语义），与 encode 的首尾补回互逆 */
+  const cleaned = decoded.replace(/^[ \t]*\n[ \t]*/, "").replace(/[ \t]*\n[ \t]*$/, "");
+  c.lang = "markdown";
+  c.raw = cleaned;
+  return cleaned;
+}
+
+/** hast 内联子节点数组中的 soft line break（文本节点内的 \n）→ <br> 元素 */
+function softBreaksToBr(children: HastContent[]): HastContent[] {
+  const br = (): HastContent => ({ type: "element", tagName: "br", properties: {}, children: [] });
+  const out: HastContent[] = [];
+  let lastWasBr = false;
+  for (const n of children) {
+    if (n.type === "text") {
+      const parts = n.value.split("\n");
+      parts.forEach((part, i) => {
+        if (i > 0) {
+          if (!lastWasBr) out.push(br());
+          lastWasBr = true;
+        }
+        if (part !== "") {
+          out.push({ type: "text", value: part });
+          lastWasBr = false;
+        }
+      });
+    } else {
+      out.push(n);
+      lastWasBr = n.type === "element" && (n as HastElement).tagName === "br";
+    }
+  }
+  return out;
+}
+
+/**
+ * 单元格源编码（markdown inline → HTML 片段）：
+ * - origin === "markdown"：原样返回（\| 转义与换行→<br> 由 serialize 处理）；
+ * - origin === "html"：compileMarkdown(s) 取 inline 子节点（段落拍平，
+ *   段间以 <br> 衔接）→ toHtml 序列化（文本节点的 &<> 自动转义）→
+ *   soft break 已显式转 <br>；首尾空格以 &#32; 补回。
+ */
+export function encodeCell(s: string, origin: TableOrigin): string {
+  if (origin === "markdown") return s;
+  const root = compileMarkdown(s);
+  const children: HastContent[] = [];
+  root.children.forEach((n, i) => {
+    if (i > 0) {
+      children.push({ type: "element", tagName: "br", properties: {}, children: [] });
+    }
+    if (n.type === "element" && (n as HastElement).tagName === "p") {
+      children.push(...(n as HastElement).children);
+    } else {
+      children.push(n);
+    }
+  });
+  let html = toHtml({ type: "root", children: softBreaksToBr(children) } as HastRoot);
+  const lead = /^[ \t]*/.exec(s)?.[0].length ?? 0;
+  const trail = /[ \t]*$/.exec(s)?.[0].length ?? 0;
+  if (lead > 0) html = "&#32;".repeat(lead) + html;
+  if (trail > 0) html += "&#32;".repeat(trail);
+  return html;
+}
+
+/** 往返性质检查（测试/开发断言）：decodeCell(encodeCell(x)) === x */
+export function assertRoundTrip(s: string, origin: TableOrigin): boolean {
+  if (origin === "markdown") return decodeCell(markdownCell(s)) === s;
+  return decodeCell({ ...emptyCell(), raw: encodeCell(s, "html") }) === s;
+}
+
+/** 单元格属性白名单（DOM 节点 → CellSource.attrs）：align / style / data-* */
+function domCellAttrs(el: Element): Record<string, string> {
+  const attrs: Record<string, string> = {};
+  for (const name of Array.from(el.getAttributeNames?.() ?? [])) {
+    const v = el.getAttribute(name) ?? "";
+    if (name === "align" || name === "style" || name.startsWith("data-")) {
+      attrs[name] = v;
+    }
+  }
+  return attrs;
+}
+
+/** 收集一个 <tr> 的直接子级单元格（结构化源：raw + spans + attrs）。
+ * raw 提取：innerHTML 原始片段（lang "html"）→ decodeCell 显式反编译
+ *（<br>→\n、&nbsp;→空格、<strong>/<em>/<code>→md 记号；未知标签保持
+ * lang "html" 并保留原始 HTML，调用方降级为静态，见 P4）——不再依赖
+ * textContent 恰好保留换行的隐式行为。 */
+function domRowCells(tr: Element): CellSource[] {
   return Array.from(tr.children)
     .filter((el) => ["td", "th"].includes((el.tagName || "").toLowerCase()))
     .map((el) => {
       const he = el as HTMLElement;
-      // textContent 保留源码换行（序列化时转 <br>，解析时还原，互逆）
-      const text = (he.textContent ?? "").replace(/\n+$/s, "").trim();
-      let align: TableAlign | null = null;
-      const a = (he.getAttribute("align") ?? "").toLowerCase();
-      if (a === "left" || a === "center" || a === "right") {
-        align = a;
-      } else {
-        const m = /text-align\s*:\s*(left|center|right)/i.exec(he.getAttribute("style") ?? "");
-        if (m) align = m[1].toLowerCase() as TableAlign;
-      }
-      return { text, align };
+      const colspan = readNumberAttr(
+        { colspan: he.getAttribute("colspan"), rowspan: he.getAttribute("rowspan") } as Record<string, unknown>,
+        "colspan",
+      );
+      const rowspan = readNumberAttr(
+        { colspan: he.getAttribute("colspan"), rowspan: he.getAttribute("rowspan") } as Record<string, unknown>,
+        "rowspan",
+      );
+      const cell: CellSource = {
+        raw: he.innerHTML ?? "",
+        lang: "html",
+        spans: { colspan, rowspan },
+        attrs: domCellAttrs(el),
+      };
+      decodeCell(cell);
+      /* 白名单外属性（class / id / width 等）：无法保真序列化 → 视为
+       * 反编译失败（lang 强制 "html"，parseHtmlTable 据此整表静态） */
+      const foreign = Array.from(el.getAttributeNames?.() ?? []).some(
+        (n) =>
+          n !== "align" &&
+          n !== "style" &&
+          n !== "colspan" &&
+          n !== "rowspan" &&
+          !n.startsWith("data-"),
+      );
+      if (foreign) cell.lang = "html";
+      return cell;
     });
 }
 
@@ -334,14 +579,15 @@ function escapeMarkdownCell(s: string): string {
 
 /** rows → 对齐填充的 GFM 表格源码（rows[0] = 表头；恒输出分隔行）。
  * mark：锚定单元格，序列化时记录其内容首字符在输出文本内的偏移
- *（替换后光标落点，使兜底对齐目标落在表格附近而非文档顶部）。 */
-export function serializeMarkdownTable(rows: string[][], aligns: (TableAlign | null)[], mark?: CellMark): SerializedTable {
-  /* ……以下 norm / widths / alignOf / padCell / delim 计算，与原实现完全一致…… */
+ *（替换后光标落点，使兜底对齐目标落在表格附近而非文档顶部）。
+ * 单元格内容取 CellSource.raw（lang 不区分——markdown 表格单元格源
+ * 恒为 markdown inline；转义规则见 escapeMarkdownCell）。 */
+export function serializeMarkdownTable(rows: CellSource[][], aligns: (TableAlign | null)[], mark?: CellMark): SerializedTable {
   const colCount = Math.max(1, ...rows.map((r) => r.length), aligns.length);
   const norm = rows.map((r) => {
     const cells = [...r];
-    while (cells.length < colCount) cells.push("");
-    return cells.map(escapeMarkdownCell);
+    while (cells.length < colCount) cells.push(emptyCell());
+    return cells.map((c) => escapeMarkdownCell(c.raw));
   });
   const widths: number[] = [];
   for (let c = 0; c < colCount; c++) {
@@ -375,12 +621,39 @@ export function serializeMarkdownTable(rows: string[][], aligns: (TableAlign | n
 }
 
 
-function escapeHtmlCell(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\r?\n/g, "<br>");
+/** 属性值转义（引号 / &）：写回 <td>/<th> 属性白名单用 */
+function escapeAttrValue(v: string): string {
+  return v.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
 }
 
+/** CellSource → 单元格属性串（对齐 + 合并跨度 + 白名单属性）。
+ * 对齐取单元格属性优先、列对齐数组兜底（新增列兜底 null = 默认）。
+ *（span/attrs 的完整保留：span 表本身已被 isStatic 判静态不可编辑，
+ * 此处保留仅保证「万一进入序列化」时结构不被静默破坏。） */
+function cellAttrsOf(cell: CellSource, c: number, aligns: (TableAlign | null)[]): string {
+  let s = "";
+  const a = cell.attrs.align ?? aligns[c] ?? null;
+  if (a && a !== "left") s += ` align="${a}"`;
+  if (cell.spans.colspan > 1) s += ` colspan="${cell.spans.colspan}"`;
+  if (cell.spans.rowspan > 1) s += ` rowspan="${cell.spans.rowspan}"`;
+  if (cell.attrs.style) s += ` style="${escapeAttrValue(cell.attrs.style)}"`;
+  for (const [k, v] of Object.entries(cell.attrs)) {
+    if (k.startsWith("data-")) s += ` ${k}="${escapeAttrValue(v)}"`;
+  }
+  return s;
+}
+
+/**
+ * rows → 缩进规整的 <table> HTML（P4：单元格语言统一）。
+ * - 单元格内容按 CellSource 编码：lang "markdown" → encodeCell(raw, "html")
+ *   （复用 compileMarkdown 编译为 inline HTML，与 worker 同链路）；
+ *   lang "html"（反编译失败残留）→ 原始片段直写（此类表已静态，仅兜底）；
+ * - 属性白名单（align / colspan / rowspan / style / data-*）逐格写回；
+ * - 换行（单元格内 \n）经 encodeCell 显式转 <br>，不再整体转义。
+ * mark：锚定单元格偏移（同 serializeMarkdownTable）。
+ */
 export function serializeHtmlTable(
-  rows: string[][],
+  rows: CellSource[][],
   aligns: (TableAlign | null)[],
   hasHeader: boolean,
   mark?: CellMark
@@ -388,27 +661,25 @@ export function serializeHtmlTable(
   const colCount = Math.max(1, ...rows.map((r) => r.length));
   const norm = rows.map((r) => {
     const cells = [...r];
-    while (cells.length < colCount) cells.push("");
+    while (cells.length < colCount) cells.push(emptyCell());
     return cells;
   });
-  const alignAttr = (c: number): string => {
-    const a = aligns[c];
-    return a && a !== "left" ? ` align="${a}"` : "";
-  };
 
   let cellOffset = 0;
   const out: string[] = ["<table>"];
   /** rowIdx：rows 矩阵行号（hasHeader 时 norm[0] → 0，norm[1..] → 1..n） */
-  const emitRow = (cells: string[], tag: "th" | "td", indent: string, rowIdx: number): void => {
+  const emitRow = (cells: CellSource[], tag: "th" | "td", indent: string, rowIdx: number): void => {
     out.push(`${indent}<tr>`);
     cells.forEach((cell, c) => {
+      const attrs = cellAttrsOf(cell, c, aligns);
       if (mark && rowIdx === mark.r && c === mark.c) {
         /* out 中已有行的总长 + 各行换行符，加本行前缀：
-         * indent + "  " + "<" + tag + alignAttr + ">" */
+         * indent + "  " + "<" + tag + attrs + ">" */
         cellOffset = out.reduce((n, l) => n + l.length + 1, 0)
-          + indent.length + 2 + tag.length + alignAttr(c).length + 1;
+          + indent.length + 2 + tag.length + attrs.length + 1;
       }
-      out.push(`${indent}  <${tag}${alignAttr(c)}>${escapeHtmlCell(cell)}</${tag}>`);
+      const content = cell.lang === "html" ? cell.raw : encodeCell(cell.raw, "html");
+      out.push(`${indent}  <${tag}${attrs}>${content}</${tag}>`);
     });
     out.push(`${indent}</tr>`);
   };
@@ -433,7 +704,10 @@ export function serializeHtmlTable(
 
 /** 底栏插入用：r 行 c 列的格式化 MARKDOWN 表格（空表头 + 空单元格） */
 export function emptyMarkdownTable(rowCount: number, colCount: number): string {
-  const rows: string[][] = Array.from({ length: Math.max(1, rowCount) }, () => new Array(colCount).fill(""));
+  const rows: CellSource[][] = Array.from(
+    { length: Math.max(1, rowCount) },
+    () => Array.from({ length: Math.max(1, colCount) }, () => emptyCell()),
+  );
   return serializeMarkdownTable(rows, []).text;  // ← 解构 .text
 }
 
@@ -472,7 +746,17 @@ export function locateTableSource(
   if (origin === "html") {
     const parsed = parseHtmlTable(text);
     if (parsed.rows.length === 0) return null;
-    return { origin, ...range, text, rows: parsed.rows, aligns: parsed.aligns, hasHeader: parsed.hasHeader };
+    return {
+      origin,
+      ...range,
+      text,
+      rows: parsed.rows,
+      aligns: parsed.aligns,
+      hasHeader: parsed.hasHeader,
+      linePrefixes: extractLinePrefixes(text),
+      dirty: false,
+      staticReason: parsed.staticReason,
+    };
   }
   const parsed = parseMarkdownTable(text);
   if (parsed.rows.length === 0) return null;
@@ -483,6 +767,40 @@ export function locateTableSource(
     rows: parsed.rows,
     aligns: parsed.aligns,
     hasHeader: true,
+    linePrefixes: extractLinePrefixes(text),
+    dirty: false,
+  };
+}
+
+/**
+ * 整表回读入口（P3）：把「当前位于编辑区的表格源码文本」（含行前缀）
+ * 重新解析为 rows / aligns / hasHeader / linePrefixes——不含行区间定位，
+ * 区间由调用方维护。writeBack 回写后立即调用，以解析结果覆盖内存矩阵
+ *（源码为唯一事实源：修正 trim / 转义 / 反编译等解析器归一化差异）。
+ * 解析失败（非表格文本）返回 null。
+ */
+export function parseTableSource(
+  text: string,
+  origin: TableOrigin,
+): Pick<TableSource, "rows" | "aligns" | "hasHeader" | "linePrefixes" | "staticReason"> | null {
+  if (origin === "html") {
+    const parsed = parseHtmlTable(text);
+    if (parsed.rows.length === 0) return null;
+    return {
+      rows: parsed.rows,
+      aligns: parsed.aligns,
+      hasHeader: parsed.hasHeader,
+      linePrefixes: extractLinePrefixes(text),
+      staticReason: parsed.staticReason,
+    };
+  }
+  const parsed = parseMarkdownTable(text);
+  if (parsed.rows.length === 0) return null;
+  return {
+    rows: parsed.rows,
+    aligns: parsed.aligns,
+    hasHeader: true,
+    linePrefixes: extractLinePrefixes(text),
   };
 }
 
