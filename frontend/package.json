@@ -47,6 +47,11 @@
     "tslib": "^2.6.2",
     "typescript": "^5.2.2",
     "vite": "^8.0.5",
-    "vitest": "^3.2.4"
+    "vitest": "^4.1.12"
+  },
+  "overrides": {
+    "svelte-i18n": {
+      "esbuild": "^0.25.0"
+    }
   }
 }
