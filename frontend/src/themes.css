@@ -423,6 +423,7 @@ body.search-open .pane-editor .cm-scroller {
 
 /* 预览态内容容器：空时也占一行，与 CM6 空行同高 */
 .md-block .md-cell-content {
+  white-space: pre-wrap;
   min-height: 1lh;            /* ← 精确等于当前 line-height，而非 1.78em 近似 */
   /* 行盒与 CM6 同源：line-height 继承 td 的 1.78，font-size 继承 .md-block */
 }
