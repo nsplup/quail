@@ -91,6 +91,8 @@
     allowOutsideClick: true,
     escapeDeactivates: false,
     fallbackFocus: "[data-mask-placeholder]",
+    /** 不再归还焦点以避免焦点被重置到编辑器顶部引发预期外的滚动同步 */
+    returnFocusOnDeactivate: false,
   });
 </script>
 
