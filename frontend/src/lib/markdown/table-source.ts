@@ -303,6 +303,15 @@ export function extractMarkdownTableRange(lines: string[]): { start: number; end
   return null;
 }
 
+/**
+ * GFM 表格单元格的换行唯一表示是 <br>（escapeMarkdownCell 的对称操作）。
+ * 回读还原为 \n，使 CM6 编辑器显示多行源码、连续编辑不漂移。
+ * 用户若需字面 <br>，应写 &lt;br&gt;（GFM 语义：单元格内 <br> 即换行）。
+ */
+function restoreSoftBreaks(s: string): string {
+  return s.replace(/<br\s*\/?>/gi, "\n");
+}
+
 /** markdown 表格源码文本 → 结构化行矩阵 + 对齐（rows[0] = 表头） */
 function parseMarkdownTable(text: string): { rows: CellSource[][]; aligns: (TableAlign | null)[] } {
   const lines = text.split("\n");
@@ -310,12 +319,11 @@ function parseMarkdownTable(text: string): { rows: CellSource[][]; aligns: (Tabl
   let aligns: (TableAlign | null)[] = [];
   lines.forEach((line, i) => {
     if (i === 1) {
-      // 分隔行：不进入内容矩阵，只取列对齐
       const first = markdownRowCells(lines[0]);
       aligns = parseAlignsFromDelimiter(line, first.length);
       return;
     }
-    rows.push(markdownRowCells(line).map(markdownCell));
+    rows.push(markdownRowCells(line).map((c) => markdownCell(restoreSoftBreaks(c))));
   });
   return { rows, aligns };
 }
@@ -428,8 +436,8 @@ function decodeInline(nodes: Node[]): string | null {
     if (tag === "br") { out += "\n"; continue; }
     const wrap =
       tag === "strong" ? "**" :
-      tag === "em" ? "*" :
-      tag === "code" ? "`" : null;
+        tag === "em" ? "*" :
+          tag === "code" ? "`" : null;
     if (wrap == null) return null;           // 未知标签 → 失败
     const inner = decodeInline(Array.from(el.childNodes));
     if (inner == null) return null;
@@ -863,7 +871,7 @@ export function relocateNearest(doc: string, text: string, prevStart: number): L
   const lines = doc.split("\n");
   let best: { range: LineRange; dist: number } | null = null;
   let from = 0;
-  for (;;) {
+  for (; ;) {
     const idx = doc.indexOf(text, from);
     if (idx === -1) break;
     const startLine = doc.slice(0, idx).split("\n").length;

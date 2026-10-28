@@ -105,6 +105,25 @@ describe("幂等：serialize → parseTableSource → serialize", () => {
     const again = serializeHtmlTable(parsed!.rows, parsed!.aligns, parsed!.hasHeader);
     expect(again.text).toBe(html.text);
   });
+
+  it("markdown 单元格换行 <br> ↔ \\n 互逆（回读还原换行）", () => {
+    const ser = serializeMarkdownTable([[markdownCell("a\nb")]], []);
+    expect(ser.text).toContain("a<br>b");
+    const parsed = parseTableSource(ser.text, "markdown");
+    expect(parsed?.rows[0][0].raw).toBe("a\nb");
+  });
+
+  it("markdown 单元格多行列表（用户报告用例）：序列化 → 回读 → 再序列化", () => {
+    const first = serializeMarkdownTable(
+      [[markdownCell("- a\n- b"), markdownCell("")]],
+      [],
+    );
+    expect(first.text).toContain("- a<br>- b");
+    const parsed = parseTableSource(first.text, "markdown");
+    expect(parsed?.rows[0][0].raw).toBe("- a\n- b");
+    const second = serializeMarkdownTable(parsed!.rows, parsed!.aligns);
+    expect(second.text).toBe(first.text); // 幂等
+  });
 });
 
 describe("回读对齐（源码为唯一事实源）", () => {
