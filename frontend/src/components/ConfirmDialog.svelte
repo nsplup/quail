@@ -79,6 +79,8 @@
     allowOutsideClick: true,
     initialFocus: ".qd-btn:last-of-type",
     onDeactivate: () => answer("cancel"),
+    /** 不再归还焦点以避免焦点被重置到编辑器顶部引发预期外的滚动同步 */
+    returnFocusOnDeactivate: false,
   });
 
   /** 系统弹窗空白遮罩的 trap：
