@@ -556,16 +556,31 @@
   /* ---------------- 顶行同步（编辑器滚动 → 预览） ---------------- */
   function onEditorTopLine(line: number): void {
     if (performance.now() < editorProgrammaticUntil) return;
-    // 刚发生插入/编辑（光标同步待办未消化）：顶行上报让位本轮光标同步。
-    // 覆盖 insertText/Tab 的 scrollIntoView 落点及其测量修正第二跳——
-    // 这些事件携带中间态顶行，以顶行锚定回写会把预览从光标落点拽开
-    if (pendingCursorLine != null) return;
     const bks = get(blocks);
-    if (get(mode) === "source" || bks.length === 0) return;
+    const m = get(mode);
+
+    // 编辑模式（source）：无预览可同步，大纲直接跟随编辑区顶行。
+    // 必须放在 pendingCursorLine 判断之前——source 下 trySyncCursor 因
+    // mode !== "split" 提前返回，pending 永远不会被消费，若先判断会被
+    // 永久挡住（切回 split 时才恢复）。
+    if (m === "source") {
+      if (bks.length === 0) return;
+      const b = indexOfLine(line);
+      if (b < 0) return;
+      outlineAutoTrack.set(true); // 用户滚动编辑器 → 大纲恢复追踪
+      topIndex.set(b);
+      return;
+    }
+
+    // 预览模式下编辑器不可见（display:none 不产生 scroll 事件）：
+    // 大纲统一由 onPreviewVisible 驱动，这里直接让位（防御性）
+    if (m === "preview") return;
+
+    // ---- 以下保持原有 split 逻辑不变 ----
+    if (pendingCursorLine != null) return;
+    if (bks.length === 0) return;
     const pv = $previewApi;
     if (!pv) return;
-    // 编辑器是滚动源：顶行 L → 所在块 b + 块内行进度 frac →
-    // 预览 scrollTop = offset(b) + frac×size(b) - SYNC_OFFSET（块内线性插值）
     const b = indexOfLine(line);
     const blk = bks[b];
     if (!blk) return;
@@ -574,7 +589,6 @@
     const y = pv.getItemOffset(b) + frac * pv.getItemSize(b);
     const target = Math.max(0, y - SYNC_OFFSET);
 
-    // 与预览当前实际位置比对：已同步则跳过（防止与光标路径互相覆盖抖动）
     const el = pvScrollEl();
     if (el && Math.abs(el.scrollTop - target) < 8) return;
 
