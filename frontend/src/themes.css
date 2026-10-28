@@ -55,7 +55,7 @@ body.search-open .pane-editor .cm-scroller {
    挂载段由 ResizeObserver 实测；块间距用 padding（不用 margin）——
    绝对定位项包装不破坏间距，也不存在相邻 margin 折叠 */
 .md-item {
-  padding-bottom: 14px;
+  padding-bottom: 1.5em;
   min-width: 0;
 }
 
@@ -67,7 +67,6 @@ body.search-open .pane-editor .cm-scroller {
   font-size: var(--pv-font-size, 15.5px);
   line-height: 1.78;
   word-wrap: break-word;
-  white-space: pre-wrap;
 }
 
 .md-block > :first-child { margin-top: 0 !important; }
@@ -135,7 +134,6 @@ body.search-open .pane-editor .cm-scroller {
 }
 
 .md-block pre {
-  margin: 1em 0;
   padding: 14px 16px;
   overflow-x: auto;
   background: var(--pv-code-bg);
@@ -419,7 +417,6 @@ body.search-open .pane-editor .cm-scroller {
 
 /* 预览态内容容器：空时也占一行，与 CM6 空行同高 */
 .md-block .md-cell-content {
-  white-space: pre-wrap;
   min-height: 1lh;            /* ← 精确等于当前 line-height，而非 1.78em 近似 */
   /* 行盒与 CM6 同源：line-height 继承 td 的 1.78，font-size 继承 .md-block */
 }
