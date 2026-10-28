@@ -34,12 +34,7 @@
   padding-top: 24px;
 }
 
-/* 查找悬浮面板打开：在原有 padding-top 上增加面板高度（--search-panel-h
-   由 searchPanel.ts 开合时写在 body 上），首段内容不再被右上角悬浮卡片遮住 */
-body.search-open .md-item.md-first {
-  padding-top: calc(24px + var(--search-panel-h, 96px));
-}
-
+body.search-open .pane-preview .preview-scroll,
 body.search-open .pane-editor .cm-scroller {
   padding-top: var(--search-panel-h, 96px);
 }
