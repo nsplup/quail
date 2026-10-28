@@ -67,6 +67,7 @@ body.search-open .pane-editor .cm-scroller {
   font-size: var(--pv-font-size, 15.5px);
   line-height: 1.78;
   word-wrap: break-word;
+  white-space: pre-wrap;
 }
 
 .md-block > :first-child { margin-top: 0 !important; }

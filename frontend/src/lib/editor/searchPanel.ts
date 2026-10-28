@@ -227,7 +227,7 @@ export function getPreviewSelectionText(): string | null {
   if (!elx || !elx.closest(".pane-preview")) return null;
   // 排除预览区内的可编辑控件，避免误取输入框选区
   if (elx.closest("input, textarea")) return null;
-  const text = sel.toString().trim();
+  const text = sel.toString();
   if (!text || text.includes("\n")) return null;
   return text;
 }
