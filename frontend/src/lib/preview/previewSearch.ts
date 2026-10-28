@@ -212,26 +212,28 @@ export function resetPreviewSearchState(): void {
  *  HAST 装饰器：把命中区间切分成 mark 包裹的子树（跨标签切分）
  * ------------------------------------------------------------------ */
 
-function markNode(id: number, isCurrent: boolean, children: RootContent[]): RootContent {
+function markNode(id: number, children: RootContent[]): RootContent {
   return {
     type: "element",
     tagName: "mark",
     properties: {
-      className: isCurrent
-        ? ["pv-search-hl", "pv-search-current"]
-        : ["pv-search-hl"],
+      className: ["pv-search-hl"],
       "data-mid": String(id),
     },
     children,
   } as unknown as RootContent;
 }
 
-/**
- * 对段节点做装饰。返回值：
- * - 与入参同引用（无命中 / 未激活）→ Svelte 跳过该子树；
- * - 新数组（含 mark）→ 交由 MarkdownNode 递归渲染。
- * 偏移推进与 flattenHastText 完全同序（text 计入，element 递归）。
- */
+/* 装饰结果缓存：VirtualList 重挂载 / Svelte 重算时，若 seg 引用与命中
+   内容不变，返回同一对象数组——下游 {#each (child)} 的 key 稳定，
+   MarkdownNode / CodeBlock 不销毁重建（消除重挂载瞬间的着色闪烁：
+   CodeBlock 实例复用则 html 状态保留，不回落纯文本）。
+   WeakMap 以 seg 为键：segments$ 增量更新导致 seg 对象重建时自然失效。 */
+const decorateCache = new WeakMap<
+  HastSegment,
+  { key: string; result: RootContent[] }
+>();
+
 export function decorateSegmentNodes(
   seg: HastSegment,
   segIndex: number,
@@ -241,7 +243,6 @@ export function decorateSegmentNodes(
   const { info } = state;
   const base = info.base[segIndex] ?? 0;
   if (base >= info.total) return seg.nodes;
-  // 收集本段命中的带 id 区间
   const hits: Array<{ s: number; e: number; id: number }> = [];
   for (let id = base; id < info.total; id++) {
     if (info.segOf[id] !== segIndex) break;
@@ -250,7 +251,23 @@ export function decorateSegmentNodes(
   }
   if (hits.length === 0) return seg.nodes;
 
+  let key = "";
+  for (const h of hits) key += `|${h.id}:${h.s}:${h.e}`;
+  const cached = decorateCache.get(seg);
+  if (cached && cached.key === key) return cached.result;
+
+  const result = applyMarks(seg, hits); // 不再传 state.current
+  decorateCache.set(seg, { key, result });
+  return result;
+}
+
+/* 原装饰逻辑主体（hits / current 由缓存入口计算，与原实现等价） */
+function applyMarks(
+  seg: HastSegment,
+  hits: Array<{ s: number; e: number; id: number }>,
+): RootContent[] {
   const offset = { value: 0 };
+
   const wrapNodes = (nodes: RootContent[]): RootContent[] => {
     let changed = false;
     const out: RootContent[] = [];
@@ -265,8 +282,13 @@ export function decorateSegmentNodes(
     }
     return changed ? out : nodes;
   };
+
   const wrapNode = (n: RootContent): RootContent[] => {
-    const node = n as { type?: string; value?: unknown; children?: RootContent[] };
+    const node = n as {
+      type?: string;
+      value?: unknown;
+      children?: RootContent[];
+    };
     if (node.type === "text") {
       const value = String(node.value ?? "");
       const start = offset.value;
@@ -278,25 +300,36 @@ export function decorateSegmentNodes(
         if (h.e <= pos) continue;
         if (h.s >= end) break;
         if (h.s > pos) {
-          pieces.push({ type: "text", value: value.slice(pos - start, h.s - start) });
+          pieces.push({
+            type: "text",
+            value: value.slice(pos - start, h.s - start),
+          });
         }
         const ms = Math.max(h.s, start);
         const me = Math.min(h.e, end);
-        pieces.push(markNode(h.id, h.id === state.current, [
-          { type: "text", value: value.slice(ms - start, me - start) },
-        ]));
+        pieces.push(
+          markNode(h.id, [
+            { type: "text", value: value.slice(ms - start, me - start) },
+          ]),
+        );
         pos = me;
       }
-      if (pos < end) pieces.push({ type: "text", value: value.slice(pos - start) });
+      if (pos < end)
+        pieces.push({ type: "text", value: value.slice(pos - start) });
       return pieces;
     }
-    if (node.type === "element" && Array.isArray(node.children) && node.children.length > 0) {
+    if (
+      node.type === "element" &&
+      Array.isArray(node.children) &&
+      node.children.length > 0
+    ) {
       const children = wrapNodes(node.children);
       if (children === node.children) return [n];
       return [{ ...node, children } as unknown as RootContent];
     }
     return [n];
   };
+
   return wrapNodes(seg.nodes);
 }
 
@@ -408,23 +441,37 @@ export function injectMarksIntoHtml(
     i = j;
   }
 
-  /* 2) 匹配区间 → 注入事件（open / close 标签各一条） */
-  const events: Array<{ pos: number; s: string }> = [];
+  /* 2) 匹配区间 → 注入事件：按「HTML 文本 run」切分。
+        相邻 plain 字符在 html 中无标签分隔（spans[p-1].end === spans[p].start）
+        → 同 run；否则 run 断开，需闭合前一对 mark、开启新一对。
+        多 span 跨界时产生多对 <mark>（相同 data-mid），视觉连续、
+        HTML 结构合法（mark 不再跨标签）。 */
+  interface InjectEvent { pos: number; s: string; isClose: boolean }
+  const events: InjectEvent[] = [];
   for (const r of ranges) {
     if (r.end <= r.start || r.end > spans.length) continue;
-    const s = spans[r.start];
-    const e = spans[r.end - 1];
     const cls = r.id === current
       ? "pv-search-hl pv-search-current"
       : "pv-search-hl";
-    events.push({ pos: s.start, s: `<mark class="${cls}" data-mid="${r.id}">` });
-    events.push({ pos: e.end, s: "</mark>" });
+    const openTag = `<mark class="${cls}" data-mid="${r.id}">`;
+
+    let runStart = r.start;
+    for (let p = r.start + 1; p <= r.end; p++) {
+      const isLast = p === r.end;
+      const sameRun = !isLast && spans[p - 1].end === spans[p].start;
+      if (sameRun) continue;
+      // run 结束：闭合当前 run 的 mark
+      events.push({ pos: spans[runStart].start, s: openTag, isClose: false });
+      events.push({ pos: spans[p - 1].end, s: "</mark>", isClose: true });
+      runStart = p;
+    }
   }
   if (events.length === 0) return html;
 
   /* 3) 同位置时 close 先于 open（相邻匹配不嵌套） */
   events.sort((a, b) =>
-    a.pos - b.pos || (a.s === "</mark>" ? 0 : 1) - (b.s === "</mark>" ? 0 : 1));
+    a.pos - b.pos ||
+    (a.isClose === b.isClose ? 0 : a.isClose ? -1 : 1));
 
   /* 4) 拼接 */
   let out = "";

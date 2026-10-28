@@ -35,6 +35,7 @@
   import EditableCheckbox from "./EditableCheckbox.svelte";
   import CodeBlock from "../highlight/CodeBlock.svelte";
   import { hastAttrs } from "./hast-attrs";
+  import { previewSearchState$ as previewSearchState } from "../preview/previewSearch";
 
   let {
     node,
@@ -101,7 +102,21 @@
 </script>
 
 {#if node.type === "element"}
-  {#if inTaskItem && isTaskCheckbox(node)}
+  {#if (node as Element).tagName === "mark"}
+    <!-- 查找高亮：装饰器生成的 mark 元素。current class 由 store 响应式驱动，
+         切换匹配项时只更新本元素的 class 属性，不触发上游 {#each} 重建 -->
+    <mark
+      class="pv-search-hl"
+      class:pv-search-current={String(
+        (node as Element).properties?.["data-mid"],
+      ) === String($previewSearchState.current)}
+      data-mid={(node as Element).properties?.["data-mid"] as string}
+    >
+      {#each (node as Element).children as child, i (`${(node as Element).tagName}-${i}`)}
+        <MarkdownNode node={child} {blockIndex} />
+      {/each}
+    </mark>
+  {:else if inTaskItem && isTaskCheckbox(node)}
     <!-- 任务项 checkbox：tight / loose 均在此分派，模板无需知道父结构 -->
     <EditableCheckbox node={node as Element} {blockIndex} />
   {:else if (node as Element).tagName === "md-image"}
@@ -128,7 +143,7 @@
          checkbox 由 element 分支最前面的 inTaskItem 分派处理，
          本分支不特判任何子节点 -->
     <li {...hastAttrs(node as Element)}>
-      {#each (node as Element).children as child (child)}
+      {#each (node as Element).children as child, i (`${(node as Element).tagName}-${i}`)}
         <MarkdownNode node={child} {blockIndex} inTaskItem={true} />
       {/each}
     </li>
@@ -143,7 +158,7 @@
       this={(node as Element).tagName}
       {...hastAttrs(node as Element)}
     >
-      {#each (node as Element).children as child (child)}
+      {#each (node as Element).children as child, i (`${(node as Element).tagName}-${i}`)}
         <MarkdownNode node={child} {blockIndex} inTaskItem={childInTaskItem} />
       {/each}
     </svelte:element>

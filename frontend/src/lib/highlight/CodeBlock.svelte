@@ -15,10 +15,16 @@
    * 标记的 span（围栏内容在 mdast 中为纯文本，无标记注入通道）。
    * 纯文本 / 搜索 mark 路径在本组件内统一 escapeHtml 后拼接。
    *
-   * 格式解耦：<code> 内部不写任何模板字面量，内容全部由 $effect 经 innerHTML
-   * 写入；<pre> 与 <code> 之间被 formatter 插入的空白文本节点也会被清除。
-   * 因此本文件可被任意 formatter（Prettier / dprint / biome…）正常格式化，
-   * 不会把缩进/换行泄漏进 <pre> 内容。
+   * 结构：<pre> / <code> 完全由 preHtml 字符串序列化输出（{@html}），
+   * 模板中不出现 pre 元素——formatter（Prettier / dprint / biome…）
+   * 任意排版都不会向 <pre> 内容注入空白，本文件可正常格式化。
+   * pre / code 属性来自 hastAttrs（Record<string, string>），直接
+   * escapeAttr 后拼进 HTML；codeClass 与 contentHtml 已是经过
+   * escape / 安全的 HTML 片段（hljs 输出 / escapeHtml 结果）。
+   *
+   * 重挂载闪烁：模块级同步缓存 hlCache（LRU 200）保存 lang+code → HTML，
+   * 虚拟滚动卸载/重挂载时首帧同步命中，不闪回纯文本（同 MarkdownImage
+   * 的模块级终态缓存思路）。
    */
   import type { Element } from "hast";
   import Icon from "../../components/Icon.svelte";
@@ -112,8 +118,65 @@
   /** code 元素原有 class（保留 language-x 标注，叠加 hljs） */
   const codeClass = $derived(["hljs", ...classList(codeEl)].join(" "));
 
-  /** 着色 HTML；null = 未着色（纯文本展示） */
-  let html = $state<string | null>(null);
+  /* ---------- 模块级同步缓存（虚拟滚动卸载/重挂载避免闪烁） ----------
+   * 组件实例状态在重挂载时丢失；异步高亮至少一帧延迟 → 首帧纯文本 → 闪烁。
+   * 本缓存挂载首帧同步命中，LRU 上限 200 条。
+   * 与 MarkdownImage 的「模块级终态缓存」同一思路。 */
+  const HL_CACHE_MAX = 200;
+  /** lang\0code → 高亮 HTML（null = 降级，恒为纯文本） */
+  const hlCache = new Map<string, string | null>();
+  const hlKey = (l: string, c: string): string => l + "\0" + c;
+
+  function hlCacheGet(
+    l: string,
+    c: string,
+  ): { hit: boolean; html: string | null } {
+    const k = hlKey(l, c);
+    if (!hlCache.has(k)) return { hit: false, html: null };
+    const v = hlCache.get(k)!;
+    hlCache.delete(k);
+    hlCache.set(k, v); // LRU 提升
+    return { hit: true, html: v };
+  }
+
+  function hlCacheSet(l: string, c: string, h: string | null): void {
+    const k = hlKey(l, c);
+    hlCache.delete(k);
+    hlCache.set(k, h);
+    if (hlCache.size > HL_CACHE_MAX) {
+      const oldest = hlCache.keys().next().value;
+      if (oldest !== undefined) hlCache.delete(oldest);
+    }
+  }
+
+  /** 着色 HTML；null = 未着色（纯文本展示）。挂载首帧同步命中缓存 */
+  let html = $derived(lang && plain ? hlCacheGet(lang, plain).html : null);
+
+  let seq = 0;
+  let debounceTimer: ReturnType<typeof setTimeout> | undefined;
+
+  /* 只写 html 不读 html：不建立对 html 的依赖，避免写入触发重跑死循环。
+     Svelte 5 的 $state 同值写入不触发更新，无需条件判断。 */
+  $effect(() => {
+    const l = lang;
+    const code = plain;
+    if (l === "" || code.length === 0) return;
+
+    // 缓存已命中（html 已由 $derived 同步取到）→ 无需请求
+    if (hlCacheGet(l, code).hit) return;
+
+    const mySeq = ++seq;
+    const delay = mySeq === 1 ? 0 : 250;
+    debounceTimer = setTimeout(() => {
+      void (async () => {
+        const r = await requestHighlight(l, code);
+        if (mySeq !== seq) return;
+        hlCacheSet(l, code, r);
+        html = r; // 可写 derived：本地覆盖，直到 plain 再次变化
+      })();
+    }, delay);
+    return () => clearTimeout(debounceTimer);
+  });
 
   /* ---------- 查找高亮接回（searchPanel / previewSearch 装饰器） ---------- */
 
@@ -149,29 +212,6 @@
     return pieces;
   });
 
-  let seq = 0;
-  let debounceTimer: ReturnType<typeof setTimeout> | undefined;
-
-  $effect(() => {
-    const l = lang;
-    const code = plain;
-    const mySeq = ++seq;
-    html = null; // 内容/语言变化立即回纯文本（首次挂载本就是 null）
-    if (l === "" || code.length === 0) return;
-    // 首次挂载直发（大概率缓存命中）；文本变化走防抖（打字过程不打出请求洪峰）
-    const delay = mySeq === 1 ? 0 : 250;
-    debounceTimer = setTimeout(() => {
-      void (async () => {
-        const r = await requestHighlight(l, code);
-        if (mySeq !== seq) return; // 期间已有更新请求，丢弃过期结果
-        html = r; // string | null（null = 降级，维持纯文本）
-      })();
-    }, delay);
-    return () => clearTimeout(debounceTimer);
-  });
-
-  /* ---------- 模板内容写入（与格式化无关） ---------- */
-
   function escapeHtml(s: string): string {
     return s.replace(/[&<>"']/g, (c) =>
       c === "&"
@@ -203,26 +243,40 @@
     return escapeHtml(plain);
   });
 
-  let codeRef = $state<HTMLElement | undefined>(undefined);
+  /* ---------- 序列化整个 <pre>（模板中无 pre 元素，formatter 无从污染） ---------- */
 
-  $effect(() => {
-    const content = contentHtml;
-    const code = codeRef;
-    if (!code) return;
-    code.innerHTML = content;
-    // formatter 可能在 <pre> 与 <code> 之间插入空白文本节点：清掉，避免污染内容
-    const pre = code.parentElement;
-    if (pre) {
-      for (const child of Array.from(pre.childNodes)) {
-        if (child !== code) child.remove();
-      }
+  function escapeAttr(s: string): string {
+    return s.replace(/[&<>"']/g, (c) =>
+      c === "&"
+        ? "&amp;"
+        : c === "<"
+          ? "&lt;"
+          : c === ">"
+            ? "&gt;"
+            : c === '"'
+              ? "&quot;"
+              : "&#39;",
+    );
+  }
+
+  /** hastAttrs 产物全为 string（false 已跳过、true 已转 ""）：直接拼即可 */
+  function serializeAttrs(attrs: Record<string, string>): string {
+    let out = "";
+    for (const [k, v] of Object.entries(attrs)) {
+      out += ` ${k}="${escapeAttr(v)}"`;
     }
-  });
+    return out;
+  }
+
+  const preHtml = $derived(
+    `<pre${serializeAttrs(hastAttrs(node))}>` +
+      `<code class="${escapeAttr(codeClass)}">${contentHtml}</code>` +
+      `</pre>`,
+  );
 </script>
 
 <div class="codeblock-wrap">
-  <pre {...hastAttrs(node)}><code bind:this={codeRef} class={codeClass}
-    ></code></pre>
+  {@html preHtml}
   <button
     class="code-copy-btn"
     class:copied
