@@ -19,7 +19,7 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      '@bindings': resolve(__dirname, 'bindings/quail')
+      '@bindings': resolve(import.meta.dirname, 'bindings/quail')
     }
   },
 });
