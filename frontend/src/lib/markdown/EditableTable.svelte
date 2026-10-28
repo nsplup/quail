@@ -340,9 +340,34 @@
 
   /* ---------------- 单元格编辑 ---------------- */
 
-  function startEdit(r: number, c: number): void {
-    if (isStatic(node).static) return; // 静态表格禁止进入编辑（前置拦截）
-    if (editing) return; // 已有编辑态（blur 提交后才会触发新的 startEdit）
+  /** 当前 window 选区是否位于预览区（排除编辑器等其它区域的选区）。 */
+  function isSelectionInPreview(): boolean {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || sel.rangeCount === 0) return false;
+    const node = sel.getRangeAt(0).commonAncestorContainer;
+    const el =
+      node.nodeType === Node.ELEMENT_NODE
+        ? (node as HTMLElement)
+        : node.parentElement;
+    return !!el?.closest(".preview-scroll");
+  }
+
+  function startEdit(r: number, c: number, ev?: MouseEvent): void {
+    if (isStatic(node).static) return; // 静态表格禁止进入编辑（原）
+    if (editing) return; // 已有编辑态（原）
+
+    // 守卫 A：点击单元格内链接 → 不进入编辑，事件继续冒泡给
+    // PreviewPane 的 handlePreviewClick 处理导航劫持
+    if (ev) {
+      const target = ev.target instanceof Element ? ev.target : null;
+      if (target?.closest("a")) return;
+    }
+
+    // 守卫 B：本次交互是拖拽选择文本（click 派发时选区非折叠）
+    // 覆盖"在单元格上选取"；"外部拖到单元格释放"因 click 不落在 td
+    // 上天然不会走到这里
+    if (isSelectionInPreview()) return;
+
     const s = ensureSource();
     if (!s || r >= s.rows.length) return;
     editing = { r, c };
@@ -637,7 +662,7 @@
               style={alignStyle(cell)}
               class:md-hl-col={menuCell?.c === ci}
               class:md-cell-active={editing?.r === row.idx && editing?.c === ci}
-              onclick={() => startEdit(row.idx, ci)}
+              onclick={(ev) => startEdit(row.idx, ci, ev)}
               oncontextmenu={(ev) => openCellMenu(ev, row.idx, ci)}
             >
               {#if editing && editing.r === row.idx && editing.c === ci}
@@ -672,7 +697,7 @@
               style={alignStyle(cell)}
               class:md-hl-col={menuCell?.c === ci}
               class:md-cell-active={editing?.r === row.idx && editing?.c === ci}
-              onclick={() => startEdit(row.idx, ci)}
+              onclick={(ev) => startEdit(row.idx, ci, ev)}
               oncontextmenu={(ev) => openCellMenu(ev, row.idx, ci)}
             >
               {#if editing && editing.r === row.idx && editing.c === ci}
