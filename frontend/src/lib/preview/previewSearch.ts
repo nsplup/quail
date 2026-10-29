@@ -17,7 +17,7 @@
  */
 import safeRegex from "safe-regex";
 import { writable } from "svelte/store";
-import type { RootContent, Element } from "hast";
+import type { RootContent, Element, ElementContent } from "hast";
 import type { HastSegment } from "../markdown/markdown-core";
 
 /** 匹配列表显示上限（超出显示 999+，超出部分不再参与导航/高亮） */
@@ -208,22 +208,6 @@ export function resetPreviewSearchState(): void {
   previewSearchState$.set(IDLE_STATE);
 }
 
-/* ------------------------------------------------------------------
- *  HAST 装饰器：把命中区间切分成 mark 包裹的子树（跨标签切分）
- * ------------------------------------------------------------------ */
-
-function markNode(id: number, children: RootContent[]): RootContent {
-  return {
-    type: "element",
-    tagName: "mark",
-    properties: {
-      className: ["pv-search-hl"],
-      "data-mid": String(id),
-    },
-    children,
-  } as unknown as RootContent;
-}
-
 /* 装饰结果缓存：VirtualList 重挂载 / Svelte 重算时，若 seg 引用与命中
    内容不变，返回同一对象数组——下游 {#each (child)} 的 key 稳定，
    MarkdownNode / CodeBlock 不销毁重建（消除重挂载瞬间的着色闪烁：
@@ -261,17 +245,45 @@ export function decorateSegmentNodes(
   return result;
 }
 
-/* 原装饰逻辑主体（hits / current 由缓存入口计算，与原实现等价） */
-function applyMarks(
-  seg: HastSegment,
+function markNode(id: number, children: RootContent[]): RootContent {
+  return {
+    type: "element",
+    tagName: "mark",
+    properties: {
+      className: ["pv-search-hl"],
+      "data-mid": String(id),
+    },
+    children,
+  } as unknown as RootContent;
+}
+
+/**
+ * 对任意 RootContent[] 应用命中装饰（纯函数）。
+ * 从 applyMarks 抽出：既服务整段装饰（worker 产物，applyMarks 调用），
+ * 也服务 EditableTable 的局部单元格内容装饰（本地解析的 HAST 也需要
+ * 查找高亮——见 decorateCellMap）。
+ *
+ * hits 的 id 语义由调用方决定：
+ * - 整段装饰：worker 全局 id（= info.ranges 下标，0..total-1）；
+ * - 局部装饰：必须用不可达 id（负值，见 LOCAL_MARK_ID_BASE），避免误标
+ *   pv-search-current（current 为 0..total-1 或 -1，负 id 恒不命中）。
+ */
+export function applyMarksToNodes(
+  nodes: RootContent[],
   hits: Array<{ s: number; e: number; id: number }>,
 ): RootContent[] {
+  /* 无命中 = 无操作：返回原引用（与 decorateCellMap 的 active=false 短路
+     风格一致，也让下游 {#each} keyed diff 直接跳过整棵子树）。
+     调用方（decorateSegmentNodes / decorateCellMap）虽已在外部过滤，这里
+     作为函数不变量再保一次——避免"未命中也重建整树"的隐式行为。 */
+  if (hits.length === 0) return nodes;
+
   const offset = { value: 0 };
 
-  const wrapNodes = (nodes: RootContent[]): RootContent[] => {
+  const wrapNodes = (ns: RootContent[]): RootContent[] => {
     let changed = false;
     const out: RootContent[] = [];
-    for (const n of nodes) {
+    for (const n of ns) {
       const wrapped = wrapNode(n);
       if (wrapped.length === 1 && wrapped[0] === n) {
         out.push(n);
@@ -280,7 +292,7 @@ function applyMarks(
         for (const w of wrapped) out.push(w);
       }
     }
-    return changed ? out : nodes;
+    return changed ? out : ns;
   };
 
   const wrapNode = (n: RootContent): RootContent[] => {
@@ -330,7 +342,15 @@ function applyMarks(
     return [n];
   };
 
-  return wrapNodes(seg.nodes);
+  return wrapNodes(nodes);
+}
+
+/* 原 applyMarks 改为 wrapper（行为不变） */
+function applyMarks(
+  seg: HastSegment,
+  hits: Array<{ s: number; e: number; id: number }>,
+): RootContent[] {
+  return applyMarksToNodes(seg.nodes, hits);
 }
 
 /* ------------------------------------------------------------------
@@ -428,8 +448,8 @@ export function injectMarksIntoHtml(
       if (html[k] === "&") {
         const semi = html.indexOf(";", k);
         if (semi !== -1 && semi < j &&
-            /^(?:#[0-9]+|#[xX][0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]*)$/.test(
-              html.slice(k + 1, semi))) {
+          /^(?:#[0-9]+|#[xX][0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]*)$/.test(
+            html.slice(k + 1, semi))) {
           spans.push({ start: k, end: semi + 1 }); // 实体 = 1 个 plain 字符
           k = semi + 1;
           continue;
@@ -481,4 +501,55 @@ export function injectMarksIntoHtml(
     last = ev.pos;
   }
   return out + html.slice(last);
+}
+
+/* ------------------------------------------------------------------
+ *  单元格 Map 批量装饰（EditableTable 本地解析结果用）
+ * ------------------------------------------------------------------ */
+
+/**
+ * 局部装饰的 data-mid 基准：远小于 worker 全局 id（< 999），且避开 -1
+ * （-1 是「来源=编辑器」下 current 的特殊语义，用 -1 会误标 current）。
+ * 同一 map 内每个单元格独立从 i=0 起算 → 不同单元格可能有相同 data-mid，
+ * 但负值不参与任何业务判定（current 查找 / 锚定滚动），无副作用。
+ */
+const LOCAL_MARK_ID_BASE = -100_000;
+
+/**
+ * 对单元格内容 Map 批量应用查找装饰（EditableTable 本地解析结果用）。
+ *
+ * - active=false 或 re=null → 原 map（引用相等，避免无谓的 map 重建）；
+ * - 单元格文本为空 / 无匹配 → 保留原 children 引用（Svelte keyed diff 友好）；
+ * - 有匹配 → 用 applyMarksToNodes 装饰，hits 的 id 从 LOCAL_MARK_ID_BASE
+ *   递减（负值，不命中 pv-search-current）。
+ *
+ * 装饰结果集与 MarkdownNode 渲染文本同源同序（flattenHastText 口径），
+ * 与 decorateSegmentNodes 的段装饰共享同一 applyMarksToNodes 主体。
+ */
+export function decorateCellMap(
+  map: Map<string, ElementContent[]>,
+  state: { active: boolean; re: RegExp | null },
+): Map<string, ElementContent[]> {
+  if (!state.active || !state.re) return map;
+  const re = state.re;
+  const out = new Map<string, ElementContent[]>();
+  for (const [key, children] of map) {
+    const text = flattenHastText(children);
+    if (!text) {
+      out.set(key, children);
+      continue;
+    }
+    const ranges = findRanges(text, re);
+    if (ranges.length === 0) {
+      out.set(key, children);
+      continue;
+    }
+    const hits = ranges.map(([s, e], i) => ({
+      s,
+      e,
+      id: LOCAL_MARK_ID_BASE - i,
+    }));
+    out.set(key, applyMarksToNodes(children, hits) as ElementContent[]);
+  }
+  return out;
 }

@@ -53,7 +53,10 @@
     type TableAlign,
     type TableSource,
   } from "./table-source";
-  import { previewSearchState$ } from "../preview/previewSearch";
+  import {
+    previewSearchState$,
+    decorateCellMap,
+  } from "../preview/previewSearch";
 
   let {
     node,
@@ -156,16 +159,24 @@
   /** 冻结复用的 CM6 单元格编辑器实例（懒创建：首次编辑单元格才构建；
    * 结束编辑不销毁，仅随宿主节点脱离文档，下次编辑重新挂载换文档） */
   let cellEditor: CellEditorHandle | null = null;
-  /** 本地解析样式覆盖（编辑结束后应用，key "r:c" → HAST 子节点）；
-   * worker 回流（node 引用变化）后清除，显示回归 worker 产物 */
-  let localDisplay = $state.raw<Map<string, ElementContent[]> | null>(null);
+  /**
+   * 本地解析结果（无装饰）：parseCellsPreview 产物，异步防抖落地或提交时即时设置。
+   * worker 回流（node 引用变化）时清空，让 worker 的 HAST 接管。
+   */
+  let rawLocalDisplay = $state.raw<Map<string, ElementContent[]> | null>(null);
+  /**
+   * 显示层：查找面板激活时对 rawLocalDisplay 套用装饰（与 worker 装饰
+   * 视觉一致），未激活时原样使用。$derived 自动追踪 previewSearchState$
+   * 的 active/re 变化——面板开关、查询变化都由这里响应，无需 $effect 手动
+   * 清空（避免「提交后新内容被丢弃」的旧行为）。
+   */
+  const localDisplay = $derived.by(() => {
+    if (!rawLocalDisplay) return null;
+    return decorateCellMap(rawLocalDisplay, $previewSearchState$);
+  });
   let tableEl = $state<HTMLTableElement | null>(null);
   /** 嵌套表格（raw HTML 单元格内的表格）：挂载后经 DOM 判定，只读渲染 */
   let nested = $state(false);
-  /* 查找面板是否激活：作为"本地覆盖失效"的额外触发源。
-   用 $derived 收窄 store 整体变化 → 只追踪 active 布尔值，
-   切换 current / 匹配集变化不会误触发。 */
-  const searchActive = $derived($previewSearchState$.active);
 
   $effect(() => {
     // 父链上出现 td/th/table 即嵌套表格：整表定位会命中外层表格源码，
@@ -174,16 +185,18 @@
   });
 
   /* node 引用变化（worker 重解析回流）→ 源码缓存失效，交互时重新定位；
-   * 本地解析样式同时失效（worker 产物自此接管显示）；源码侧静态拒绝
+   * 本地解析内容同时失效（worker 产物自此接管显示）；源码侧静态拒绝
    * 标记一并复位（新回流可能已能反编译）。
-   * searchActive 也作为触发源：查找面板开合时清空本地覆盖——否则「先无
-   * 查找编辑（设 localDisplay）→ 后开查找」会把裸 HAST 一直挂着，装饰丢失。 */
+   *
+   * 注：不再监听 searchActive。原先监听是为了在面板开合时清空本地 HAST
+   * 让 worker 装饰接管；现在 localDisplay = $derived 会自动套用/撤销装饰
+   * （decorateCellMap 的 active/re 分支），rawLocalDisplay 无需因面板开合
+   * 而清空——只在 worker 真正回流（node 引用变化）时才失效。 */
   $effect(() => {
     void node;
-    void searchActive;
     src = null;
     srcRejected = false;
-    localDisplay = null;
+    rawLocalDisplay = null;
   });
 
   /* 组件卸载：销毁冻结中的单元格编辑器实例 */
@@ -485,10 +498,10 @@
   }
 
   /** 编辑结束：应用解析后的样式（本地覆盖 worker 回流前的显示）。
-   * 查找面板打开时跳过本地覆盖：localDisplay 是未经装饰器处理的裸 HAST
-   * （无 mark），会整体覆盖 worker 产物的查找装饰——表现为提交编辑后
-   * 高亮丢失。让 worker 回流接管（node 变化 / searchActive 变化 →
-   * $effect 清空），装饰自然恢复。面板关闭时保持原有即时应用行为。 */
+   * 提交后立即落地新内容（无装饰）→ localDisplay = $derived 自动根据
+   * 当前 previewSearchState$ 套用查找装饰——实时内容与查找装饰兼得。
+   * 原 searchActive 短路（丢弃本地覆盖让 worker 接管）已移除：
+   * 面板打开时不再"先旧后新"。 */
   function applyParsedStyle(s: TableSource, e: { r: number; c: number }): void {
     const fresh =
       pendingParsed && pendingParsedValue === editValue ? pendingParsed : null;
@@ -497,11 +510,7 @@
       clearTimeout(cellParseTimer);
       cellParseTimer = undefined;
     }
-    if (searchActive) {
-      localDisplay = null; // 清空可能残留的裸 HAST，让 worker 产物接管
-      return;
-    }
-    localDisplay = fresh ?? parseCellsPreview(s, e, editValue);
+    rawLocalDisplay = fresh ?? parseCellsPreview(s, e, editValue);
   }
 
   /* ---------------- 右键菜单：行 / 列操作 ---------------- */
