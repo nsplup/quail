@@ -23,7 +23,10 @@
   import { onMount } from "svelte";
   import VirtualList from "../virtual/VirtualList.svelte";
   import type { VirtualListHandle } from "../virtual/VirtualList.svelte";
-  import type { Element as HastElement, ElementContent as HastContent } from "hast";
+  import type {
+    Element as HastElement,
+    ElementContent as HastContent,
+  } from "hast";
   import type { HastSegment } from "../markdown/markdown-core";
   import { openExternal } from "../bridge";
   import MarkdownSegment from "../markdown/MarkdownSegment.svelte";
@@ -71,11 +74,15 @@
       },
       getItemOffset(index: number): number {
         if (!vlist || segments.length === 0) return 0;
-        return vlist.getItemOffset(Math.max(0, Math.min(index, segments.length - 1)));
+        return vlist.getItemOffset(
+          Math.max(0, Math.min(index, segments.length - 1)),
+        );
       },
       getItemSize(index: number): number {
         if (!vlist || segments.length === 0) return 0;
-        return vlist.getItemSize(Math.max(0, Math.min(index, segments.length - 1)));
+        return vlist.getItemSize(
+          Math.max(0, Math.min(index, segments.length - 1)),
+        );
       },
       refresh() {
         /* 挂载段经 ResizeObserver 自适应实测，偏移表惰性重算；保留 API 兼容 */
@@ -105,27 +112,22 @@
     };
   });
 
-  async function handlePreviewClick(e: MouseEvent): Promise<void> {
-    const target = e.target as HTMLElement | null;
-    const anchor = target?.closest?.("a");
+  function handlePreviewClick(e: MouseEvent): void {
+    const anchor = (e.target as Element | null)?.closest?.("a");
     if (!anchor) return;
-    const href = anchor.getAttribute("href") ?? "";
+
+    // 命中链接即阻止默认导航：href 缺失/空串时浏览器会解析为当前文档 URL 触发重载
+    e.preventDefault();
+
+    const href = anchor.getAttribute("href")?.trim() ?? "";
     if (!href) return;
-    // 页内锚点（标题锚点 / 脚注引用 #user-content-fn-N / 脚注回链
-    // #user-content-fnref-N）：劫持默认导航。虚拟滚动下浏览器默认锚点
-    // 定位不可用——视口外目标元素未挂载，且滚动容器是虚拟列表根；
-    // 交由 scrollToAnchor 在段索引（HAST 数据）与已挂载 DOM 两级定位。
+
     if (href.startsWith("#")) {
-      e.preventDefault();
       scrollToAnchor(href.slice(1));
       return;
     }
-    e.preventDefault();
-    try {
-      await openExternal(href);
-    } catch {
-      /* 后端转发失败：已阻止默认导航，避免 webview 内跳转 */
-    }
+
+    void openExternal(href);
   }
 
   /* ---------- 页内锚点 / 脚注跳转 ---------- */
@@ -153,7 +155,9 @@
     const bare = decoded.startsWith(USER_CONTENT_PREFIX)
       ? decoded.slice(USER_CONTENT_PREFIX.length)
       : decoded;
-    return [...new Set([decoded, bare, USER_CONTENT_PREFIX + bare])].filter(Boolean);
+    return [...new Set([decoded, bare, USER_CONTENT_PREFIX + bare])].filter(
+      Boolean,
+    );
   }
 
   /** 段内深度优先查找携带目标 id 的元素（脚注定义 li 嵌在 section > ol 内，
@@ -162,7 +166,8 @@
     const walk = (n: HastContent): boolean => {
       if (n.type !== "element") return false;
       const el = n as HastElement;
-      if (typeof el.properties?.id === "string" && el.properties.id === id) return true;
+      if (typeof el.properties?.id === "string" && el.properties.id === id)
+        return true;
       return el.children.some(walk);
     };
     return seg.nodes.some(walk);
@@ -188,7 +193,8 @@
    */
   function scrollToAnchor(rawId: string): void {
     for (const id of anchorIdCandidates(rawId)) {
-      const mounted = scrollEl()?.querySelector(`[id="${CSS.escape(id)}"]`) ?? null;
+      const mounted =
+        scrollEl()?.querySelector(`[id="${CSS.escape(id)}"]`) ?? null;
       if (mounted) {
         jumpToElement(mounted);
         return;

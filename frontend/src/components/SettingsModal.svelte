@@ -130,10 +130,15 @@
     '<svg width="15" height="15" viewBox="21.9 5.4 166 159.6" fill="currentColor" aria-hidden="true"><path d="M114.7,115.5c11.9-4.4,18.1-12.9,18.1-27.5c0-14.6-12.3-27.5-27.7-27.5c-16.2,0-28.5,12.9-28.3,27.5 c0.2,14.7,7.2,24.4,18.4,28l-19.8,48.8c-26.5-6.9-53.5-38.2-53.5-76.7c0-45.7,36.7-82.7,82.7-82.7c46,0,83.3,37,83.3,82.7 c0,39.2-26.7,70-53.9,76.9L114.7,115.5z"></path></svg>';
 
   function hijackLinks(e: MouseEvent): void {
-    const anchor = (e.target as HTMLElement | null)?.closest?.("a");
-    const href = anchor?.getAttribute("href");
-    if (!href) return;
+    const anchor = (e.target as Element | null)?.closest?.("a");
+    if (!anchor) return;
+
+    // 命中链接即阻止默认导航：href 缺失/空串时浏览器会解析为当前文档 URL 触发重载
     e.preventDefault();
+
+    const href = anchor.getAttribute("href")?.trim() ?? "";
+    if (!href) return;
+
     void openExternal(href);
   }
 
@@ -486,10 +491,13 @@
                       class="license-card flex flex-col gap-1"
                       style="margin-bottom: 8px;"
                     >
-                      <a class="license-name break-all" href={dep.url}
-                        >{dep.name}</a
-                      >
-
+                      {#if dep.url}
+                        <a class="license-name break-all" href={dep.url}
+                          >{dep.name}</a
+                        >
+                      {:else}
+                        <p class="license-name break-all">{dep.name}</p>
+                      {/if}
                       <div
                         class="grid grid-cols-[1fr_auto] items-center gap-2 text-xs font-bold"
                       >

@@ -1028,7 +1028,7 @@ md-image[data-inline][data-status="error"] {
   overflow-wrap: anywhere;
 }
 
-.license-name:hover {
+a.license-name:hover {
   color: var(--ui-accent);
   text-decoration: underline;
   text-underline-offset: 2px;
