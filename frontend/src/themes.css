@@ -56,6 +56,7 @@ body.search-open .pane-editor .cm-scroller {
    绝对定位项包装不破坏间距，也不存在相邻 margin 折叠 */
 .md-item {
   padding-bottom: 1.5em;
+  font-size: var(--pv-font-size, 15.5px);
   min-width: 0;
 }
 
