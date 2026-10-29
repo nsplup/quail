@@ -60,6 +60,21 @@ body.search-open .pane-editor .cm-scroller {
   min-width: 0;
 }
 
+/* 表格 overflow-x: scroll 让横向滚动条轨道常驻（6px）占位防抖。
+ * 当表格是段末块（.md-block 的最后一个元素子节点）时，这 6px 轨道
+ * 直接叠加在 .md-item 的 padding-bottom 上，段尾间距比普通块多 6px。
+ * 减掉后段尾间距回到 1.5em，与其它块一致。
+ *
+ * 为什么要 :last-child：
+ *   表格不在段末（后面还有段落等）时，轨道位于段中间，不参与段尾
+ *   间距，减了反而会少 6px。只匹配"表格 = 段末块"的场景。
+ *
+ * 无论表格是否横向溢出，轨道都常驻 6px（thumb 透明 ≠ 不占位），
+ * 所以不需要依赖 .md-table-overflow 类，直接扣。 */
+.md-item:has(> .md-block > table:last-child) {
+  padding-bottom: calc(1.5em - var(--scrollbar-thickness));
+}
+
 .md-block {
   max-width: 860px;
   margin: 0 auto;
@@ -343,7 +358,7 @@ body.search-open .pane-editor .cm-scroller {
   margin: 1em 0;
   border-collapse: collapse;
   display: block;
-  overflow-x: auto;
+  overflow-x: scroll;   /* 滚动条轨道始终占位，高度恒定 */
   max-width: 100%;
 }
 

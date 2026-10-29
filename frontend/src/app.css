@@ -24,6 +24,11 @@
 }
 
 @layer base {
+  /* 与 global.css 中 ::-webkit-scrollbar { height: 6px } 保持一致；
+    用变量统一，避免两处硬编码漂移 */
+  :root {
+    --scrollbar-thickness: 6px;
+  }
 
   html,
   body {
@@ -210,8 +215,8 @@
 
   /* ---------- 滚动条：常态显示，仅定义宽度/颜色/圆角 ---------- */
   ::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
+    width: var(--scrollbar-thickness, 6px);
+    height: var(--scrollbar-thickness, 6px);
   }
 
   ::-webkit-scrollbar-track {
