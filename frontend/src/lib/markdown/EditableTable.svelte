@@ -340,33 +340,36 @@
 
   /* ---------------- 单元格编辑 ---------------- */
 
-  /** 当前 window 选区是否位于预览区（排除编辑器等其它区域的选区）。 */
-  function isSelectionInPreview(): boolean {
+  /** 当前 window 选区是否位于本表格内部（阻止拖拽选文本后误入编辑）。
+   *  用本表格而非整个预览区作为范围：需求语义就是"在单元格上选取"；
+   *  且 startEdit 只在 td/th 的 click 中调用，click 落在 td 上时
+   *  mousedown/mouseup 与选区必然都在本表格内——与预览区范围判定等价，
+   *  但更局部、不依赖 CSS class、未来 startEdit 增加入口时更安全。 */
+  function isSelectionInTable(): boolean {
+    const el = tableEl;
+    if (!el) return false;
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed || sel.rangeCount === 0) return false;
     const node = sel.getRangeAt(0).commonAncestorContainer;
-    const el =
+    const container =
       node.nodeType === Node.ELEMENT_NODE
         ? (node as HTMLElement)
         : node.parentElement;
-    return !!el?.closest(".preview-scroll");
+    return !!container && el.contains(container);
   }
 
   function startEdit(r: number, c: number, ev?: MouseEvent): void {
-    if (isStatic(node).static) return; // 静态表格禁止进入编辑（原）
-    if (editing) return; // 已有编辑态（原）
+    if (isStatic(node).static) return;
+    if (editing) return;
 
-    // 守卫 A：点击单元格内链接 → 不进入编辑，事件继续冒泡给
-    // PreviewPane 的 handlePreviewClick 处理导航劫持
+    // 守卫 A：点击单元格内链接 → 不进入编辑，交给 PreviewPane 处理导航
     if (ev) {
       const target = ev.target instanceof Element ? ev.target : null;
       if (target?.closest("a")) return;
     }
 
-    // 守卫 B：本次交互是拖拽选择文本（click 派发时选区非折叠）
-    // 覆盖"在单元格上选取"；"外部拖到单元格释放"因 click 不落在 td
-    // 上天然不会走到这里
-    if (isSelectionInPreview()) return;
+    // 守卫 B：拖拽选文本后 mouseup 的 click（选区非折叠，且必然在本表格内）
+    if (isSelectionInTable()) return;
 
     const s = ensureSource();
     if (!s || r >= s.rows.length) return;
