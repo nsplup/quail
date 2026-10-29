@@ -706,12 +706,21 @@ function cellAttrsOf(cell: CellSource, c: number, aligns: (TableAlign | null)[])
  * - 属性白名单（align / colspan / rowspan / style / data-*）逐格写回；
  * - 换行（单元格内 \n）经 encodeCell 显式转 <br>，不再整体转义。
  * mark：锚定单元格偏移（同 serializeMarkdownTable）。
+ *
+ * outerPrefix：外部上下文前缀（引用块 `> ` / 列表项缩进等），由 writeBack
+ * 从 TableSource.linePrefixes 取首行前缀传入，逐行加在**行首**（含 <table>
+ * 与 </table> 两端）。HTML 源码的每行都有「外部上下文前缀 + 内部结构缩进」
+ * 两层，原本依赖 replaceLines(preservePrefix=true) 保留外部前缀——但
+ * preservePrefix 会取现文档对应行的前缀（来自上次回写产物的结构缩进）再拼
+ * 一次，导致每次回写缩进翻倍（无限缩进）。改为本函数一次性生成完整前缀
+ * + 结构缩进，writeBack 对 HTML 来源关闭 preservePrefix。
  */
 export function serializeHtmlTable(
   rows: CellSource[][],
   aligns: (TableAlign | null)[],
   hasHeader: boolean,
-  mark?: CellMark
+  mark?: CellMark,
+  outerPrefix: string = "",
 ): SerializedTable {
   const colCount = Math.max(1, ...rows.map((r) => r.length));
   const norm = rows.map((r) => {
@@ -721,38 +730,46 @@ export function serializeHtmlTable(
   });
 
   let cellOffset = 0;
-  const out: string[] = ["<table>"];
+  const out: string[] = [`${outerPrefix}<table>`];
   /** rowIdx：rows 矩阵行号（hasHeader 时 norm[0] → 0，norm[1..] → 1..n） */
-  const emitRow = (cells: CellSource[], tag: "th" | "td", indent: string, rowIdx: number): void => {
-    out.push(`${indent}<tr>`);
+  const emitRow = (cells: CellSource[], tag: "th" | "td", innerIndent: string, rowIdx: number): void => {
+    out.push(`${outerPrefix}${innerIndent}<tr>`);
     cells.forEach((cell, c) => {
       const attrs = cellAttrsOf(cell, c, aligns);
       if (mark && rowIdx === mark.r && c === mark.c) {
         /* out 中已有行的总长 + 各行换行符，加本行前缀：
-         * indent + "  " + "<" + tag + attrs + ">" */
-        cellOffset = out.reduce((n, l) => n + l.length + 1, 0)
-          + indent.length + 2 + tag.length + attrs.length + 1;
+         * outerPrefix + innerIndent + "  " + "<" + tag + attrs + ">"
+         *                                                 ↑ 之前漏了 "<" 的 1 字符 */
+        cellOffset =
+          out.reduce((n, l) => n + l.length + 1, 0) +
+          outerPrefix.length +
+          innerIndent.length +
+          2 +          // 单元格前的内部缩进 "  "
+          1 +          // "<"
+          tag.length +
+          attrs.length +
+          1;           // ">"
       }
       const content = cell.lang === "html" ? cell.raw : encodeCell(cell.raw, "html");
-      out.push(`${indent}  <${tag}${attrs}>${content}</${tag}>`);
+      out.push(`${outerPrefix}${innerIndent}  <${tag}${attrs}>${content}</${tag}>`);
     });
-    out.push(`${indent}</tr>`);
+    out.push(`${outerPrefix}${innerIndent}</tr>`);
   };
   if (hasHeader && norm.length > 0) {
-    out.push("  <thead>");
+    out.push(`${outerPrefix}  <thead>`);
     emitRow(norm[0], "th", "    ", 0);
-    out.push("  </thead>");
+    out.push(`${outerPrefix}  </thead>`);
     if (norm.length > 1) {
-      out.push("  <tbody>");
+      out.push(`${outerPrefix}  <tbody>`);
       norm.slice(1).forEach((r, i) => emitRow(r, "td", "    ", i + 1));
-      out.push("  </tbody>");
+      out.push(`${outerPrefix}  </tbody>`);
     }
   } else {
-    out.push("  <tbody>");
+    out.push(`${outerPrefix}  <tbody>`);
     norm.forEach((r, i) => emitRow(r, "td", "    ", i));
-    out.push("  </tbody>");
+    out.push(`${outerPrefix}  </tbody>`);
   }
-  out.push("</table>");
+  out.push(`${outerPrefix}</table>`);
   return { text: out.join("\n"), cellOffset };
 }
 

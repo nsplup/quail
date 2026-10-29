@@ -283,38 +283,48 @@
       ? { startLine: s.startLine, endLine: s.endLine }
       : relocateNearest(doc, s.text, s.startLine);
     if (!range) {
-      /* 定位彻底失败（区块被外部改动吞掉）：标记脏，下次交互强制重定位 */
       s.dirty = true;
       return;
     }
 
-    const serialized =
-      s.origin === "markdown"
-        ? serializeMarkdownTable(
-            s.rows,
-            s.aligns as (TableAlign | null)[],
-            anchor,
-          )
-        : serializeHtmlTable(
-            s.rows,
-            s.aligns as (TableAlign | null)[],
-            s.hasHeader,
-            anchor,
-          );
+    /*
+     * 两条路径的外层前缀处理不同：
+     * - markdown：serializeMarkdownTable 输出裸行（`| a | b |` 无前导空白），
+     *   由 replaceLines(preservePrefix=true) 逐行取现文档前缀，多次回写不
+     *   累积（前缀取自现文档，稳定不变）；
+     * - html：serializeHtmlTable 输出自带内部结构缩进（2/4 空格层级），若
+     *   仍走 preservePrefix，会在「内部已带缩进的行」前再拼一次现文档前缀
+     *   （来自上次回写产物 → 含内部缩进），每次回写缩进翻倍（无限缩进）。
+     *   故这里取首行前缀作为 outerPrefix 传入，由 serializeHtmlTable 一次性
+     *   生成完整前缀 + 内部缩进，然后关闭 preservePrefix。
+     */
+    const isHtml = s.origin === "html";
+    const outerPrefix = isHtml ? (s.linePrefixes[0] ?? "") : "";
+    const serialized = isHtml
+      ? serializeHtmlTable(
+          s.rows,
+          s.aligns as (TableAlign | null)[],
+          s.hasHeader,
+          anchor,
+          outerPrefix,
+        )
+      : serializeMarkdownTable(
+          s.rows,
+          s.aligns as (TableAlign | null)[],
+          anchor,
+        );
 
-    /* 三条抑制（deadline/注解/显式选区）都在 replaceLines 内部完成；
-     * 残留同步状态由 App 注册的 onBeforeReplace 钩子清理；
-     * preservePrefix：按现文档逐行保留行前缀（内容区 = 序列化的裸行） */
     api.replaceLines(
       range.startLine,
       range.endLine,
       serialized.text,
       serialized.cellOffset,
-      true,
+      !isHtml, // ← HTML 关掉 preservePrefix（前缀已在 outerPrefix 里）
     );
 
     /* 整表回读：replaceLines 的 dispatch 同步生效，getDoc 即新文档；
-     * 行数不变（前缀不增减行），区间右端 = 起点 + 裸行数 - 1 */
+     * 行数 = 序列化产物行数（HTML 版行数由结构决定，可能与原表格不同），
+     * 区间右端 = 起点 + 行数 - 1 */
     const newLineCount = serialized.text.split("\n").length;
     s.startLine = range.startLine;
     s.endLine = range.startLine + newLineCount - 1;
@@ -332,8 +342,6 @@
       s.staticReason = fresh.staticReason;
       s.dirty = false;
     } else {
-      /* 回读失败（理论不可达：刚写入的就是本模块序列化的合法表格）：
-       * 保守标记脏，下次交互强制重定位 */
       s.dirty = true;
     }
   }
