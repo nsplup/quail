@@ -200,7 +200,7 @@ const editorTheme = EditorView.theme({
   "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection": {
     backgroundColor: "var(--ed-selection)",
   },
-  ".cm-selectionMatch": { backgroundColor: "var(--ed-selection)" },
+  ".cm-selectionMatch": { backgroundColor: "var(--ed-selection-match)" },
   /* 查找匹配项：主题柔和色底（--ed-search，各主题注入） */
   ".cm-searchMatch": {
     backgroundColor: "var(--ed-search)",
@@ -209,7 +209,6 @@ const editorTheme = EditorView.theme({
   ".cm-searchMatch.cm-searchMatch-selected": {
     backgroundColor: "var(--ed-selection)",
   },
-  ".cm-activeLine": { backgroundColor: "var(--ed-activeline)" },
   ".cm-panels-top": { display: "none" },
 });
 
@@ -909,7 +908,7 @@ const cellEditorTheme = EditorView.theme({
   "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection": {
     backgroundColor: "var(--ed-selection)",
   },
-  ".cm-selectionMatch": { backgroundColor: "var(--ed-selection)" },
+  ".cm-selectionMatch": { backgroundColor: "var(--ed-selection-match)" },
 });
 
 /** 换行/插行后保持光标可见：编辑器自身无内部滚动（高度自适应），
