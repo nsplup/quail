@@ -85,9 +85,6 @@ body.search-open .pane-editor .cm-scroller {
   word-wrap: break-word;
 }
 
-.md-block > :first-child { margin-top: 0 !important; }
-.md-block > :last-child { margin-bottom: 0 !important; }
-
 .md-block h1,
 .md-block h2,
 .md-block h3,
@@ -230,9 +227,6 @@ body.search-open .pane-editor .cm-scroller {
   background: var(--pv-quote-bg);
   color: var(--pv-muted);
 }
-
-.md-block blockquote > :first-child { margin-top: 0; }
-.md-block blockquote > :last-child { margin-bottom: 0; }
 
 .md-block ul,
 .md-block ol {
@@ -559,9 +553,6 @@ body.search-open .pane-editor .cm-scroller {
   padding-bottom: 10px;
 }
 
-.md-block .md-accordion-content > :first-child { margin-top: 0; }
-.md-block .md-accordion-content > :last-child { margin-bottom: 0; }
-
 .md-block sup a,
 .md-block .footnotes {
   color: var(--pv-muted);
@@ -607,3 +598,27 @@ body.search-open .pane-editor .cm-scroller {
 .md-block table.md-editable-table tr.md-hl-row > .md-hl-col::before {
   opacity: 0.18;
 }
+
+/* ============ 收口规则：跳过查找高亮的装饰 mark ============
+   查找高亮的 <mark.pv-search-hl> 是纯装饰元素，不应影响布局。
+   原规则用 :first-child / :last-child 做收口，会把 mark 当作
+   "第一个元素"占位，导致紧随的 <p> 等块元素失去收口、多出边距。
+   这里给三层容器都加补偿：mark 占首/尾位置时，让相邻块元素也收口。 */
+
+/* 层 1：.md-block 直接子元素（!important 沿用原规则强度） */
+.md-block > :first-child:not(mark.pv-search-hl) { margin-top: 0 !important; }
+.md-block > :last-child:not(mark.pv-search-hl) { margin-bottom: 0 !important; }
+.md-block > mark.pv-search-hl:first-child + * { margin-top: 0 !important; }
+.md-block > :has(+ mark.pv-search-hl:last-child) { margin-bottom: 0 !important; }
+
+/* 层 2：blockquote */
+.md-block blockquote > :first-child:not(mark.pv-search-hl) { margin-top: 0; }
+.md-block blockquote > :last-child:not(mark.pv-search-hl) { margin-bottom: 0; }
+.md-block blockquote > mark.pv-search-hl:first-child + * { margin-top: 0; }
+.md-block blockquote > :has(+ mark.pv-search-hl:last-child) { margin-bottom: 0; }
+
+/* 层 3：折叠面板正文容器 */
+.md-block .md-accordion-content > :first-child:not(mark.pv-search-hl) { margin-top: 0; }
+.md-block .md-accordion-content > :last-child:not(mark.pv-search-hl) { margin-bottom: 0; }
+.md-block .md-accordion-content > mark.pv-search-hl:first-child + * { margin-top: 0; }
+.md-block .md-accordion-content > :has(+ mark.pv-search-hl:last-child) { margin-bottom: 0; }
