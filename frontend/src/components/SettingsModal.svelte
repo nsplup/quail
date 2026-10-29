@@ -105,6 +105,7 @@
   const trap = focusTrap({
     allowOutsideClick: true,
     escapeDeactivates: false,
+    preventScroll: true, /** 拉回焦点时不再隐式滚动 */
     /** 给虚拟滚动使用的延迟启动 */
     checkCanFocusTrap: (containers) =>
       new Promise<void>((resolve) => {
