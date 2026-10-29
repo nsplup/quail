@@ -7,6 +7,8 @@
    *   （三态 / 懒加载 / restricted 判定，行为等价旧自定义元素）；
    * - table（markdown / raw HTML，来源经 data-*-table 标记）→ EditableTable
    *   可编辑表格组件（HAST 显示 + 反向更新编辑区，见组件头注释）；
+   * - details（raw HTML 折叠面板）→ Accordion 组件（折叠状态经全局
+   *   store 记忆：挂载优先取 store，回落 HAST open 属性，见组件头注释）；
    * - pre>code（围栏代码块）→ CodeBlock（着色 worker + 内容寻址缓存）；
    * - task-list-item 内的 checkbox（tight: li>input / loose: li>p>input）
    *   → EditableCheckbox；
@@ -24,6 +26,12 @@
    * 通用 element 在非 li/ul/ol 时继承（p / strong / em / a 等）；
    * 遇 li/ul/ol 重置为 false（嵌套列表由各自的 li.task-list-item 重新判定）。
    *
+   * 【accordionParentKey 传递】details 子树（summary / content）内所有
+   * 递归渲染点透传 accordionParentKey，遇到内层 details 时交由 Accordion
+   * 组合成 "外层H/内层H" 路径 key——解决嵌套折叠面板 summary 相同导致
+   * 共享折叠记录、内外层互相覆盖的问题。details 子树之外的节点忽略此 prop
+   * （传 undefined 等价于顶层，行为不变）。
+   *
    * 增量更新：node 引用未变（增量解析 head/tail 段复用）时 Svelte 跳过该子树；
    * 引用变化但结构相同（同为 paragraph 等）时复用 DOM，仅更新差异文本/属性——
    * md-image 组件实例不销毁，图片不重新请求。
@@ -33,6 +41,7 @@
   import MarkdownNode from "./MarkdownNode.svelte"; // 自导入实现递归（Svelte 5 不支持隐式自引用）
   import EditableTable from "./EditableTable.svelte";
   import EditableCheckbox from "./EditableCheckbox.svelte";
+  import Accordion from "./Accordion.svelte";
   import CodeBlock from "../highlight/CodeBlock.svelte";
   import { hastAttrs } from "./hast-attrs";
   import { previewSearchState$ as previewSearchState } from "../preview/previewSearch";
@@ -41,11 +50,17 @@
     node,
     blockIndex = null,
     inTaskItem = false,
+    accordionParentKey = null,
   }: {
     node: RootContent;
     blockIndex?: number | null;
     /** 当前节点是否处于 task-list-item 的内容上下文（含其段落内） */
     inTaskItem?: boolean;
+    /**
+     * 外层折叠面板的 key（仅 details 子树内传递；嵌套 Accordion 组合父 key，
+     * 避免内外层 summary 相同 → 共享折叠记录导致点击互扰 / 状态回弹）。
+     */
+    accordionParentKey?: string | null;
   } = $props();
 
   /** GFM 任务列表项（remark-gfm 给 li 注入 task-list-item 类，themes.css 同款判定） */
@@ -113,7 +128,7 @@
       data-mid={(node as Element).properties?.["data-mid"] as string}
     >
       {#each (node as Element).children as child, i (`${(node as Element).tagName}-${i}`)}
-        <MarkdownNode node={child} {blockIndex} />
+        <MarkdownNode node={child} {blockIndex} accordionParentKey={accordionParentKey} />
       {/each}
     </mark>
   {:else if inTaskItem && isTaskCheckbox(node)}
@@ -135,6 +150,17 @@
          EditableTable；来源经 data-*-table 标记在组件内区分反向更新格式）。
          blockIndex = 段下标，供反向更新定位源码行区间 -->
     <EditableTable node={node as Element} {blockIndex} />
+  {:else if (node as Element).tagName === "details"}
+    <!-- 折叠面板：<details>/<summary>（markdown 场景为 raw HTML）→ Accordion
+         组件渲染（不再走通用 svelte:element 分支输出原生 details 标签）。
+         折叠状态：挂载时优先取全局 store（accordionOpen$，虚拟滚动卸载重
+         挂载恢复），无记录回落 HAST open 属性；用户切换经组件上报 store。
+         嵌套：accordionParentKey 传入父面板 key，Accordion 组合成路径 key -->
+    <Accordion
+      node={node as Element}
+      {blockIndex}
+      parentKey={accordionParentKey}
+    />
   {:else if (node as Element).tagName === "pre" && (node as Element).children.some((c) => c.type === "element" && c.tagName === "code")}
     <!-- 围栏代码块（pre>code）→ CodeBlock；其余 pre 走通用分支 -->
     <CodeBlock node={node as Element} />
@@ -144,7 +170,12 @@
          本分支不特判任何子节点 -->
     <li {...hastAttrs(node as Element)}>
       {#each (node as Element).children as child, i (`${(node as Element).tagName}-${i}`)}
-        <MarkdownNode node={child} {blockIndex} inTaskItem={true} />
+        <MarkdownNode
+          node={child}
+          {blockIndex}
+          inTaskItem={true}
+          accordionParentKey={accordionParentKey}
+        />
       {/each}
     </li>
   {:else if VOID_ELEMENTS.has((node as Element).tagName)}
@@ -159,7 +190,12 @@
       {...hastAttrs(node as Element)}
     >
       {#each (node as Element).children as child, i (`${(node as Element).tagName}-${i}`)}
-        <MarkdownNode node={child} {blockIndex} inTaskItem={childInTaskItem} />
+        <MarkdownNode
+          node={child}
+          {blockIndex}
+          inTaskItem={childInTaskItem}
+          accordionParentKey={accordionParentKey}
+        />
       {/each}
     </svelte:element>
   {/if}

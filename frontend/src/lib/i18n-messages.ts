@@ -51,6 +51,9 @@ export const zhMessages = {
   task: {
     toggle: "切换任务状态",
   },
+  accordion: {
+    details: "详细信息",
+  },
   outline: {
     title: "大纲",
     filter: "筛选",
@@ -191,6 +194,9 @@ export const enMessages = {
   },
   task: {
     toggle: "Toggle task state",
+  },
+  accordion: {
+    details: "Details",
   },
   outline: {
     title: "Outline",

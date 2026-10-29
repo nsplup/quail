@@ -161,6 +161,34 @@ export const topIndex$ = writable(0);
 /** toast：{id, msg}（id 驱动重置自动关闭计时） */
 export const toast$ = writable<{ id: number; msg: string } | null>(null);
 
+/* ---------------- 预览折叠面板（Accordion 组件） ---------------- */
+
+/**
+ * 预览区折叠面板（<details> → Accordion 组件替换）的折叠状态中心。
+ *
+ * - 键为面板内容指纹（summary 文本哈希，计算见 Accordion.svelte），值
+ *   true = 展开 / false = 折叠；同一文档内相同 summary 的面板共享一条
+ *   记录（视图状态按「内容」而非「位置」记忆——块下标随编辑漂移，位置
+ *   键在增量解析下不稳定）；
+ * - 仅内存态（会话级，不持久化）：用途是虚拟滚动把段卸载、滚回再挂载时
+ *   恢复用户上次的折叠状态。Accordion 挂载时优先读本表，无记录再回落
+ *   HAST details 的 open 属性；用户切换折叠时经 setAccordionOpen 上报。
+ */
+export const accordionOpen$ = writable<Record<string, boolean>>({});
+
+/**
+ * 读取折叠状态。undefined = 无记录（面板未被用户折叠/展开过），
+ * 调用方（Accordion 挂载）回落 HAST details 的 open 属性。
+ */
+export function getAccordionOpen(key: string): boolean | undefined {
+  return get(accordionOpen$)[key];
+}
+
+/** 上报折叠状态（Accordion 组件切换折叠时调用；同值不触发更新） */
+export function setAccordionOpen(key: string, open: boolean): void {
+  accordionOpen$.update((m) => (m[key] === open ? m : { ...m, [key]: open }));
+}
+
 /* ---------------- 解析管线（worker 承载） ---------------- */
 
 /** 编辑器文档（保存走后端，不落本地存储） */

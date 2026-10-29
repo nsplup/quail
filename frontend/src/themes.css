@@ -472,19 +472,95 @@ body.search-open .pane-editor .cm-scroller {
   background: var(--pv-code-bg);
 }
 
-.md-block details {
+/* ============ 折叠面板（Accordion.svelte，替换原生 <details>/<summary>） ============ */
+
+/* 容器：沿用原 details 卡片基调（--pv-border 边框 + 10px 圆角 + code-bg 底色）；
+   overflow hidden 让头部 hover 底色随圆角裁切。展开/折叠由组件切换
+   .md-accordion-open 类驱动（折叠状态记忆在全局 store，见 Accordion.svelte） */
+.md-block .md-accordion {
   margin: 1em 0;
-  padding: 10px 14px;
   border: 1px solid var(--pv-border);
   border-radius: 10px;
   background: var(--pv-code-bg);
+  overflow: hidden;
 }
 
-.md-block summary {
-  cursor: pointer;
+/* 头部：原生 button 外观全清 + 整行可点（自带点按 / 空格 / 回车切换与
+   Tab 聚焦语义）；字体层级沿用原 summary 规则（600 / --pv-fg-strong）。
+   原统一 padding 拆分：头部 10px 14px，正文 0 14px 10px，视觉与原
+   details 一致 */
+.md-block .md-accordion-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+  width: 100%;
+  margin: 0;
+  padding: 10px 14px;
+  border: none;
+  border-radius: 0;
+  background: none;
+  font: inherit;
   font-weight: 600;
+  text-align: left;
   color: var(--pv-fg-strong);
+  cursor: pointer;
+  transition: background-color 0.12s ease;
 }
+
+/* 悬停反馈：表格斑马行同款浅底（--pv-row-alt），与整体界面风格一致 */
+.md-block .md-accordion-summary:hover {
+  background: var(--pv-row-alt);
+}
+
+/* 键盘焦点环：与任务勾选框同口径（--ui-accent）；负 offset 让环落在
+   面板内部，不撑出容器 */
+.md-block .md-accordion-summary:focus-visible {
+  outline: 2px solid var(--ui-accent);
+  outline-offset: -2px;
+}
+
+/* 展开箭头：折叠右指 / 展开旋转 90° 下指。只过渡箭头（transform /
+   color）——正文本身不做高度动画：虚拟滚动按即时布局测量条目高度，
+   展开动画会让测量与动画帧错位，产生滚动跳动。
+   ⚠ 展开态用「直接子元素」限定（> .md-accordion-summary > .md-accordion-chevron）
+   ——嵌套时内层 chevron 是外层 .md-accordion-open 的后代，后代选择器会
+   误命中让内层箭头永远旋转（已修复）。 */
+.md-block .md-accordion-chevron {
+  flex: none;
+  width: 1em;
+  height: 1em;
+  color: var(--pv-muted);
+  transition:
+    transform 0.15s ease,
+    color 0.12s ease;
+}
+
+.md-block .md-accordion-open > .md-accordion-summary > .md-accordion-chevron {
+  transform: rotate(90deg);
+  color: var(--pv-accent);
+}
+
+/* 头部文字容器：min-width 0 允许长标题参与 flex 收缩（换行而非撑宽） */
+.md-block .md-accordion-label {
+  min-width: 0;
+}
+
+/* 正文：仅展开时显示；首尾子元素去边距，收口规则与 blockquote 相同。
+   ⚠ 展开态必须用「直接子元素」选择器（.md-accordion-open > .md-accordion-content）
+   ——嵌套时内层 content 是外层 .md-accordion-open 的后代，后代选择器会
+   误命中让内层始终显示，点击内层只改 class 不折叠（已修复）。 */
+.md-block .md-accordion-content {
+  display: none;
+  padding: 0 14px;
+}
+
+.md-block .md-accordion-open > .md-accordion-content {
+  display: block;
+  padding-bottom: 10px;
+}
+
+.md-block .md-accordion-content > :first-child { margin-top: 0; }
+.md-block .md-accordion-content > :last-child { margin-bottom: 0; }
 
 .md-block sup a,
 .md-block .footnotes {
