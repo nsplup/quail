@@ -57,6 +57,16 @@
     previewSearchState$,
     decorateCellMap,
   } from "../preview/previewSearch";
+  import {
+    insertRow,
+    insertCol,
+    moveRow,
+    moveCol,
+    copyRow,
+    copyCol,
+    deleteRow,
+    deleteCol,
+  } from "./table-ops";
 
   let {
     node,
@@ -379,14 +389,66 @@
     return !!container && el.contains(container);
   }
 
+  /**
+   * 单元格内「可交互元素」选择器：命中即视为用户想操作该元素本身
+   * （链接导航、展开 details、勾选 checkbox、点击按钮、内联编辑器等），
+   * 不进入单元格编辑态。
+   *
+   * 覆盖：
+   * - 原生交互控件（链接 / 表单 / 折叠 / 媒体 / 内嵌文档）
+   * - contenteditable（子编辑器，例如单元格里渲染的自定义输入组件）
+   * - tabindex 非 -1 的键盘可达元素
+   * - 常见 ARIA 交互角色（button/link/checkbox/…）
+   *
+   * 设计取舍：
+   * - `a[href]` 而非 `a`：无 href 的锚点（如 markdown 脚注 back-anchor）
+   *   不具导航语义，点击应照常进入编辑；
+   * - 排除 `[tabindex='-1']`：常见于程序化聚焦，不是用户可交互目标；
+   * - 不列 td/th/table：closest 只命中祖先，嵌套表格另由 isStatic 的
+   *   "nested" 分支处理。
+   */
+  const INTERACTIVE_SELECTOR = [
+    "a[href]",
+    "area[href]",
+    "button",
+    "input",
+    "select",
+    "textarea",
+    "label",
+    "summary",
+    "details",
+    "audio[controls]",
+    "video[controls]",
+    "iframe",
+    "object",
+    "embed",
+    "[contenteditable]:not([contenteditable='false'])",
+    "[tabindex]:not([tabindex='-1'])",
+    "[role='button']",
+    "[role='link']",
+    "[role='checkbox']",
+    "[role='radio']",
+    "[role='switch']",
+    "[role='tab']",
+    "[role='menuitem']",
+    "[role='menuitemcheckbox']",
+    "[role='menuitemradio']",
+    "[role='option']",
+    "[role='combobox']",
+    "[role='slider']",
+    "[role='spinbutton']",
+    "[role='textbox']",
+    "[role='searchbox']",
+  ].join(",");
+
   function startEdit(r: number, c: number, ev?: MouseEvent): void {
     if (isStatic(node).static) return;
     if (editing) return;
 
-    // 守卫 A：点击单元格内链接 → 不进入编辑，交给 PreviewPane 处理导航
+    // 守卫 A：点击单元格内可交互元素 → 不进入编辑，交给该元素处理自身交互
     if (ev) {
       const target = ev.target instanceof Element ? ev.target : null;
-      if (target?.closest("a")) return;
+      if (target?.closest(INTERACTIVE_SELECTOR)) return;
     }
 
     // 守卫 B：拖拽选文本后 mouseup 的 click（选区非折叠，且必然在本表格内）
@@ -523,58 +585,25 @@
     const s = ensureSource();
     if (!s) return;
     const rows = s.rows;
+    /* 当前列数快照（$derived 在事件处理器中读取为当前值）；
+     * 行列操作统一用这份快照，保证一次菜单动作内 cols 不变 */
+    const cols = colCount;
     const canDelRow = rows.length > 1;
-    const canDelCol = colCount > 1;
+    const canDelCol = cols > 1;
+
+    /**
+     * 动作包裹：重新 ensureSource（右键与点选之间可能发生异步回写 /
+     * node 回流导致 src 失效）→ 就地修改矩阵 → writeBack 回写源码。
+     * 行 / 列操作为纯函数（table-ops），只改 t.rows / t.aligns，
+     * 序列化与反向更新统一交给 writeBack。
+     */
     const apply = (fn: (t: TableSource) => void) => () => {
       const cur = ensureSource();
       if (!cur) return;
       fn(cur);
       writeBack(cur, { r, c });
     };
-    const emptyRow = () => Array.from({ length: colCount }, () => emptyCell());
-    const addCol = (at: number) => (t: TableSource) => {
-      for (const row of t.rows) row.splice(at, 0, emptyCell());
-      t.aligns.splice(at, 0, null);
-    };
-    /* 移动（带方向性）：与相邻行/列交换位置；列移动同步交换列对齐 */
-    const moveRow = (from: number, dir: -1 | 1) => (t: TableSource) => {
-      const to = from + dir;
-      if (to < 0 || to >= t.rows.length) return;
-      const tmp = t.rows[from];
-      t.rows[from] = t.rows[to];
-      t.rows[to] = tmp;
-    };
-    const moveCol = (from: number, dir: -1 | 1) => (t: TableSource) => {
-      const to = from + dir;
-      if (to < 0 || to >= colCount) return;
-      for (const row of t.rows) {
-        const tmp = row[from];
-        row[from] = row[to];
-        row[to] = tmp;
-      }
-      const tmp = t.aligns[from];
-      t.aligns[from] = t.aligns[to];
-      t.aligns[to] = tmp;
-    };
-    /* 复制（无方向性）：副本固定插到当前行/列之后。
-     * 插入位置 from+1 始终落在 [1, rows.length] 区间内，永不失序；
-     * 列复制同步复制列对齐。复制单元格做浅拷贝（结构体不再共享引用）。 */
-    const copyRow = (from: number) => (t: TableSource) => {
-      t.rows.splice(
-        from + 1,
-        0,
-        (t.rows[from] ?? []).map((cell) => ({ ...cell })),
-      );
-    };
-    const copyCol = (from: number) => (t: TableSource) => {
-      for (const row of t.rows)
-        row.splice(from + 1, 0, row[from] ? { ...row[from] } : emptyCell());
-      t.aligns.splice(from + 1, 0, t.aligns[from] ?? null);
-    };
-    const delCol = (at: number) => (t: TableSource) => {
-      for (const row of t.rows) row.splice(at, 1);
-      t.aligns.splice(at, 1);
-    };
+
     const token = ++menuToken;
     openContextMenu(
       ev.clientX,
@@ -584,70 +613,82 @@
         {
           icon: "table-row-plus-before",
           label: $t("table.rowAbove"),
-          action: apply((t) => t.rows.splice(r, 0, emptyRow())),
+          action: apply((t) => insertRow(t.rows, r, cols)),
         },
         {
           icon: "table-row-plus-after",
           label: $t("table.rowBelow"),
-          action: apply((t) => t.rows.splice(r + 1, 0, emptyRow())),
+          action: apply((t) => insertRow(t.rows, r + 1, cols)),
         },
         {
           icon: "table-arrow-up",
           label: $t("table.rowMoveUp"),
           disabled: r === 0,
-          action: apply(moveRow(r, -1)),
+          action: apply((t) => moveRow(t.rows, r, -1)),
         },
         {
           icon: "table-arrow-down",
           label: $t("table.rowMoveDown"),
           disabled: r === rows.length - 1,
-          action: apply(moveRow(r, 1)),
+          action: apply((t) => moveRow(t.rows, r, 1)),
         },
         {
           icon: "table-row-copy",
           label: $t("table.rowCopy"),
-          action: apply(copyRow(r)),
+          action: apply((t) => copyRow(t.rows, r)),
         },
         {
           icon: "table-row-remove",
           label: $t("table.rowDelete"),
           disabled: !canDelRow,
-          action: apply((t) => t.rows.splice(r, 1)),
+          action: apply((t) => deleteRow(t.rows, r)),
         },
         { kind: "separator", label: "" },
         { kind: "header", label: $t("table.col") },
         {
           icon: "table-column-plus-before",
           label: $t("table.colLeft"),
-          action: apply(addCol(c)),
+          action: apply((t) =>
+            insertCol(t.rows, t.aligns as (TableAlign | null)[], c),
+          ),
         },
         {
           icon: "table-column-plus-after",
           label: $t("table.colRight"),
-          action: apply(addCol(c + 1)),
+          action: apply((t) =>
+            insertCol(t.rows, t.aligns as (TableAlign | null)[], c + 1),
+          ),
         },
         {
           icon: "table-arrow-left",
           label: $t("table.colMoveLeft"),
           disabled: c === 0,
-          action: apply(moveCol(c, -1)),
+          action: apply((t) =>
+            moveCol(t.rows, t.aligns as (TableAlign | null)[], c, -1),
+          ),
         },
         {
           icon: "table-arrow-right",
           label: $t("table.colMoveRight"),
-          disabled: c === colCount - 1,
-          action: apply(moveCol(c, 1)),
+          disabled: c === cols - 1,
+          action: apply((t) =>
+            moveCol(t.rows, t.aligns as (TableAlign | null)[], c, 1),
+          ),
         },
         {
           icon: "table-column-copy",
           label: $t("table.colCopy"),
-          action: apply(copyCol(c)),
+          action: apply((t) =>
+            copyCol(t.rows, t.aligns as (TableAlign | null)[], c),
+          ),
         },
         {
           icon: "table-column-remove",
           label: $t("table.colDelete"),
           disabled: !canDelCol,
-          action: apply(delCol(c)),
+          action: apply((t) =>
+            deleteCol(t.rows, t.aligns as (TableAlign | null)[], c),
+          ),
         },
       ],
       {
