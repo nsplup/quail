@@ -257,6 +257,58 @@ function commonMarkdownExtensions(): Extension[] {
   ];
 }
 
+/**
+ * 统一的剪切命令（linewise）。
+ * - 有选区：剪切选区内容；
+ * - 无选区：剪切光标所在整行（含行尾换行符，与 CM6 惯例一致）。
+ * 剪贴板写入使用异步 API，删除操作走标准 CM6 事务，确保
+ * onchange / dirty$ / 撤销历史均正确触发。
+ *
+ * beforeScroll：删除后滚动前的回调，调用方可注入程序性滚动抑制
+ * （如 markProgrammaticScroll），风格同 indentWithScroll。
+ */
+function cutLinewise(beforeScroll?: () => void): Command {
+  return (view: EditorView): boolean => {
+    const state = view.state;
+    if (!state.facet(EditorView.editable) || state.readOnly) return false;
+
+    const sel = state.selection.main;
+    let from: number;
+    let to: number;
+
+    if (!sel.empty) {
+      // 有选区：剪切选区
+      from = sel.from;
+      to = sel.to;
+    } else {
+      // 无选区：剪切整行（含换行符，与 Ctrl+X 的 linewise 语义一致）
+      const line = state.doc.lineAt(sel.head);
+      from = line.from;
+      to = line.number < state.doc.lines ? line.to + 1 : line.to;
+    }
+
+    const text = state.sliceDoc(from, to);
+
+    // 异步写入剪贴板：在键盘事件处理器中调用，通常被视作用户手势
+    navigator.clipboard.writeText(text).catch(() => {
+      // 写入失败时静默忽略，不阻断删除（用户剪切意图明确）
+    });
+
+    // 滚动前先置位程序性滚动抑制（避免删除引发的滚动回写 ontopline）
+    beforeScroll?.();
+
+    // 同步删除 + 光标落到删除起点 + 滚动到可见区
+    view.dispatch({
+      changes: { from, to, insert: "" },
+      selection: EditorSelection.cursor(from),
+      effects: EditorView.scrollIntoView(from, { y: "nearest", yMargin: 6 }),
+      userEvent: "delete.cut",
+    });
+
+    return true;
+  };
+}
+
 /** 两边共用的按键（撤销/重做/反向缩进 + CM 默认键位）。
  *  - 调用方专属键（Mod-s / Mod-f / Tab / Mod-Enter / Esc）由各自工厂
  *    按需前置声明，不在此列；
@@ -355,6 +407,8 @@ export function createEditorApi(
           { key: "Mod-a", run: selectAllSuppressCursorSync },
           { key: "Tab", run: indentWithScroll(indentMore, markProgrammaticScroll) },
           { key: "Shift-Tab", run: indentWithScroll(indentLess, markProgrammaticScroll) },
+          /** 剪切行为抑制由滚动触发的滚动同步，依靠编辑行为上报光标行来同步滚动 */
+          { key: "Mod-x", preventDefault: true, run: cutLinewise(markProgrammaticScroll) },
           ...commonKeymap(),
         ]),
         EditorView.updateListener.of((u) => {
@@ -971,6 +1025,7 @@ export function createCellEditor(
           { key: "Escape", preventDefault: true, run: () => (handlers.oncancel(), true) },
           { key: "Tab", run: indentMore },
           { key: "Shift-Tab", run: indentLess },
+          { key: "Mod-x", preventDefault: true, run: cutLinewise() },
           ...commonKeymap(),
         ]),
         EditorView.updateListener.of((u) => {
