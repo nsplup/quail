@@ -656,7 +656,7 @@
   color: var(--ui-accent);
 }
 
-/* ---------- md-image（MarkdownImage 组件容器，预览图片三态） ----------
+/* ---------- .md-image（MarkdownImage 组件容器，预览图片三态） ----------
  *
  * 两种形态（由管线 data-inline 标注分派）：
  * - 块级（无标注，独立成段的图片，含 <a> 包裹独自成块）：
@@ -669,7 +669,7 @@
  * 占位图标为组件内联 SVG（.md-img-ic），不再使用 emoji 伪元素。
  */
 
-md-image {
+.md-image {
   --md-image-height: 240px;
   /* 运行时在任意祖先上覆盖即可同步调整占位高度 */
 
@@ -697,7 +697,7 @@ md-image {
   vertical-align: middle;
 }
 
-md-image .md-img {
+.md-image .md-img {
   display: block;
   width: 100%;
   height: auto;
@@ -711,17 +711,17 @@ md-image .md-img {
  *  块级下占位层被推出容器可视区（overflow:hidden 裁剪），行内下占位行
  *  被推出容器右侧。display:none 与 error 态行为统一，占位态容器内
  *  永远只有占位层一个布局子项。 */
-md-image:not([data-status="loaded"]) .md-img {
+.md-image:not([data-status="loaded"]) .md-img {
   display: none;
 }
 
-md-image[data-status="loaded"] {
+.md-image[data-status="loaded"] {
   /* success：高度随图片比例自适应（覆盖占位固定高度） */
   height: auto;
   background: transparent;
 }
 
-md-image[data-status="loaded"] .md-img {
+.md-image[data-status="loaded"] .md-img {
   visibility: visible;
 }
 
@@ -752,21 +752,21 @@ md-image[data-status="loaded"] .md-img {
 }
 
 /* 加载中：描边与失败态占位一致（虚线边框）；图标为加载环旋转动画（无透明度动画） */
-md-image[data-status="loading"] {
+.md-image[data-status="loading"] {
   border: 1px dashed var(--ui-border);
 }
 
-md-image[data-inline][data-status="loading"] {
+.md-image[data-inline][data-status="loading"] {
   border: 1px dashed var(--ui-border);
 }
 
-md-image[data-status="loading"] .md-img-ic {
+.md-image[data-status="loading"] .md-img-ic {
   animation: mdimg-spin 1s linear infinite;
 }
 
 /* 加载失败：受限（401/403）或网络错误，虚线边框区分
  *  （img 的 display:none 已由上方非 loaded 态统一规则覆盖，error 态不单独处理） */
-md-image[data-status="error"] {
+.md-image[data-status="error"] {
   border: 1px dashed var(--ui-border);
 }
 
@@ -791,7 +791,7 @@ md-image[data-status="error"] {
 /* 块级图片 loaded 态：alt 描述文本（caption） */
 .md-img-cap {
   margin-top: 8px;
-  /* 原容器 gap 的间距改由 caption 提供（占位态居中一致性，见 md-image 注释） */
+  /* 原容器 gap 的间距改由 caption 提供（占位态居中一致性，见 .md-image 注释） */
   max-width: 100%;
   padding: 0 10px;
   font-size: 12px;
@@ -806,7 +806,7 @@ md-image[data-status="error"] {
  * 占位行内布局 [SVG 图标][说明文本]，高度以行高为准。
  */
 
-md-image[data-inline] {
+.md-image[data-inline] {
   display: inline-flex;
   flex-direction: row;
   align-items: center;
@@ -826,19 +826,19 @@ md-image[data-inline] {
   vertical-align: middle;
 }
 
-md-image[data-inline][data-status="loaded"] {
+.md-image[data-inline][data-status="loaded"] {
   background: transparent;
   padding: 0;
 }
 
-md-image[data-inline] .md-img {
+.md-image[data-inline] .md-img {
   width: auto;
   height: auto;
   max-width: 100%;
   border-radius: 4px;
 }
 
-md-image[data-inline] .md-img-ph {
+.md-image[data-inline] .md-img-ph {
   flex-direction: row;
   /* 显式声明（覆盖继承自块级 column 版的 align-items:center）：
    *    行内横排下图标与说明文本沿同一水平中线对齐 */
@@ -846,25 +846,25 @@ md-image[data-inline] .md-img-ph {
   gap: 0.35em;
 }
 
-md-image[data-inline] .md-img-ic {
+.md-image[data-inline] .md-img-ic {
   width: 1.05em;
   height: 1.05em;
 }
 
-md-image[data-inline] .md-img-ph-t {
+.md-image[data-inline] .md-img-ph-t {
   font-size: 0.9em;
   line-height: 1.4;
 }
 
 /* 行内 error：描边与块级一致（虚线边框区分失败态） */
-md-image[data-inline][data-status="error"] {
+.md-image[data-inline][data-status="error"] {
   border: 1px dashed var(--ui-border);
 }
 
 /* 链接内图片：链接本体不绘制下划线。
  *  text-decoration 由祖先绘制、无法由后代取消（Text Decoration L3 §2.2），
  *  只能让绘制者（<a>）自身关闭；否则 hover 时下划线会横穿图片/占位层。 */
-.md-block a:has(md-image) {
+.md-block a:has(.md-image) {
   text-decoration: none !important;
 }
 

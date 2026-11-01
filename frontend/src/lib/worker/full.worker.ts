@@ -18,7 +18,14 @@
  */
 import "./dom-shim";
 
-import { buildBlocks, parseMarkdown, rootToHast } from "../markdown/markdown-core";
+import {
+  blocksFromHast,
+  buildRefsBaselineFull,
+  buildRefsSnapshot,
+  convertRoot,
+  parseMarkdown,
+  splitLines,
+} from "../markdown/markdown-core";
 import type { Root as MdastRoot } from "mdast";
 import type { Root as HastRoot } from "hast";
 import type { PreviewBlock } from "../types";
@@ -48,9 +55,22 @@ function runFull(req: Extract<RebuildPortIn, { type: "fullRequest" }>): void {
       return;
     }
     const root: MdastRoot = parseMarkdown(req.src);
-    const hast: HastRoot = rootToHast(root);
-    const blocks: PreviewBlock[] = buildBlocks(root, req.src);
-    const out: RebuildPortOut = { type: "fullState", src: req.src, root, hast, blocks };
+    // 单次转换同时产出 HAST 与引用声明收集器（旧路径 rootToHast +
+    // buildBlocks 会转换两次，纯历史低效，此处合并）
+    const conv = convertRoot(root);
+    const hast: HastRoot = conv.hast;
+    const blocks: PreviewBlock[] = blocksFromHast(hast, splitLines(req.src).length).blocks;
+    // 引用基线 / 快照：与基线一并回传，增量 worker 采纳基线后继续增量拼接
+    const refsBaseline = buildRefsBaselineFull(root, blocks, conv.refsCollector);
+    const out: RebuildPortOut = {
+      type: "fullState",
+      src: req.src,
+      root,
+      hast,
+      blocks,
+      refs: buildRefsSnapshot(refsBaseline),
+      refsBaseline,
+    };
     lastParsed = { hash: req.hash, out };
     port.postMessage(out);
   } catch (err) {

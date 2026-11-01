@@ -35,8 +35,10 @@ import {
   countTextAs,
   splitLines,
   SELF_HEAL_EVERY,
+  EMPTY_REFS,
   type IncrementalParseState,
   type SegmentPatchRange,
+  type RefsSnapshot,
 } from "../markdown/markdown-core";
 import type { Root as MdastRoot } from "mdast";
 import { contentHash } from "./contentHash";
@@ -239,7 +241,9 @@ function postFull(
   segments: HastSegment[],
   blocks: PreviewBlock[],
   root: MdastRoot,
-  src: string
+  src: string,
+  /** 引用声明快照：首批 batch（冷启动段重建前落地 STORE）与 result 各携带一份 */
+  refs: RefsSnapshot
 ): void {
   const outline = buildOutline(root, blocks);
   // 全量：块级基线整体重建 + 缓存回填（全量统计是口径值的最权威来源，
@@ -251,10 +255,19 @@ function postFull(
   // 空文档也必须发首批（items 为空）：主线程以 segStart=0 识别「清空旧列表」，
   // 缺批会让 segments$ 残留上一份文档的段（预览不随清空更新）
   if (segments.length === 0) {
-    post({ type: "batch", rev, segStart: 0, items: [], cold });
+    post({ type: "batch", rev, segStart: 0, items: [], cold, refs });
   }
   for (let i = 0; i < segments.length; i += FULL_BATCH_SEGMENTS) {
-    post({ type: "batch", rev, segStart: i, items: segments.slice(i, i + FULL_BATCH_SEGMENTS), cold });
+    // refs 仅随首批（segStart=0）回传：主线程在段重建前落地 STORE，
+    // 引用组件渲染期即可解析（例行全量走 result 的 refs 原子采纳）
+    post({
+      type: "batch",
+      rev,
+      segStart: i,
+      items: segments.slice(i, i + FULL_BATCH_SEGMENTS),
+      cold,
+      refs: i === 0 ? refs : undefined,
+    });
   }
   post({
     type: "result",
@@ -265,6 +278,7 @@ function postFull(
     blocks,
     outline,
     counts,
+    refs,
   });
 }
 
@@ -305,12 +319,15 @@ function adoptRebuildState(msg: Extract<RebuildPortOut, { type: "fullState" }>):
   state.blocks = msg.blocks;
   state.incrementalCount = 0;
   state.lastFullAt = Date.now();
+  /* 引用基线随基线原子替换（与 blocks 对齐，后续增量拼接按新基线走）；
+     缺失（旧版重建 worker 回包）时置 null → 下一次增量保守全量自愈 */
+  state.refsBaseline = msg.refsBaseline ?? null;
   if (drifted) {
     // 增量启发式误差累积导致块行界漂移：主线程段列表与块列表已错位，
     // 后续补丁 splice 会写错区间 → 必须把校正后的段列表整体回传
     // （例行全量路径：主线程缓冲批次 + result 到达后原子采纳）
     const segments = splitSegments(msg.hast);
-    postFull(-1, false, segments, msg.blocks, msg.root, msg.src);
+    postFull(-1, false, segments, msg.blocks, msg.root, msg.src, msg.refs ?? EMPTY_REFS);
   }
   /* 块列表一致（常态）：静默替换。旧基线树与新基线树内容相同，主线程
      持有的未变段引用继续有效，后续增量补丁正常 splice。 */
@@ -336,6 +353,7 @@ function resetEmpty(): void {
   state.blocks = [];
   state.incrementalCount = 0;
   state.lastFullAt = 0;
+  state.refsBaseline = null; // 引用基线随状态归零（下一次真实解析冷启动全量重建）
   blockCounts = null; // 块级计数基线随状态归零（内容寻址的 countCache 保留：同内容哈希回传仍正确）
   if (healTimer !== undefined) {
     clearTimeout(healTimer);
@@ -370,9 +388,10 @@ function parse(src: string, forceFull: boolean, rev: number): void {
   state.blocks = res.blocks;
   state.incrementalCount = res.incrementalCount;
   state.lastFullAt = res.lastFullAt;
+  state.refsBaseline = res.refsBaseline; // 引用基线与 blocks 同步推进（增量拼接依据）
 
   if (res.full) {
-    postFull(rev, coldFull, splitSegments(res.hast), res.blocks, res.root, src);
+    postFull(rev, coldFull, splitSegments(res.hast), res.blocks, res.root, src, res.refs);
   } else {
     // 增量统计：复用增量解析的输入（补丁区间 + 新块行界）做块级更新，
     // 未变块不重新分段；基线不可用（口径刚切换 / 上轮未建基线 / 不对齐）
@@ -402,6 +421,8 @@ function parse(src: string, forceFull: boolean, rev: number): void {
       blocks: res.blocks,
       outline: buildOutline(res.root, res.blocks),
       counts: { mode: countMode, value },
+      // 引用快照与段补丁同消息原子落地（主线程先 refs 后 splice）
+      refs: res.refs,
     });
     // 例行周期全量：阈值倍数触发（重建 worker 并行执行，不阻塞增量请求）
     if (res.incrementalCount % SELF_HEAL_EVERY === 0) requestRebuild();

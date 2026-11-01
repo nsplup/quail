@@ -14,6 +14,11 @@
  *   parseMarkdown → mdastToHastRaw（注入行号锚 + rehype-raw 融合 + rehype-sanitize 净化）→ HAST Root
  *   → splitSegments → 段列表（经结构化克隆回传主线程）
  *   → MarkdownRenderer/MarkdownNode 递归组件 → DOM。
+ *   引用体系：定义/脚注定义在 handler 期间收集进 RefsCollector（不渲染
+ *   DOM），解析结束全量 finalize 成 RefsSnapshot 随结果回传，主线程全局
+ *   STORE（reference-store.ts）供脚注引用 / 链接引用 / 引用式图片组件
+ *   渲染期查找；脚注引用与链接引用以数据层标记（md-footnote-ref /
+ *   md-link-ref）承载，图片统一为 img 元素（MarkdownNode 映射组件）。
  * 块行界由锚 comment 驱动（blocksFromHast），供滚动同步 / 大纲 / 增量解析使用。
  */
 import { unified } from "unified";
@@ -38,6 +43,10 @@ import type {
   Image,
   ImageReference,
   Reference,
+  Definition,
+  FootnoteDefinition,
+  FootnoteReference,
+  LinkReference,
 } from "mdast";
 import type { PreviewBlock, OutlineItem } from "../types";
 import { rewriteImageSrc } from "../imgproxy";
@@ -77,10 +86,12 @@ export function parseMarkdown(src: string): Root {
  *   白名单兜底；
  * - id 显式进 '*' 白名单（默认已含，显式声明固化语义）：标题锚点
  *   （remark-slug）与脚注定义 / 回链 id 的载体；
- * - md-image 进 tagNames：编译期 image handler 产物的容器标签
- *   （未知标签默认被 unwrap，MarkdownImage 组件容器会丢失）；
- * - data* 进 '*' 属性：md-image 的 data-src / data-alt 与 data-inline
- *   等标注（hast 属性键经规范化可能为 dataSrc 或 data-src，
+ * - md-footnote-ref / md-link-ref 进 tagNames：脚注引用与链接引用
+ *   handler 产物的数据层标记标签——只存在于 HAST 数据（渲染层
+ *   MarkdownNode 映射为组件，永不进 DOM），未知标签默认被 unwrap，
+ *   必须声明才能幸存 sanitize；
+ * - data* 进 '*' 属性：img 的 data-src / data-alt / data-ref-* 与
+ *   data-inline 等标注（hast 属性键经规范化可能为 dataSrc 或 data-src，
  *   'data*' 通配两者；后者由 annotateImageContext 在净化后写入，
  *   此处仅作声明）。
  */
@@ -88,7 +99,11 @@ const sanitizeSchema = {
   ...defaultSchema,
   allowComments: true,
   clobberPrefix: "",
-  tagNames: [...(defaultSchema.tagNames ?? []), "md-image"],
+  tagNames: [
+    ...(defaultSchema.tagNames ?? []),
+    "md-footnote-ref",
+    "md-link-ref",
+  ],
   attributes: {
     ...(defaultSchema.attributes ?? {}),
     "*": [...(defaultSchema.attributes?.["*"] ?? []), "id", "data*"],
@@ -107,19 +122,226 @@ interface RawResult {
   hast: HastRoot;
   /** 树中任意深度存在 raw HTML（rehype-raw 执行过融合） */
   hasRaw: boolean;
+  /** 本次转换期间由 definition/footnoteDefinition handler 写入的收集器 */
+  refsCollector: RefsCollector;
 }
 
-/** mdast-util-to-hast state 中本管线消费的最小定义查找接口 */
+/** mdast-util-to-hast state 中本管线消费的最小接口定义
+ *  （definitionById：旧 imageReference handler 的转换期定义查找，
+ *  已被 STORE 渲染期解析取代；all：子节点转换，供脚注内容收集） */
 interface MdastToHastState {
   definitionById: Map<string, { url?: string | null }>;
+  /** 转换 node.children（内部按 handlers 递归，产出与主链路同构的 HAST） */
+  all(node: { children: MdastContent[] }): HastContent[];
+}
+
+/* ---------------- 引用声明收集与全局 STORE 快照（worker 侧） ----------------
+ *
+ * 设计（与产品需求一致）：
+ * - definition / footnoteDefinition handler 保持「不渲染 DOM」语义（返回
+ *   undefined，原位置无输出），但在 handler 执行期间把声明收集进本次转换
+ *   的 RefsCollector（脚注定义的内容经 state.all 转成 HAST，内层引用 /
+ *   图片标记自然生成，支持脚注嵌套）；
+ * - footnoteReference / linkReference handler 产出数据层标记元素
+ *   （md-footnote-ref / md-link-ref，只携带 identifier / label /
+ *   referenceType，不带编号与解析结果），渲染层组件从主线程全局 STORE
+ *   查找——因此增量解析复用的 head/tail 段引用标记永远不会陈旧，
+ *   也修复了旧实现在 chunk 局部转换期间查不到 head/tail 定义而误回退
+ *   字面量的问题；
+ * - 解析结束时（全量 / 增量 / 例行重建基线采纳）统一 finalize：
+ *   按块维护 defsByBlock / refSeqByBlock 基线（与 blockCounts 同模式，
+ *   增量只重算被替换块），全量构建 RefsSnapshot 随解析结果回传主线程，
+ *   原子更新全局 STORE（见 reference-store.ts）；
+ * - 重复定义遵循规范：CommonMark §4.7 与 GFM 脚注扩展均为「首个同名
+ *   定义生效」，在快照构建时按文档序首现去重；
+ * - label 复杂字符串（CJK 等）：匹配键用 mdast identifier——micromark
+ *   在解析期对引用与定义双侧做了同一套规范化（Unicode case fold +
+ *   折叠内部空白 + 去首尾空白），CJK 原样保留，直接全等匹配即是规范语义；
+ *   字面量回退显示用 label（原始书写形式）。
+ */
+
+/** 链接定义声明（[label]: url "title"）——仅用于解析查找，无任何渲染路径 */
+export interface LinkDefEntry {
+  /** 规范化匹配键（micromark 产出，CJK 原样；引用侧同键全等匹配） */
+  identifier: string;
+  /** 原始书写 label（字面量回退显示用） */
+  label: string;
+  url: string;
+  title: string | null;
+}
+
+/** 脚注定义声明（[^label]: 内容）——内容由主线程组件渲染（支持嵌套） */
+export interface FootnoteDefEntry {
+  identifier: string;
+  label: string;
+  /** 定义内容的 HAST 子树（已过 raw 融合 + sanitize + 上下文标注，
+   *  内层 md-footnote-ref / md-link-ref / img 标记可被 MarkdownNode 渲染） */
+  children: HastContent[];
+}
+
+/** 脚注引用统计（按首次引用出现顺序；编号 = 序 + 1，GFM 语义） */
+export interface FootnoteRefInfo {
+  identifier: string;
+  /** 文档内引用出现次数（列表回链数量） */
+  count: number;
+}
+
+/** 引用声明快照：随解析结果回传，主线程全量更新全局 STORE */
+export interface RefsSnapshot {
+  /** 全部链接定义（首现去重后，文档序） */
+  links: LinkDefEntry[];
+  /** 全部脚注定义（首现去重后，文档序） */
+  footnotes: FootnoteDefEntry[];
+  /** 脚注引用（首次出现顺序；未引用的定义不在此列，不进脚注列表） */
+  footnoteRefs: FootnoteRefInfo[];
+}
+
+/** 空快照（主线程 STORE 初始 / 空文档落地用） */
+export const EMPTY_REFS: RefsSnapshot = {
+  links: [],
+  footnotes: [],
+  footnoteRefs: [],
+};
+
+/** handler 收集的中间条目（worker 内部；链接条目直接可作快照输出） */
+export type RefsDefEntry =
+  | { kind: "link"; entry: LinkDefEntry }
+  | { kind: "footnote"; entry: FootnoteDefEntry };
+
+/** 单次 toHast 转换的引用声明收集器：mdast 定义节点 → 条目
+ *  （以节点对象为键；同一节点在本次转换内只收集一次，天然去重，
+ *  跨转换的重复定义由快照构建的文档序首现规则裁决） */
+export type RefsCollector = Map<MdastContent, RefsDefEntry>;
+
+/** 引用基线（增量解析用；与 blocks 一一对齐，语义同 blockCounts：
+ *  只重算被替换块，head/tail 按下标复用） */
+export interface RefsBaseline {
+  /** 每块内的定义条目（文档序内序） */
+  defsByBlock: RefsDefEntry[][];
+  /** 每块内的脚注引用 identifier 序列（文档序内序） */
+  refSeqByBlock: string[][];
+}
+
+/** 读取 HAST 元素属性（兼容 sanitize 前后两种键名形态：
+ *  handler 写入 "data-identifier"，sanitize 后规范化为 dataIdentifier） */
+export function readRefProp(el: HastElement, name: string): string {
+  const props = (el.properties ?? {}) as Record<string, unknown>;
+  const camel = name.replace(/-([a-z])/g, (_, ch: string) => ch.toUpperCase());
+  const v = props[name] ?? props[camel];
+  return v == null ? "" : String(v);
+}
+
+/** 脚注定义内容 mini 管线：state.all 产物 →（含 raw 时）融合 → sanitize
+ *  →（含 raw 时）img 归一化 → 剥 position → 图片上下文标注 → 任务列表
+ *  前导空白剥离。收集内容不进主管线树（handler 返回 undefined），
+ *  必须在此补齐等价处理，否则脚注内的 raw HTML 会被跳过且未经净化。 */
+function processFootnoteContent(children: HastContent[]): HastContent[] {
+  if (!children.length) return children;
+  const root = { type: "root", children } as unknown as HastRoot;
+  const hasRaw = children.some(treeHasRaw);
+  let out = hasRaw ? (rehypeRaw(root as never) as HastRoot) : root;
+  out = rehypeSanitize(sanitizeSchema)(out as never) as unknown as HastRoot;
+  if (hasRaw) normalizeHtmlImages(out);
+  for (const n of out.children as HastContent[]) stripHastPosition(n);
+  annotateImageContext(out);
+  stripTaskListLeadSpace(out);
+  return out.children as HastContent[];
+}
+
+/** 深度遍历（文档序）收集定义节点条目与脚注引用出现
+ *  （line 为调用方语义：全量传 0（mdast 行号即绝对行号），增量传 baseLine） */
+export function walkRefs(
+  children: MdastContent[],
+  collector: RefsCollector,
+  baseLine: number
+): { defs: { entry: RefsDefEntry; line: number }[]; fnRefs: { identifier: string; line: number }[] } {
+  const defs: { entry: RefsDefEntry; line: number }[] = [];
+  const fnRefs: { identifier: string; line: number }[] = [];
+  const visit = (node: MdastContent): void => {
+    const n = node as unknown as {
+      type: string;
+      children?: MdastContent[];
+      identifier?: string;
+      position?: { start: { line: number } };
+    };
+    if (n.type === "definition" || n.type === "footnoteDefinition") {
+      const entry = collector.get(node);
+      const line = (n.position?.start.line ?? 1) + baseLine;
+      if (entry) defs.push({ entry, line }); // handler 必已收集；防御性跳过
+    } else if (n.type === "footnoteReference") {
+      fnRefs.push({
+        identifier: String(n.identifier ?? ""),
+        line: (n.position?.start.line ?? 1) + baseLine,
+      });
+    }
+    if (Array.isArray(n.children)) for (const c of n.children) visit(c);
+  };
+  for (const c of children) visit(c);
+  return { defs, fnRefs };
+}
+
+/** 由基线构建快照（首现去重 + 引用顺序 / 次数统计） */
+export function buildRefsSnapshot(baseline: RefsBaseline): RefsSnapshot {
+  const links: LinkDefEntry[] = [];
+  const footnotes: FootnoteDefEntry[] = [];
+  const seenLink = new Set<string>();
+  const seenFn = new Set<string>();
+  for (const arr of baseline.defsByBlock) {
+    for (const d of arr) {
+      if (d.kind === "link") {
+        if (seenLink.has(d.entry.identifier)) continue; // CommonMark：首个同名定义生效
+        seenLink.add(d.entry.identifier);
+        links.push(d.entry);
+      } else {
+        if (seenFn.has(d.entry.identifier)) continue; // GFM：首个同名脚注定义生效
+        seenFn.add(d.entry.identifier);
+        footnotes.push(d.entry);
+      }
+    }
+  }
+  const footnoteRefs: FootnoteRefInfo[] = [];
+  const idx = new Map<string, number>();
+  for (const arr of baseline.refSeqByBlock) {
+    for (const ident of arr) {
+      const i = idx.get(ident);
+      if (i === undefined) {
+        idx.set(ident, footnoteRefs.length);
+        footnoteRefs.push({ identifier: ident, count: 1 });
+      } else {
+        footnoteRefs[i].count++;
+      }
+    }
+  }
+  return { links, footnotes, footnoteRefs };
+}
+
+/** 全量路径：mdast root + 块行界 → 引用基线（定义/引用按行归属到块） */
+export function buildRefsBaselineFull(
+  root: Root,
+  blocks: PreviewBlock[],
+  collector: RefsCollector
+): RefsBaseline {
+  const { defs, fnRefs } = walkRefs(root.children, collector, 0);
+  const defsByBlock: RefsDefEntry[][] = blocks.map(() => []);
+  for (const d of defs) {
+    const j = blockIndexForLine(blocks, d.line);
+    if (j >= 0) defsByBlock[j].push(d.entry);
+  }
+  const refSeqByBlock: string[][] = blocks.map(() => []);
+  for (const r of fnRefs) {
+    const j = blockIndexForLine(blocks, r.line);
+    if (j >= 0) refSeqByBlock[j].push(r.identifier);
+  }
+  return { defsByBlock, refSeqByBlock };
 }
 
 /**
  * 未定义引用的字面回退（与 mdast-util-to-hast 默认 imageReference 行为一致）：
  * 全写 `![alt][id]`、收窄 `![alt][]`、缩写 `![alt]` 分别还原为对应源码文本。
  * （alt 兼容 null：mdast ImageReference.alt 可为 string | null | undefined）
+ * 导出供 MarkdownImage 组件（STORE 渲染期解析失败的字面量回退）复用。
  */
-function revertReferenceText(node: Reference & { alt?: string | null }): string {
+export function revertReferenceText(node: Reference & { alt?: string | null }): string {
   let suffix = "]";
   if (node.referenceType === "collapsed") suffix += "[]";
   else if (node.referenceType === "full") suffix += `[${node.label || node.identifier}]`;
@@ -141,55 +363,106 @@ function isMdlAnchor(node: HastContent): boolean {
 }
 
 function mdastToHastRaw(root: Root): RawResult {
+  /* 引用声明收集器：definition / footnoteDefinition handler 在转换期间
+     写入（walkRefs 按 mdast 节点对象取回），解析结束时 finalize 成快照 */
+  const refsCollector: RefsCollector = new Map();
   const hast = toHast(root as never, {
     allowDangerousHtml: true,
-    // <img> → <md-image>（渲染层 MarkdownImage 组件的容器标签）：
-    // data-src 经 ImgProxy 重写（本地白名单 / 远程缓存）
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     handlers: {
       // 签名：handler(state, node, parent) —— 第一个参数是 state 上下文
       image: ((_state: never, node: Image) =>
         ({
           type: "element",
-          tagName: "md-image",
+          tagName: "img",
           properties: {
             "data-src": rewriteImageSrc(node.url),
             "data-alt": node.alt ?? "",
           },
           children: [],
         }) as unknown as HastContent) as never,
-      // 链接引用式图片（![alt][id] / ![alt][] / ![alt]）在 mdast 中是
-      // imageReference 节点，定义解析发生在 remark-parse 内部，toHast 默认
-      // handler 会直接产出普通 <img>——绕过上面的 image handler，
-      // 导致此类图片不走 MarkdownImage 组件（无 ImgProxy 重写 / 三态占位）。
-      // 这里按默认 handler 的语义（definitionById 大写键查找；未定义引用
-      // 回退字面文本）把可解析的引用也归一到 md-image：
-      imageReference: ((state: MdastToHastState, node: ImageReference) => {
-        const def = state.definitionById.get(String(node.identifier).toUpperCase());
-        if (!def) {
-          // 未定义引用：回退字面文本（text 节点；handler 返回值不会被
-          // mdast-util-to-hast 自动包装成节点，必须显式给 {type:"text"}）
-          return {
-            type: "text",
-            value: revertReferenceText(node),
-          } as unknown as HastContent;
-        }
-        return {
+      // 链接引用式图片（![alt][id] / ![alt][] / ![alt]）：不解析定义，
+      // 产出携带引用信息的 img 标记，渲染层 MarkdownImage 从全局 STORE
+      // 查找（修复 chunk 局部转换期间查不到 head/tail 定义而误回退字面量）；
+      // 引用不可用 / 链接为空时由组件显示字面量
+      imageReference: ((_state: never, node: ImageReference) =>
+        ({
           type: "element",
-          tagName: "md-image",
+          tagName: "img",
           properties: {
-            "data-src": rewriteImageSrc(def.url ?? ""),
+            "data-ref-identifier": node.identifier,
+            "data-ref-label": node.label ?? node.identifier,
+            "data-ref-type": node.referenceType,
             "data-alt": node.alt ?? "",
           },
           children: [],
-        } as unknown as HastContent;
+        }) as unknown as HastContent) as never,
+      // 链接引用（[text][id] / [text][] / [text]）：同上标记化（children =
+      // 链接文本的行内内容），渲染层 MarkdownLinkRef 从 STORE 查找
+      linkReference: ((state: MdastToHastState, node: LinkReference) =>
+        ({
+          type: "element",
+          tagName: "md-link-ref",
+          properties: {
+            "data-identifier": node.identifier,
+            "data-label": node.label ?? node.identifier,
+            "data-ref-type": node.referenceType,
+          },
+          children: state.all(node),
+        }) as unknown as HastContent) as never,
+      // 脚注引用（[^label]）：标记化（默认 handler 会产出 sup + 注册
+      // footnoteOrder，进而触发 toHast 顶层 footer() 追加 section.footnotes
+      // ——重写后不再注册，脚注列表完全由 STORE 驱动的组件渲染）
+      footnoteReference: ((_state: never, node: FootnoteReference) =>
+        ({
+          type: "element",
+          tagName: "md-footnote-ref",
+          properties: {
+            "data-identifier": node.identifier,
+            "data-label": node.label ?? node.identifier,
+          },
+          children: [],
+        }) as unknown as HastContent) as never,
+      // 链接定义（[label]: url）：handler 期间收集进收集器（解析结束时
+      // 全量更新 STORE），返回 undefined 保持原位不渲染 DOM 的既有语义
+      definition: ((_state: never, node: Definition) => {
+        if (!refsCollector.has(node)) {
+          refsCollector.set(node, {
+            kind: "link",
+            entry: {
+              identifier: node.identifier,
+              label: node.label ?? node.identifier,
+              url: node.url ?? "",
+              title: node.title ?? null,
+            },
+          });
+        }
+        return undefined;
+      }) as never,
+      // 脚注定义（[^label]: 内容）：收集进收集器——内容经 state.all 转为
+      // HAST（内层引用 / 图片标记自然生成，支持脚注嵌套），并补齐 raw
+      // 融合 / sanitize / 上下文标注（收集内容不进主管线树，见
+      // processFootnoteContent）；返回 undefined 不渲染 DOM，
+      // 也不生成默认的 section.footnotes
+      footnoteDefinition: ((state: MdastToHastState, node: FootnoteDefinition) => {
+        if (!refsCollector.has(node)) {
+          refsCollector.set(node, {
+            kind: "footnote",
+            entry: {
+              identifier: node.identifier,
+              label: node.label ?? node.identifier,
+              children: processFootnoteContent(state.all(node)),
+            },
+          });
+        }
+        return undefined;
       }) as never,
     } as never,
   }) as HastRoot;
   /* 表格来源标记（Markdown vs raw HTML）：
    * - Markdown（GFM）表格在 toHast 产物上先打 data-md-table，再进入
    *   rehype-raw 融合 / sanitize。实测（hast-util-raw 9）融合保留既有元素的
-   *   properties（md-image 的 data-src 同理），且 'data*' 在 sanitize 白名单，
+   *   properties（img 的 data-src 同理），且 'data*' 在 sanitize 白名单，
    *   属性键会被规范化为 dataMdTable（消费方需兼容两种键名）；
    * - 融合后无该标记的 <table> 即 raw HTML 来源，补打 data-html-table。
    * 可编辑表格组件（EditableTable）按此标记决定反向更新时输出格式化后的
@@ -212,15 +485,16 @@ function mdastToHastRaw(root: Root): RawResult {
   const result = hasRaw ? (rehypeRaw(anchored as never) as HastRoot) : anchored;
   // rehype-sanitize 净化（XSS 白名单）。必须在 rehype-raw 融合之后——
   // 融合前 raw HTML 只是 text / raw 节点，净化形同虚设；
-  // convertHtmlImgToMdImage / annotateImageContext 在其后执行，
+  // normalizeHtmlImages / annotateImageContext 在其后执行，
   // 其写入/迁移的属性无需进 schema。sanitize 重建整棵树（非 in-place），
   // 后续步骤全部改用其产物。
   const sanitized = rehypeSanitize(sanitizeSchema)(result as never) as unknown as HastRoot;
-  // rehype-raw 融合后，HTML 语法书写的 <img>（含嵌在其他 HTML 标签内）只是
-  // 普通元素——image/imageReference handler 只作用于 Markdown 语法的图片，
-  // 管不到 raw 路径。这里把融合树中的 <img> 归一化为 md-image 容器，
-  // 与 Markdown 语法图片走同一 MarkdownImage 组件（ImgProxy 重写 / 三态占位）。
-  if (hasRaw) convertHtmlImgToMdImage(sanitized);
+  // rehype-raw 融合后，HTML 语法书写的 <img>（含嵌在其他 HTML 标签内）带原生
+  // src 属性——image/imageReference handler 只作用于 Markdown 语法的图片，
+  // 管不到 raw 路径。这里把融合树中的 <img> 属性原地归一化（src → data-src
+  // 经 ImgProxy 重写），与 Markdown 语法图片（img + data-src）在渲染层
+  // MarkdownNode 统一映射为 MarkdownImage 组件（三态占位）。
+  if (hasRaw) normalizeHtmlImages(sanitized);
   // 融合后仍无 data-md-table 标记的 <table> 即 raw HTML 来源（融合会原样
   // 保留 markdown 侧属性，见 markMarkdownTables 注释）→ 补打 html 来源标记
   markHtmlTables(sanitized);
@@ -230,7 +504,7 @@ function mdastToHastRaw(root: Root): RawResult {
   for (const n of sanitized.children as HastContent[]) stripHastPosition(n);
   annotateImageContext(sanitized);
   stripTaskListLeadSpace(sanitized);
-  return { hast: sanitized, hasRaw };
+  return { hast: sanitized, hasRaw, refsCollector };
 }
 
 /** 递归剥除 HAST 节点 position（in-place；含 children 深层） */
@@ -288,51 +562,47 @@ function markHtmlTables(node: HastRoot | HastContent): void {
 /* ---------------- HTML 语法图片归一化（rehype-raw 融合后） ---------------- */
 
 /**
- * 把融合树中的 <img>（HTML 语法书写的图片，含嵌在其他 HTML 标签内）原地
- * 替换为 md-image 容器（in-place），与 Markdown 语法图片（image /
- * imageReference handler 产物）走同一 MarkdownImage 组件。
+ * 把融合树中的 <img>（HTML 语法书写的图片，含嵌在其他 HTML 标签内）属性
+ * 原地归一化为 img + data-src / data-alt（不再使用 md-image 中间标签，
+ * 渲染层 MarkdownNode 把 img 统一映射为 MarkdownImage 组件）。
+ * 仅处理带 src 属性的 img（raw HTML 书写的图片）——image / imageReference
+ * handler 产物无 src（直接式已带 data-src、引用式携带 data-ref-*），
+ * 必须原样保留，否则引用式标记会被擦除成普通空图。
  * 仅迁移 src / alt（组件消费的属性）；width/height/style 等由 HTML 语法
  * 直接控制的属性不迁移——与块级/行内分派语义（annotateImageContext）保持一致。
  */
-function imgToMdImage(el: HastElement): HastElement {
-  const props = (el.properties ?? {}) as Record<string, unknown>;
-  return {
-    type: "element",
-    tagName: "md-image",
-    properties: {
-      "data-src": rewriteImageSrc(String(props.src ?? "")),
-      "data-alt": String(props.alt ?? ""),
-    },
-    children: [],
-  };
-}
-
-function convertHtmlImgToMdImage(node: HastRoot | HastContent): void {
+function normalizeHtmlImages(node: HastRoot | HastContent): void {
   const kids = (node as { children?: HastContent[] }).children;
   if (!Array.isArray(kids)) return;
-  for (let i = 0; i < kids.length; i++) {
-    const c = kids[i];
+  for (const c of kids) {
     if (c.type === "element" && (c as HastElement).tagName === "img") {
-      kids[i] = imgToMdImage(c as HastElement);
-      continue;
+      const el = c as HastElement;
+      const props = (el.properties ?? {}) as Record<string, unknown>;
+      if (props.src != null) {
+        el.properties = {
+          "data-src": rewriteImageSrc(String(props.src)),
+          "data-alt": String(props.alt ?? ""),
+        };
+      }
     }
-    convertHtmlImgToMdImage(c);
+    normalizeHtmlImages(c);
   }
 }
 
 /* ---------------- 图片上下文标注（块级 vs 行内） ---------------- */
 
-/** 是否 md-image 元素（编译期 image handler 的产物） */
+/** 是否图片元素（image / imageReference handler 与 raw 路径归一化的统一产物；
+ *  树中所有 img 均由管线管理，渲染层统一映射 MarkdownImage） */
 const isMdImageEl = (n: HastContent): boolean =>
-  n.type === "element" && (n as { tagName?: string }).tagName === "md-image";
+  n.type === "element" && (n as { tagName?: string }).tagName === "img";
 
 /** 是否空白 text 节点 */
 const isBlankText = (n: HastContent): boolean =>
   n.type === "text" && !((n as { value?: string }).value ?? "").trim();
 
 /**
- * 独立图片段判定：p 的 children 全部为 md-image / 空白 text /
- * 「内部同样只含 md-image+空白的 <a>」，且**恰好一张图**。
+ * 独立图片段判定：p 的 children 全部为 img / 空白 text /
+ * 「内部同样只含 img+空白的 <a>」，且**恰好一张图**。
  * - [![img](src)](url) 链接包裹独自成块也算块级图片；
  * - 一行多图不算块级：块级占位 width:100% 会让多图垂直堆叠，
  *   行内模式（原尺寸）才符合并排的视觉预期 → 归入行内。
@@ -362,7 +632,7 @@ export function isImageOnlyParagraph(p: HastElement): boolean {
 }
 
 /**
- * 给每个 md-image 标注渲染上下文：块级（独立成段，含 <a> 包裹）不标注，
+ * 给每个图片元素标注渲染上下文：块级（独立成段，含 <a> 包裹）不标注，
  * 行内（与文字混排 / 标题 / 表格等一切其他场景）标 data-inline="1"。
  * 渲染层与 CSS 按该标注分派两种占位/尺寸实现。
  */
@@ -452,6 +722,13 @@ export function rootToHast(root: Root): HastRoot {
   return mdastToHastRaw(root).hast;
 }
 
+/** mdast 根 → 转换产物（HAST + 引用声明收集器）。
+ *  例行重建 worker 用它一次性完成转换与收集（buildBlocks 的二次转换
+ *  属历史低效，重建路径在此合并为单次）。 */
+export function convertRoot(root: Root): RawResult {
+  return mdastToHastRaw(root);
+}
+
 /** Markdown 源码 → HAST 根（管线唯一入口：parse → toHast → raw 融合） */
 export function compileMarkdown(src: string): HastRoot {
   return rootToHast(parseMarkdown(src));
@@ -503,7 +780,7 @@ export function splitSegments(hast: HastRoot): HastSegment[] {
  *   否则首块 startLine 回拉到 chunk 起点，块行界相对真实锚点永久前移
  *   （行数变化型编辑后无法自愈，且逐次放大）。
  */
-function blocksFromHast(
+export function blocksFromHast(
   hast: HastRoot,
   totalLines: number,
   baseLine = 0,
@@ -630,6 +907,9 @@ export interface IncrementalParseState {
   incrementalCount?: number;
   /** 上次全量重建的时刻（ms）；与阈值共同决定例行全量时机（可选，0 = 从未） */
   lastFullAt?: number;
+  /** 引用基线（与 blocks 一一对齐；可选：缺失时增量路径保守走全量，
+   *  由设置本字段的调用方保证稳态恒有值） */
+  refsBaseline?: RefsBaseline | null;
 }
 
 /** 增量结果的段级补丁区间（全量结果不携带）：主线程按此 splice 段列表 */
@@ -654,6 +934,11 @@ export interface IncrementalParseResult {
   lastFullAt: number;
   /** 段级补丁区间（仅增量结果有值；全量由调用方整体重建段列表） */
   patch?: SegmentPatchRange;
+  /** 引用声明快照（解析结束全量产出：定义 first-wins 去重 + 首现引用顺序）；
+   *  随解析结果回传主线程，原子更新全局 STORE */
+  refs: RefsSnapshot;
+  /** 引用基线（调用方应存回 IncrementalParseState.refsBaseline；与 blocks 对齐） */
+  refsBaseline: RefsBaseline;
 }
 
 /** 连续增量 N 次后向重建 worker 请求周期性全量（阈值唯一归属点） */
@@ -732,7 +1017,13 @@ function parseRange(
   toLine: number,
   baseLine: number,
   claimLead = true
-): { children: MdastContent[]; hast: HastRoot; blocks: PreviewBlock[] | null } {
+): {
+  children: MdastContent[];
+  hast: HastRoot;
+  blocks: PreviewBlock[] | null;
+  /** 局部转换的引用声明收集器（键 = local mdast 节点对象） */
+  refsCollector: RefsCollector;
+} {
   const chunk = lines.slice(fromLine - 1, toLine).join("\n");
   // 与 parseMarkdown 同链路：runSync 执行 remark 转换（remark-slug 注入标题 id）
   const root = processor.runSync(processor.parse(chunk)) as unknown as Root;
@@ -746,6 +1037,7 @@ function parseRange(
     children: root.children,
     hast: parsed.hast,
     blocks: unmapped || !blocks ? null : blocks,
+    refsCollector: parsed.refsCollector,
   };
 }
 
@@ -756,16 +1048,20 @@ export function buildBlocksIncremental(
 ): IncrementalParseResult {
   const runFull = (): IncrementalParseResult => {
     const root = parseMarkdown(nextSrc);
-    const hast = rootToHast(root);
+    const conv = convertRoot(root);
+    const blocks = blocksFromHast(conv.hast, splitLines(nextSrc).length).blocks;
+    const refsBaseline = buildRefsBaselineFull(root, blocks, conv.refsCollector);
     return {
       root,
-      hast,
-      blocks: buildBlocks(root, nextSrc),
+      hast: conv.hast,
+      blocks,
       full: true,
       incrementalCount: 0,
       lastFullAt: Date.now(),
       /* 全量结果不走补丁：主线程收到 full 标记后整体重建段列表 */
       patch: { segStart: 0, segRemoved: 0, segAdded: 0 },
+      refs: buildRefsSnapshot(refsBaseline),
+      refsBaseline,
     };
   };
 
@@ -774,7 +1070,10 @@ export function buildBlocksIncremental(
     forceFull ||
     !prev.root ||
     !prev.src ||
-    prev.blocks.length === 0
+    prev.blocks.length === 0 ||
+    /* 引用基线缺失（旧调用方 / 状态归零后）→ head/tail 引用条目无法复用，
+       保守全量重建（稳态由设置 refsBaseline 的调用方保证恒有值） */
+    !prev.refsBaseline
   ) {
     return runFull();
   }
@@ -940,6 +1239,64 @@ export function buildBlocksIncremental(
   if (anchorCount(local.hast.children as HastContent[]) !== local.blocks.length) {
     return runFull();
   }
+
+  /* ---- 引用基线拼接（defsByBlock / refSeqByBlock，与 blocks 一一对齐）----
+     head/tail 按下标复用 prev 基线条目（与 blockCounts 同模式，未变块
+     不重扫）；局部定义/引用按行归属到合并块（块无缝覆盖全文的既有不变量
+     ——定义不产 hast、无锚，所在行本就由相邻块吸收，按行归属与其对齐）：
+     - 局部条目落点在 head 边界块（首锚前的定义行）：追加在复用条目之后
+       （局部行 > head 行，文档序正确）；
+     - 落点在 tail 边界块（局部无块时行由 tail 首块认领）：前插（局部行
+       < tail 原内容行）；
+     - 落点在局部槽位：仅由局部条目填充（新块）。
+     快照（首现去重 / 引用顺序）由 buildRefsSnapshot 统一裁决，此处只管
+     基线的文档序拼接。 */
+  const localRefs = walkRefs(local.children, local.refsCollector, baseLine);
+  const localDefLists = new Map<number, RefsDefEntry[]>();
+  const pushLocalDef = (j: number, e: RefsDefEntry): void => {
+    const arr = localDefLists.get(j);
+    if (arr) arr.push(e);
+    else localDefLists.set(j, [e]);
+  };
+  const localRefLists = new Map<number, string[]>();
+  const pushLocalRef = (j: number, identifier: string): void => {
+    const arr = localRefLists.get(j);
+    if (arr) arr.push(identifier);
+    else localRefLists.set(j, [identifier]);
+  };
+  for (const d of localRefs.defs) {
+    const j = blockIndexForLine(blocks, d.line);
+    if (j >= 0) pushLocalDef(j, d.entry);
+  }
+  for (const r of localRefs.fnRefs) {
+    const j = blockIndexForLine(blocks, r.line);
+    if (j >= 0) pushLocalRef(j, r.identifier);
+  }
+  const prevDefs = prev.refsBaseline.defsByBlock;
+  const prevRefSeq = prev.refsBaseline.refSeqByBlock;
+  const localN = local.blocks.length;
+  const removedN = i1 - i0 + 1;
+  const defsByBlock: RefsDefEntry[][] = [];
+  const refSeqByBlock: string[][] = [];
+  for (let j = 0; j < blocks.length; j++) {
+    let dArr: RefsDefEntry[] | undefined;
+    let rArr: string[] | undefined;
+    if (j < i0) {
+      dArr = prevDefs[j];
+      rArr = prevRefSeq[j];
+    } else if (j >= i0 + localN) {
+      const pj = j - localN + removedN;
+      dArr = prevDefs[pj];
+      rArr = prevRefSeq[pj];
+    }
+    const dl = localDefLists.get(j);
+    const rl = localRefLists.get(j);
+    if (dl) dArr = dArr ? (j < i0 ? [...dArr, ...dl] : [...dl, ...dArr]) : dl;
+    if (rl) rArr = rArr ? (j < i0 ? [...rArr, ...rl] : [...rl, ...rArr]) : rl;
+    defsByBlock.push(dArr ?? []);
+    refSeqByBlock.push(rArr ?? []);
+  }
+  const refsBaseline: RefsBaseline = { defsByBlock, refSeqByBlock };
   const shiftAnchor = (c: HastContent, by: number): HastContent => {
     const [a, b] = (c as { value: string }).value.slice(MDL.length).split(":").map(Number);
     return { type: "comment", value: `${MDL}${a + by}:${b + by}` } as HastContent;
@@ -1018,6 +1375,8 @@ export function buildBlocksIncremental(
     /* 段级补丁：blocks 与 segments 一一对应（锚数 === 块数不变量已在上文校验），
        被替换的段区间 = 被替换的块区间 [i0, i1] */
     patch: { segStart: i0, segRemoved: i1 - i0 + 1, segAdded: local.blocks.length },
+    refs: buildRefsSnapshot(refsBaseline),
+    refsBaseline,
   };
 }
 

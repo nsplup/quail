@@ -25,7 +25,7 @@
  *   未变段对象引用保持稳定 → MarkdownNode 按 props 引用相等跳过子树
  *   （结构与 worker 内 head/tail 节点引用复用互补，两层增量缺一不可）。
  */
-import type { HastSegment } from "../markdown/markdown-core";
+import type { HastSegment, RefsSnapshot, RefsBaseline } from "../markdown/markdown-core";
 import type { Root as HastRoot } from "hast";
 import type { CountMode, PreviewBlock, OutlineItem } from "../types";
 import type { Root as MdastRoot } from "mdast";
@@ -69,6 +69,12 @@ export interface FullBatch {
    * 由 Svelte 原地 diff 复用 DOM（与旧主线程版全量更新行为一致）。
    */
   cold: boolean;
+  /**
+   * 引用声明快照：仅首批（segStart === 0，含空文档批）携带——冷启动
+   * 段重建前先落地 STORE，与段渲染同帧原子（组件从 STORE 解析引用，
+   * 无「新段 + 旧引用」的中间渲染）。例行全量走 result 的 refs 原子采纳。
+   */
+  refs?: RefsSnapshot;
 }
 
 export interface ParseResult {
@@ -83,6 +89,8 @@ export interface ParseResult {
   blocks: PreviewBlock[];
   outline: OutlineItem[];
   counts: Counts;
+  /** 引用声明快照：与段补丁/整列表同消息原子落地 STORE（先 refs 后段） */
+  refs?: RefsSnapshot;
 }
 
 export interface WorkerError {
@@ -141,6 +149,10 @@ export interface RebuildStateMsg {
   root: MdastRoot | null;
   hast: HastRoot;
   blocks: PreviewBlock[];
+  /** 引用快照（src 漂移被采纳时随 postFull 回传主线程） */
+  refs?: RefsSnapshot;
+  /** 引用基线（增量 worker 采纳基线后继续增量拼接，必须与 blocks 同步替换） */
+  refsBaseline?: RefsBaseline;
 }
 
 /** 主线程 → 两个 worker 的初始化消息：移交与对端直连的 MessageChannel port */

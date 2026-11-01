@@ -134,16 +134,20 @@
    *   readNumberAttr 兼容 colSpan/colspan 键名与 number/string 值）；
    * - "nested"：嵌套表格（raw HTML 单元格内的表格，DOM 判定）；
    * - "attrs"：源码侧单元格反编译失败（HTML 来源单元格含未知标签/属性，
-   *   P4 接入：ensureSource 定位后发现 → 整表静态）。
+   *   P4 接入：ensureSource 定位后发现 → 整表静态）；
+   * - "embedded"：表格位于脚注定义内容（MarkdownFootnotes 经
+   *   MarkdownNode 以 blockIndex = -1 渲染）：无对应预览块行界，
+   *   源码定位/回写不可靠 → 只读渲染（防止把回写打到错误行区间）。
    * 命中任一条件 → 整表只读渲染，禁止原地编辑与行/列操作。
    */
   function isStatic(node: Element): {
     static: boolean;
-    reason?: "span" | "nested" | "attrs";
+    reason?: "span" | "nested" | "attrs" | "embedded";
   } {
     if (isStaticTable(node).static) return { static: true, reason: "span" };
     if (nested) return { static: true, reason: "nested" };
     if (srcRejected) return { static: true, reason: "attrs" };
+    if (blockIndex != null && blockIndex < 0) return { static: true, reason: "embedded" };
     return { static: false };
   }
   const staticInfo = $derived(isStatic(node));

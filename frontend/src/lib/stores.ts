@@ -25,6 +25,7 @@ import type {
 } from "./types";
 import type { EditorApi } from "./editor/codemirrorSetup";
 import { blockIndexForLine } from "./markdown";
+import { setRefsSnapshot, clearRefsSnapshot } from "./markdown/reference-store";
 import type { HastSegment } from "./markdown/markdown-core";
 import { createParseClient } from "./worker/parse-client";
 import { t, locale, setLang } from "./i18n.svelte";
@@ -296,7 +297,10 @@ const parseClient = createParseClient({
     }
     if (msg.segStart === 0) {
       // 冷启动首批：整列表重建（渲染层为 keyed 原地 diff + 虚拟化按需挂载，
-      // 无需纪元/重放机制；未变段引用复用，图片不重新请求）
+      // 无需纪元/重放机制；未变段引用复用，图片不重新请求）。
+      // 引用快照先于段落地（同一消息回调内同步写，Svelte 同帧合批）——
+      // 引用组件渲染期查到的 STORE 与新段一致，无「新段 + 旧引用」中间态
+      setRefsSnapshot(msg.refs);
       fullBatchBuffer = null;
       segments$.set(msg.items);
     } else {
@@ -307,6 +311,9 @@ const parseClient = createParseClient({
     blocks$.set(msg.blocks);
     outline$.set(msg.outline);
     counts$.set(msg.counts);
+    // 引用快照先落地（例行全量的原子采纳 / 增量的段补丁均在其后，
+    // 同一回调内同步写 → 渲染原子）
+    setRefsSnapshot(msg.refs);
     if (msg.full) {
       // 例行全量收口：原子采纳缓冲的完整段列表（原地 diff，未变内容不动 DOM、
       // 图片不重新请求；虚拟化按需挂载，长列表直接落地）
@@ -404,6 +411,7 @@ function flushNow(): void {
   if (s.trim() === "") {
     fullBatchBuffer = null;
     parseClient.resetEmpty();
+    clearRefsSnapshot(); // 引用快照随空结果清空（旧文档声明不再可见）
     segments$.set([]);
     blocks$.set([]);
     outline$.set([]);
@@ -584,6 +592,7 @@ function resetDocRuntime(): void {
   outlineAutoTrack$.set(true);
   get(previewApi$)?.setScrollTop(0);
   fullBatchBuffer = null;
+  clearRefsSnapshot(); // 引用快照即时清空（旧文档声明不残留到新文档渲染窗口）
   segments$.set([]);
   blocks$.set([]);
   outline$.set([]);

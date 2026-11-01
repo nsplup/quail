@@ -553,20 +553,102 @@ body.search-open .pane-editor .cm-scroller {
   padding-bottom: 10px;
 }
 
-.md-block sup a,
-.md-block .footnotes {
+/* ---------- 脚注引用（MarkdownFootnoteRef）与脚注列表（MarkdownFootnotes） ----------
+ * 脚注节不再是 toHast 顶层的 section.footnotes，而是文档末尾的哨兵项组件
+ * （MarkdownFootnotes，只从全局 STORE 订阅）；正文引用为上标编号链接
+ * （悬停预览浮层 .md-fnref-pop），字面量回退为纯文本（无需样式）。
+ */
+
+/* 正文脚注引用：上标编号链接（沿用旧 sup a 的视觉语义） */
+.md-block sup.footnote-ref a {
+  color: var(--pv-muted);
+  font-size: 0.85em;
+  text-decoration: none;
+}
+
+.md-block sup.footnote-ref a:hover {
+  color: var(--pv-link);
+  text-decoration: underline;
+}
+
+/* 悬停预览浮层（position:fixed 由组件内联样式给出；此处只管视觉）。
+   渲染在组件子树内 → 预览区点击委托照常生效；嵌套引用的浮层 DOM 更深，
+   同 z-index 下后序绘制在上方 */
+.md-fnref-pop {
+  z-index: 200;
+  box-sizing: border-box;
+  max-width: 480px;
+  max-height: 40vh;
+  overflow-y: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--pv-border);
+  border-radius: 8px;
+  background: var(--pv-bg, var(--ed-bg, #fff));
+  color: var(--pv-fg, inherit);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.14);
+  font-size: 0.92em;
+  line-height: 1.6;
+}
+
+/* 浮层内首尾块元素收口（脚注内容多为段落，避免上下多余空隙） */
+.md-fnref-pop > p:first-child,
+.md-fnref-pop > *:first-child {
+  margin-top: 0;
+}
+
+.md-fnref-pop > p:last-child,
+.md-fnref-pop > *:last-child {
+  margin-bottom: 0;
+}
+
+/* 脚注列表节（文档末尾哨兵项）：延续旧 .footnotes 的视觉语义 */
+.md-block .md-footnotes {
+  margin-top: 2em;
+  padding-top: 0.8em;
   color: var(--pv-muted);
   font-size: 0.85em;
 }
 
-.md-block .footnotes {
-  margin-top: 2em;
-  border-top: 1px solid var(--pv-border);
-  padding-top: 0.8em;
+.md-block .md-footnotes-title {
+  margin: 0 0 0.6em;
+  font-size: 1.1em;
+  font-weight: 600;
+  color: var(--pv-fg, inherit);
 }
 
-.md-block .footnotes li {
+.md-block .md-footnotes-list {
+  margin: 0;
+  padding-left: 1.6em;
+}
+
+.md-block .md-footnotes-item {
   margin: 0.4em 0;
+}
+
+/* 回链组：↩（多次引用带上标序号），左对齐紧跟定义内容 */
+.md-block .md-footnotes-backrefs {
+  margin-left: 0.35em;
+  white-space: nowrap;
+}
+
+.md-block .md-footnotes-backref {
+  color: var(--pv-muted);
+  text-decoration: none;
+  margin-left: 0.15em;
+}
+
+.md-block .md-footnotes-backref:hover {
+  color: var(--pv-link);
+  text-decoration: underline;
+}
+
+.md-block .md-footnotes-backref-n {
+  font-size: 0.75em;
+}
+
+/* 哨兵项容器：脚注列表为文档末尾的独立块（与 MarkdownSegment 同构包装） */
+.md-item-footnotes {
+  padding-bottom: 4vh;
 }
 
 .md-block .render-error {

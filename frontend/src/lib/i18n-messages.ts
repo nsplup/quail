@@ -119,6 +119,11 @@ export const zhMessages = {
     parsing: "解析中",
     rendering: "渲染中",
   },
+  footnotes: {
+    title: "脚注",
+    goto: "查看脚注 {n}",
+    back: "跳回正文（第 {n} 次引用）",
+  },
   parse: {
     ready: "准备就绪",
     parsing: "解析中",
@@ -262,6 +267,11 @@ export const enMessages = {
     codeCopied: "Copied",
     parsing: "Parsing",
     rendering: "Rendering",
+  },
+  footnotes: {
+    title: "Footnotes",
+    goto: "Go to footnote {n}",
+    back: "Back to text (reference {n})",
   },
   parse: {
     ready: "Ready",

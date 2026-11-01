@@ -43,6 +43,15 @@
   /**
    * MarkdownImage：预览图片组件（块级 / 行内两种形态）。
    *
+   * - 入参统一为管线产物 img 元素（node prop；不再有 md-image 中间标签）：
+   *   · Markdown 语法图片：data-src（ImgProxy 重写后的代理 URL）+ data-alt；
+   *   · 引用式图片（![alt][id]）：data-ref-identifier / data-ref-label /
+   *     data-ref-type + data-alt——定义从全局 STORE（reference-store）
+   *     渲染期解析：命中且 url 非空 → 按定义重写代理 URL 走三态；
+   *     未命中 / url 为空 → 字面量回退（`![alt][label]` 等按 referenceType
+   *     重建，见 revertReferenceText）；STORE 后续更新（定义补齐）时
+   *     响应式重新解析（Svelte 派生跟踪）；
+   *   · raw HTML <img>：normalizeHtmlImages 归一化产物（同 data-src）。
    * - 块级（inline=false，独立成段的图片，含 <a> 包裹独自成块）：
    *   占位三态统一 240px 高度；loaded 后 img 铺满、高度按图片比例自适应，
    *   alt 描述文本（caption）显示在图片底部；
@@ -60,12 +69,11 @@
    *   复制图片 / 刷新 / 另存为 / 使用外部程序打开：
    *   · 复制：fetch 当前请求 URL 取图，非 PNG 经 canvas 转 PNG 后写入剪贴板
    *     （系统剪贴板位图格式约定）；
-   *   · 刷新：同原角标按钮的缓存穿透重载（bustParams）；
-   *   · 另存为：bridge.saveImageViaDialog → 后端弹图片格式保存对话框并
-   *     原子写入源文件字节；
-   *   · 使用外部程序打开：bridge.imageFilePath 解析代理缓存文件路径
-   *     （remote 未命中缓存时后端先下载），再 Browser.OpenFile 交系统打开；
-   *   右键监听用原生 addEventListener（非 Svelte onclick）：阻止冒泡，
+   *   · 另存为：系统保存对话框（图片格式过滤）→ 后端读源文件原子写入目标路径
+   *   · 外部打开：后端解析代理 URL 为磁盘文件（remote 未命中缓存先下载缓存），
+   *     再交 wails runtime Browser.OpenFile 由系统默认程序打开。
+   *   · 复制/另存为/外部打开为异步操作，失败经 toast 提示（i18n）。
+   * - 右键监听用原生 addEventListener（非 Svelte onclick）：阻止冒泡，
    *   避免触发外层 <a> 与预览面板委托；非 loaded 态不拦截、交还默认行为。
    * - 依赖 docState.dir：目录变化时自动执行刷新（回占位态 + 缓存穿透重新请求）。
    */
@@ -79,18 +87,60 @@
     openFileWithSystem,
     saveImageViaDialog,
   } from "../bridge";
+  import type { Element as HastElement } from "hast";
+  import type { Reference } from "mdast";
+  import { readRefProp, revertReferenceText } from "./markdown-core";
+  import { rewriteImageSrc } from "../imgproxy";
+  import { linkDefById$ } from "./reference-store";
 
   let {
-    /** 代理 URL（编译期 rewriteImageSrc 生成的 /__imgproxy/... 路径） */
-    src,
-    alt = "",
-    /** 行内形态（管线 data-inline 标注） */
-    inline = false,
+    /** 管线产物 img 元素（data-src / data-alt / data-inline / data-ref-*） */
+    node,
   }: {
-    src: string;
-    alt?: string;
-    inline?: boolean;
+    node: HastElement;
   } = $props();
+
+  /* ---- 属性读取（handler 写入 / sanitize 规范化后的属性）。
+       组件实例按索引复用（非 keyed）：node 引用变化时派生量即时跟随，
+       与 src/alt/inline 的响应式语义一致 ---- */
+  /** 引用式图片（![alt][id]）：定义标识（有值即引用式，渲染期查 STORE） */
+  const refIdentifier = $derived(readRefProp(node, "data-ref-identifier"));
+  const refLabel = $derived(readRefProp(node, "data-ref-label"));
+  const refType = $derived(
+    readRefProp(node, "data-ref-type") as Reference["referenceType"],
+  );
+  /** 引用式图片的定义（STORE 派生 Map 查找；STORE 更新 → 响应式重解析） */
+  const def = $derived(refIdentifier ? $linkDefById$.get(refIdentifier) : undefined);
+  /**
+   * 实际图片地址：直接式 = data-src（管线已重写）；引用式 = 定义命中且
+   * url 非空时按定义重写（rewriteImageSrc 幂等）。引用不可用 / 链接为空
+   * → 空串（走字面量回退，不进入三态容器）。
+   */
+  const src = $derived(
+    refIdentifier
+      ? def && def.url
+        ? rewriteImageSrc(def.url)
+        : ""
+      : readRefProp(node, "data-src"),
+  );
+  const alt = $derived(readRefProp(node, "data-alt"));
+  /** 行内形态（管线 data-inline 标注：块级不标注，行内 = "1"） */
+  const inline = $derived(readRefProp(node, "data-inline") === "1");
+  /**
+   * 引用式字面量回退：引用不可用（STORE 无定义 / url 为空）时按源码
+   * 记号重建（全写 `![alt][id]`、收窄 `![alt][]`、缩写 `![alt]`），
+   * 以纯文本渲染（与链接引用的字面量回退语义一致）。
+   */
+  const literal = $derived(
+    refIdentifier && (!def || !def.url)
+      ? revertReferenceText({
+          identifier: refIdentifier,
+          label: refLabel,
+          referenceType: refType,
+          alt,
+        })
+      : null,
+  );
 
   // 空链接图片（data-src 为空或全空白，如 ![]()、<img src="">、<img>）：
   // 组件直接拦截——不生成代理 URL、img 不带 src 属性、不向后端图片代理发起
@@ -346,12 +396,17 @@
   }
 </script>
 
-<!-- data-inline 落 DOM：行内形态 CSS（md-image[data-inline]）的匹配依据 -->
-<md-image
-  data-status={status}
-  data-error={errorCode || undefined}
-  data-inline={inline ? "1" : undefined}
->
+{#if literal}
+  <!-- 引用不可用 / 链接为空：字面量回退（纯文本，与链接引用回退语义一致） -->
+  {literal}
+{:else}
+  <!-- data-inline 落 DOM：行内形态 CSS（.md-image[data-inline]）的匹配依据 -->
+  <span
+    class="md-image"
+    data-status={status}
+    data-error={errorCode || undefined}
+    data-inline={inline ? "1" : undefined}
+  >
   <img
     class="md-img"
     src={imgSrc}
@@ -548,4 +603,5 @@
       </span>
     </span>
   {/if}
-</md-image>
+  </span>
+{/if}

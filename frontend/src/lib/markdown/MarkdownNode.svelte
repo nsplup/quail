@@ -3,8 +3,9 @@
    * HAST 节点递归渲染组件（Svelte 5 自导入实现递归）。
    *
    * - element → svelte:element 动态标签（属性经 hastAttrs 映射 className→class 等）；
-   * - md-image（编译期 image handler 的产物）→ MarkdownImage 组件
-   *   （三态 / 懒加载 / restricted 判定，行为等价旧自定义元素）；
+   * - img（image / imageReference handler 与 raw HTML 归一化的统一产物）→
+   *   MarkdownImage 组件（三态 / 懒加载 / restricted 判定；引用式图片
+   *   从全局 STORE 解析定义，行为等价旧自定义元素）；
    * - table（markdown / raw HTML，来源经 data-*-table 标记）→ EditableTable
    *   可编辑表格组件（HAST 显示 + 反向更新编辑区，见组件头注释）；
    * - details（raw HTML 折叠面板）→ Accordion 组件（折叠状态经全局
@@ -34,10 +35,12 @@
    *
    * 增量更新：node 引用未变（增量解析 head/tail 段复用）时 Svelte 跳过该子树；
    * 引用变化但结构相同（同为 paragraph 等）时复用 DOM，仅更新差异文本/属性——
-   * md-image 组件实例不销毁，图片不重新请求。
+   * MarkdownImage 组件实例不销毁，图片不重新请求。
    */
   import type { Element, RootContent, Text } from "hast";
   import MarkdownImage from "./MarkdownImage.svelte";
+  import MarkdownFootnoteRef from "./MarkdownFootnoteRef.svelte";
+  import MarkdownLinkRef from "./MarkdownLinkRef.svelte";
   import MarkdownNode from "./MarkdownNode.svelte"; // 自导入实现递归（Svelte 5 不支持隐式自引用）
   import EditableTable from "./EditableTable.svelte";
   import EditableCheckbox from "./EditableCheckbox.svelte";
@@ -134,17 +137,21 @@
   {:else if inTaskItem && isTaskCheckbox(node)}
     <!-- 任务项 checkbox：tight / loose 均在此分派，模板无需知道父结构 -->
     <EditableCheckbox node={node as Element} {blockIndex} />
-  {:else if (node as Element).tagName === "md-image"}
-    <!-- data-inline 由管线标注：块级（独立成段，含 <a> 包裹）不标注，行内 = "1" -->
-    <MarkdownImage
-      src={((node as Element).properties?.["data-src"] ??
-        (node as Element).properties?.dataSrc ??
-        "") as string}
-      alt={((node as Element).properties?.["data-alt"] ??
-        (node as Element).properties?.dataAlt ??
-        "") as string}
-      inline={(node as Element).properties?.["data-inline"] === "1"}
-    />
+  {:else if (node as Element).tagName === "img"}
+    <!-- 图片统一入口：image / imageReference handler 与 raw HTML 归一化
+         （normalizeHtmlImages）的产物均为 img + data-*（不再有 md-image
+         中间标签）；引用式图片（data-ref-identifier）由组件从全局 STORE
+         解析，不可用时显示字面量。data-inline 由管线标注：块级（独立
+         成段，含 <a> 包裹）不标注，行内 = "1" -->
+    <MarkdownImage node={node as Element} />
+  {:else if (node as Element).tagName === "md-footnote-ref"}
+    <!-- 脚注引用（[^label]）：数据层标记 → 组件从 STORE 查找；命中渲染
+         上标编号链接（悬停预览 / 跳转脚注列表），未定义显示字面量 -->
+    <MarkdownFootnoteRef node={node as Element} />
+  {:else if (node as Element).tagName === "md-link-ref"}
+    <!-- 链接引用（[text][id]）：数据层标记 → 组件从 STORE 查找；命中且
+         url 非空渲染 <a>，否则字面量回退 -->
+    <MarkdownLinkRef node={node as Element} />
   {:else if (node as Element).tagName === "table"}
     <!-- 所有来源的表格 → 可编辑表格组件（markdown / raw HTML 统一走
          EditableTable；来源经 data-*-table 标记在组件内区分反向更新格式）。

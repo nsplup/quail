@@ -18,7 +18,17 @@
    *   根源是虚拟化重挂载：MarkdownImage 用模块级终态缓存 + eager 加载 +
    *   命中缓存时同步解码兜底（见该组件），本组件用较宽 overscan 预热
    *   周边项的实测高度，摊薄重挂载频率；
-   * - 解析期间不渲染预览遮罩：指针/滚轮/触屏交互全程直达滚动容器。
+   * - 解析期间不渲染预览遮罩：指针/滚轮/触屏交互全程直达滚动容器；
+   * - 脚注列表（MarkdownFootnotes，只从全局 STORE 订阅）挂载为列表末尾
+   *   哨兵项：随内容滚动、ResizeObserver 实测高度、onvisible 的既有
+   *   clamp（对 segments.length 收口）天然兼容；
+   * - 脚注跳转系统（点击委托统一拦截自定义锚）：
+   *   · #fn:N（正文引用 → 列表项）：已挂载直跳元素级定位，否则滚动到
+   *     哨兵项挂载后元素级修正；
+   *   · #fnref:N:K（列表回链 → 第 N 个脚注的第 K 次引用出现）：以段
+   *     HAST 数据为唯一事实源（虚拟化下挂载 DOM 的出现序计数不可靠），
+   *     按文档序扫描定位第 K 次出现所在段与段内序 → scrollToIndex 挂载
+   *     后在段容器内取对应元素精确定位——多次引用可完美跳回。
    */
   import { onMount } from "svelte";
   import VirtualList from "../virtual/VirtualList.svelte";
@@ -28,8 +38,11 @@
     ElementContent as HastContent,
   } from "hast";
   import type { HastSegment } from "../markdown/markdown-core";
+  import { readRefProp } from "../markdown/markdown-core";
   import { openExternal } from "../bridge";
   import MarkdownSegment from "../markdown/MarkdownSegment.svelte";
+  import MarkdownFootnotes from "../markdown/MarkdownFootnotes.svelte";
+  import { footnoteList$, refsSnapshot$ } from "../markdown/reference-store";
   import type { PreviewApi } from "../types";
 
   let {
@@ -42,6 +55,13 @@
     /** 可视区首块变化（用于 预览→编辑器 同步滚动 与 大纲高亮）；atBottom=滚动到底 */
     onvisible: (index: number, atBottom: boolean) => void;
   } = $props();
+
+  /** 脚注列表哨兵项（data 末尾占位；children snippet 据此分派渲染组件） */
+  const FOOTNOTES_SENTINEL = { type: "__footnotes__", nodes: [] } as HastSegment;
+  /** 虚拟列表数据：有被引用的脚注时末尾挂哨兵项（空脚注不占位） */
+  const items = $derived(
+    $footnoteList$.length > 0 ? [...segments, FOOTNOTES_SENTINEL] : segments,
+  );
 
   let paneEl = $state<HTMLDivElement | null>(null);
   /** VirtualList 实例：PreviewApi 与可视区探测的稳定入口 */
@@ -122,6 +142,19 @@
     const href = anchor.getAttribute("href")?.trim() ?? "";
     if (!href) return;
 
+    // 脚注自定义锚先行拦截（MarkdownFootnoteRef 的 #fn:N 与列表回链
+    // #fnref:N:K），其余 # 锚走标题页内跳转；slug 不含冒号，无碰撞
+    const fnJump = /^#fn:(\d+)$/.exec(href);
+    if (fnJump) {
+      jumpToFootnoteDef(Number(fnJump[1]));
+      return;
+    }
+    const fnRefJump = /^#fnref:(\d+):(\d+)$/.exec(href);
+    if (fnRefJump) {
+      jumpToFootnoteRef(Number(fnRefJump[1]), Number(fnRefJump[2]));
+      return;
+    }
+
     if (href.startsWith("#")) {
       scrollToAnchor(href.slice(1));
       return;
@@ -132,7 +165,8 @@
 
   /* ---------- 页内锚点 / 脚注跳转 ---------- */
 
-  /** GitHub 风格 id 前缀：脚注锚（mdast-util-to-hast 产物）自带，标题锚点为裸 slug */
+  /** GitHub 风格 id 前缀：历史文档锚点兼容候选（脚注节已改由组件渲染，
+   *  前缀候选序列保留给标题锚的两种书写习惯） */
   const USER_CONTENT_PREFIX = "user-content-";
 
   /** 解码 href 片段（decodeURIComponent 容错：畸形转义原样返回） */
@@ -181,6 +215,87 @@
     const cr = container.getBoundingClientRect();
     const er = el.getBoundingClientRect();
     vlist?.scrollTo(container.scrollTop + (er.top - cr.top));
+  }
+
+  /* ---------- 脚注跳转（自定义锚 #fn:N / #fnref:N:K） ---------- */
+
+  /** 双 rAF：Svelte flush + 项布局落地后再做元素级修正（与 scrollToAnchor
+   *  的挂载等待语义一致） */
+  function afterLayout(fn: () => void): void {
+    requestAnimationFrame(() => requestAnimationFrame(fn));
+  }
+
+  /**
+   * 正文脚注引用 → 脚注列表项（#fn:N）：
+   * 已挂载（列表在视口/overscan 内）直跳元素级定位；否则滚动到哨兵项
+   * （列表末尾）触发挂载，落地后元素级修正（目标项可能在长列表深处）。
+   */
+  function jumpToFootnoteDef(n: number): void {
+    if (n < 1) return;
+    const mounted = scrollEl()?.querySelector(`[data-fn-index="${n}"]`);
+    if (mounted) {
+      jumpToElement(mounted);
+      return;
+    }
+    if (items.length === 0 || items[items.length - 1] !== FOOTNOTES_SENTINEL) return;
+    vlist?.scrollToIndex(items.length - 1, { align: "end" });
+    afterLayout(() => {
+      const el = scrollEl()?.querySelector(`[data-fn-index="${n}"]`);
+      if (el) jumpToElement(el);
+    });
+  }
+
+  /** 段内 md-footnote-ref 标记（指定 identifier）计数（深度优先文档序） */
+  function countFnRefNodes(nodes: HastContent[], identifier: string): number {
+    let count = 0;
+    const walk = (n: HastContent): void => {
+      if (n.type !== "element") return;
+      const el = n as HastElement;
+      if (el.tagName === "md-footnote-ref" && readRefProp(el, "data-identifier") === identifier) {
+        count++;
+      }
+      el.children.forEach(walk);
+    };
+    nodes.forEach(walk);
+    return count;
+  }
+
+  /**
+   * 脚注列表回链 → 正文第 K 次引用出现（#fnref:N:K）：
+   * 虚拟化下挂载 DOM 的出现序计数不可靠（未挂载段打断计数）→ 以段 HAST
+   * 数据为唯一事实源：按文档序扫描段列表定位第 K 次出现所在段 segIndex
+   * 与段内序 jInSeg，scrollToIndex 挂载后在段容器（.md-item[data-index]）
+   * 内取第 jInSeq 个 [data-fn-ref] 元素级定位。目标不存在（增量窗口 /
+   * 无效锚）保守不动——与浏览器「无效锚点无副作用」行为一致。
+   */
+  function jumpToFootnoteRef(n: number, k: number): void {
+    const info = $refsSnapshot$.footnoteRefs[n - 1];
+    if (!info || k < 1) return;
+    const { identifier } = info;
+    let segIndex = -1;
+    let jInSeg = -1;
+    let seen = 0;
+    for (let s = 0; s < segments.length; s++) {
+      const c = countFnRefNodes(segments[s].nodes, identifier);
+      if (seen + c >= k) {
+        segIndex = s;
+        jInSeg = k - seen - 1;
+        break;
+      }
+      seen += c;
+    }
+    if (segIndex < 0) return;
+    vlist?.scrollToIndex(segIndex, { align: "start" });
+    afterLayout(() => {
+      const seg = scrollEl()?.querySelector(
+        `.md-item[data-index="${segIndex}"]`,
+      );
+      const refs = seg?.querySelectorAll(
+        `[data-fn-ref="${CSS.escape(identifier)}"]`,
+      );
+      const el = refs?.[jInSeg];
+      if (el) jumpToElement(el);
+    });
   }
 
   /**
@@ -242,14 +357,24 @@
     bind:this={vlist}
     class="preview-scroll"
     style="overflow-y: scroll;"
-    data={segments}
+    data={items}
     overscan={10}
     onscroll={handleScroll}
     role="log"
     aria-label="preview"
   >
     {#snippet children(seg, index)}
-      <MarkdownSegment {seg} {index} />
+      {#if seg === FOOTNOTES_SENTINEL}
+        <!-- 脚注列表项（文档末尾，只从全局 STORE 订阅）：包装与 MarkdownSegment
+             同构（.md-item > .md-block），保证 .md-block 域下的既有内容样式适用 -->
+        <div class="md-item md-item-footnotes" data-btype="footnotes" data-index={index}>
+          <article class="md-block">
+            <MarkdownFootnotes />
+          </article>
+        </div>
+      {:else}
+        <MarkdownSegment {seg} {index} />
+      {/if}
     {/snippet}
   </VirtualList>
 </div>
