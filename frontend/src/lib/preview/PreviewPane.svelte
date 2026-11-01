@@ -231,13 +231,107 @@
     return Number.isFinite(px) && px > 0 ? px : 0;
   }
 
-  // 元素级定位（覆盖标题锚直跳、已挂载脚注、全部双 rAF 二次修正）
-  function jumpToElement(el: globalThis.Element): void {
-    const container = scrollEl();
-    if (!container) return;
-    const cr = container.getBoundingClientRect();
-    const er = el.getBoundingClientRect();
-    vlist?.scrollTo(container.scrollTop + (er.top - cr.top) - jumpOffset());
+  /** 跳转代数：新跳转让旧纠偏链失效（最后一次点击独占滚动权），
+   *  用户手动滚动同样作废本次纠偏（见 cancel） */
+  let jumpSeq = 0;
+
+  /** 纠偏重试帧数上限（≈800ms @60Hz）：兜底异常场景（数据反复变更、
+   *  图片持续加载等）防死循环；正常路径 3~5 帧内收敛 */
+  const JUMP_MAX_TRIES = 48;
+
+  /**
+   * 元素级定位（估计布局感知）：以滚动容器为基准换算绝对 scrollTop。
+   *
+   * 为什么要循环纠偏而不是一次定位——虚拟滚动下元素坐标建立在
+   * 「估计 + 局部实测」的混合布局上：传送挂载的段要在 1~2 帧后才经
+   * RO→rAF 链路实测落地，横跨视口顶的段长高时其下内容（含目标）整体
+   * 下移，且不满足组件「项整体位于视口顶上方才补偿 scrollTop」的条件
+   * ——单点计算的目标必偏，表现为跳到目标上方几个块。逐帧从 live rect
+   * 重算并滚动，下一帧校验元素相对视口顶的实际偏差与 scrollHeight 稳定
+   * 性，两者同时满足才算落定；已稳定但偏差仍在且贴着可达底 → 目标本就
+   * 在文档末尾附近（下方内容不足以把它顶到期望位置），按浏览器 clamp
+   * 语义收底。
+   *
+   * 用户意图保护：wheel/touchstart/pointerdown 任一发生即作废本次纠偏
+   * （程序性 scrollTop 写入——组件测量补偿、VirtualList 内部调整——不
+   * 经这些事件，不受影响）。目标节点被卸载（数据更换/重挂载）同样放弃。
+   */
+  function jumpToElement(el: globalThis.Element, tries = JUMP_MAX_TRIES): void {
+    const container0 = scrollEl();
+    if (!container0) return;
+    const seq = ++jumpSeq;
+
+    /* 清理：移除用户意图监听。所有退出路径（收敛/取消/耗尽/换目标）统一走此 */
+    const cleanup = (): void => {
+      container0.removeEventListener("wheel", cancel);
+      container0.removeEventListener("touchstart", cancel);
+      container0.removeEventListener("pointerdown", cancel);
+    };
+    /** 用户开始手动滚动 → 作废本次纠偏（下一帧 seq 不匹配静默断链） */
+    const cancel = (): void => {
+      jumpSeq++;
+      cleanup();
+    };
+    container0.addEventListener("wheel", cancel, { passive: true });
+    container0.addEventListener("touchstart", cancel, { passive: true });
+    container0.addEventListener("pointerdown", cancel, { passive: true }); // 滚动条拖拽
+
+    /**
+     * 单帧纠偏：重算目标 → 滚动（clamp 到可达底）→ 排下一帧校验。
+     * @param remaining 剩余重试帧数
+     * @param stable    scrollHeight 连续未变的帧数（两帧才算布局稳定：
+     *                  RO 投递在帧内 rAF 之后、applyMeasurements 还要再排
+     *                  一帧，单帧判定会间歇性提前放弃）
+     * @param lastTotal 上一帧的 scrollHeight
+     * @param wasClamped 上一帧目标是否超出可达范围（贴底收尾依据）
+     */
+    const attempt = (
+      remaining: number,
+      stable: number,
+      lastTotal: number,
+      wasClamped: boolean,
+    ): void => {
+      const container = scrollEl();
+      // 目标卸载（数据更换/段重挂载）或已被新跳转/用户滚动接管：放弃
+      if (!container || !el.isConnected || seq !== jumpSeq) {
+        cleanup();
+        return;
+      }
+
+      const cr = container.getBoundingClientRect();
+      const er = el.getBoundingClientRect();
+      // 期望：元素顶落在视口顶下方 jumpOffset（查找面板让位）处
+      const desired = container.scrollTop + (er.top - cr.top) - jumpOffset();
+      const total = container.scrollHeight;
+      const max = total - container.clientHeight;
+      const clamped = desired > max + 1;
+      vlist?.scrollTo(Math.min(desired, max));
+
+      if (remaining <= 0) {
+        cleanup();
+        return;
+      }
+      requestAnimationFrame(() => {
+        if (seq !== jumpSeq) return; // 已被取消/新跳转接管，链自然断
+        const c2 = scrollEl();
+        if (!c2 || !el.isConnected) {
+          cleanup();
+          return;
+        }
+        const cr2 = c2.getBoundingClientRect();
+        const er2 = el.getBoundingClientRect();
+        const dev = Math.abs(er2.top - cr2.top - jumpOffset());
+        const st = c2.scrollHeight === total ? stable + 1 : 0;
+        // 落定：布局连续两帧稳定，且偏差收敛（<1px）或目标贴可达底
+        if (st >= 2 && (dev < 1 || clamped)) {
+          cleanup();
+          return;
+        }
+        attempt(remaining - 1, st, total, clamped);
+      });
+    };
+
+    attempt(tries, 0, container0.scrollHeight, false);
   }
 
   /* ---------- 脚注跳转（自定义锚 #fn:N / #fnref:N:K） ---------- */
