@@ -992,6 +992,21 @@ function collectFootnoteIds(nodes: MdastContent[], out: Set<string>): void {
   }
 }
 
+/** 递归收集 mdast 树中全部链接定义 identifier（含嵌套容器内的定义） */
+function collectLinkDefIds(nodes: MdastContent[], out: Set<string>): void {
+  for (const n of nodes) {
+    const node = n as {
+      type: string;
+      identifier?: string;
+      children?: MdastContent[];
+    };
+    if (node.type === "definition" && node.identifier) {
+      out.add(node.identifier);
+    }
+    if (Array.isArray(node.children)) collectLinkDefIds(node.children, out);
+  }
+}
+
 /**
  * lines[0..end) 的未闭合围栏 → 返回开启行（1-based）或 -1。
  * 按 CommonMark 判定闭合：同字符、长度不小于开启标记、且不得携带
@@ -1215,15 +1230,14 @@ export function buildBlocksIncremental(
   // 定义在 head/tail 区域时增量基线拼接照常复用，桩仅服务于本次 chunk 解析。
   const fnIds = new Set<string>();
   collectFootnoteIds(prev.root.children, fnIds);
-  const footnoteStubs = [...fnIds].map((id) => `[^${id}]:`).join("\n\n");
+  const linkIds = new Set<string>();
+  collectLinkDefIds(prev.root.children, linkIds);
+  const stubs: string[] = [];
+  for (const id of fnIds) stubs.push(`[^${id}]:`);
+  for (const id of linkIds) stubs.push(`[${id}]: /`);
+  const defStubs = stubs.join("\n\n");
   const local = parseRange(
-    nextSrc,
-    nextLines,
-    nextStart,
-    nextEnd,
-    baseLine,
-    i0 === 0,
-    footnoteStubs
+    nextSrc, nextLines, nextStart, nextEnd, baseLine, i0 === 0, defStubs
   );
   if (!local.blocks) return runFull(); // 局部含 raw 融合，无法可靠映射 → 全量
 

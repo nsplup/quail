@@ -466,6 +466,15 @@
     editValue = s.rows[r]?.[c]?.raw ?? "";
   }
 
+  /** 取消待处理的防抖解析（清定时器与暂存结果） */
+  function cancelPendingParse(): void {
+    pendingParsed = null;
+    if (cellParseTimer !== undefined) {
+      clearTimeout(cellParseTimer);
+      cellParseTimer = undefined;
+    }
+  }
+
   function commitEdit(): void {
     const e = editing;
     if (!e) return;
@@ -473,16 +482,21 @@
     const s = ensureSource();
     if (!s || e.r >= s.rows.length) return;
     while (s.rows[e.r].length <= e.c) s.rows[e.r].push(emptyCell());
-    /* 编辑结束 → 应用解析后的样式（本地即时，不等 worker 回流） */
+
+    /* 内容未变：没有任何源码改动，worker 不会重解析、node 不会回流，
+     因此绝不能把 rawLocalDisplay 设成本地编译视图——否则它会永久
+     覆盖 worker 的正确 HAST（本地视图的链接桩若与文档定义不同步，
+     就表现为"链接引用失效"）。清掉残留，直接显示 worker HAST。 */
+    if (s.rows[e.r][e.c].raw === editValue) {
+      cancelPendingParse();
+      rawLocalDisplay = null;
+      return;
+    }
+
+    /* 内容变化：本地即时应用解析后样式（worker 回流前的过渡显示） */
     applyParsedStyle(s, e);
-    if (s.rows[e.r][e.c].raw === editValue) return; // 内容未变不回写
-    /* 暂存新值供 writeBack 序列化（结构化单元格：保留 spans/attrs，只替换
-     * raw；用户输入恒为 markdown 源（单元格编辑器 = md 源码视图），lang
-     * 统一标 "markdown"——HTML 来源表格序列化时经 encodeCell 编译回
-     * inline HTML（P4 单元格语言统一）；P3 回写后以整表回读结果为准） */
     s.rows[e.r][e.c].raw = editValue;
     s.rows[e.r][e.c].lang = "markdown";
-    /* 反向更新依旧保持在编辑结束后 */
     writeBack(s, { r: e.r, c: e.c });
   }
 
