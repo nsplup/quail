@@ -67,6 +67,7 @@
     deleteRow,
     deleteCol,
   } from "./table-ops";
+  import { footnoteById$, linkDefById$ } from "./reference-store";
 
   let {
     node,
@@ -147,7 +148,8 @@
     if (isStaticTable(node).static) return { static: true, reason: "span" };
     if (nested) return { static: true, reason: "nested" };
     if (srcRejected) return { static: true, reason: "attrs" };
-    if (blockIndex != null && blockIndex < 0) return { static: true, reason: "embedded" };
+    if (blockIndex != null && blockIndex < 0)
+      return { static: true, reason: "embedded" };
     return { static: false };
   }
   const staticInfo = $derived(isStatic(node));
@@ -529,7 +531,6 @@
       raw: value,
     };
 
-    // serialize* 返回 { text, cellOffset }，这里只需要 text
     const serialized =
       s.origin === "markdown"
         ? serializeMarkdownTable(rows, s.aligns as (TableAlign | null)[])
@@ -539,7 +540,26 @@
             s.hasHeader,
           );
 
-    const table = compileMarkdown(serialized.text).children.find(
+    /* 定义桩（仅 markdown 来源）：compileMarkdown 只解析表格文本，不含文档
+     * 定义区——micromark 在 parse 阶段对以下语法的识别依赖定义存在：
+     * - 脚注引用 [^x]（remark-gfm：无定义回退文本）；
+     * - shortcut 链接引用 [text]（CommonMark：无定义回退文本）；
+     * - shortcut 引用式图片 ![alt]（同上）。
+     * full / collapsed 形式（[text][id] / ![alt][id]）语法明确、mdast 层面
+     * 总是产出引用节点，拼桩零成本但对版本差异兜底。
+     * 桩只需 identifier 存在（内容由 MarkdownFootnoteRef / MarkdownLinkRef /
+     * MarkdownImage 渲染期从 STORE 查）；definition / footnoteDefinition
+     * handler 在 mdastToHastRaw 里 return undefined，桩不会进入 HAST 树。
+     * HTML 来源表格的单元格是 HTML 片段（引用语法不被识别），不拼桩。 */
+    let srcText = serialized.text;
+    if (s.origin === "markdown") {
+      const stubs: string[] = [];
+      for (const id of get(footnoteById$).keys()) stubs.push(`[^${id}]:`);
+      for (const id of get(linkDefById$).keys()) stubs.push(`[${id}]: /`);
+      if (stubs.length > 0) srcText += "\n\n" + stubs.join("\n\n");
+    }
+
+    const table = compileMarkdown(srcText).children.find(
       (n): n is Element => n.type === "element" && n.tagName === "table",
     );
     if (!table) return null;

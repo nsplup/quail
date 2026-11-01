@@ -973,6 +973,25 @@ function lastBlockStartingAtOrBefore(blocks: PreviewBlock[], line: number): numb
   return lo;
 }
 
+/** 递归收集 mdast 树中全部脚注定义 identifier（含嵌套在容器内的定义）。
+ *  用途：增量局部 chunk 解析前注入桩定义——chunk 通常不含文末定义区，
+ *  而 mdast-util-gfm-footnote 在 parse 阶段就会把未定义的 [^x] 回退为
+ *  字面文本，导致局部 chunk 丢失 footnoteReference 节点（引用变字面量、
+ *  增量 refs 少项）。桩只需 identifier 存在，内容无关。 */
+function collectFootnoteIds(nodes: MdastContent[], out: Set<string>): void {
+  for (const n of nodes) {
+    const node = n as {
+      type: string;
+      identifier?: string;
+      children?: MdastContent[];
+    };
+    if (node.type === "footnoteDefinition" && node.identifier) {
+      out.add(node.identifier);
+    }
+    if (Array.isArray(node.children)) collectFootnoteIds(node.children, out);
+  }
+}
+
 /**
  * lines[0..end) 的未闭合围栏 → 返回开启行（1-based）或 -1。
  * 按 CommonMark 判定闭合：同字符、长度不小于开启标记、且不得携带
@@ -1016,7 +1035,11 @@ function parseRange(
   fromLine: number,
   toLine: number,
   baseLine: number,
-  claimLead = true
+  claimLead = true,
+  /** 脚注定义桩（"\n\n" 分隔的 `[^id]:` 列表）：让局部 chunk 内的 [^id]
+   *  在 parse 阶段能匹配到定义、产出 footnoteReference 节点。桩节点在
+   *  parse 后按行号过滤，不进入 children / refsCollector / 拼接基线。 */
+  footnoteStubs = ""
 ): {
   children: MdastContent[];
   hast: HastRoot;
@@ -1024,17 +1047,27 @@ function parseRange(
   /** 局部转换的引用声明收集器（键 = local mdast 节点对象） */
   refsCollector: RefsCollector;
 } {
-  const chunk = lines.slice(fromLine - 1, toLine).join("\n");
+  const chunkLines = toLine - fromLine + 1;
+  const chunk =
+    lines.slice(fromLine - 1, toLine).join("\n") +
+    (footnoteStubs ? "\n\n" + footnoteStubs : "");
   // 与 parseMarkdown 同链路：runSync 执行 remark 转换（remark-slug 注入标题 id）
   const root = processor.runSync(processor.parse(chunk)) as unknown as Root;
-  const parsed = mdastToHastRaw(root);
+  // 过滤桩定义：桩拼在 chunk 之后 → position.start.line > chunkLines；
+  // chunk 内真实定义（编辑发生在定义区时）行号 ≤ chunkLines，保留。
+  // 注意：必须用过滤后的 children 构建 HAST——否则桩会进 refsCollector
+  //（footnoteDefinition handler 收集）、进 walkRefs、进下一轮 prev.root。
+  const realChildren = root.children.filter(
+    (n) => !n.position || n.position.start.line <= chunkLines
+  );
+  const parsed = mdastToHastRaw({ ...root, children: realChildren });
   // 局部 chunk 含 raw HTML（rehype-raw 融合）时块边界可能跨越区间外 → 保守全量
+  // totalLines 用原始 chunk 行数（桩不产锚，不参与块行界）
   const { blocks, unmapped } = parsed.hasRaw
     ? { blocks: null as PreviewBlock[] | null, unmapped: false }
-    : blocksFromHast(parsed.hast, toLine - fromLine + 1, baseLine, claimLead);
-  // 无法可靠映射 → 调用方保守全量
+    : blocksFromHast(parsed.hast, chunkLines, baseLine, claimLead);
   return {
-    children: root.children,
+    children: realChildren,
     hast: parsed.hast,
     blocks: unmapped || !blocks ? null : blocks,
     refsCollector: parsed.refsCollector,
@@ -1176,36 +1209,49 @@ export function buildBlocksIncremental(
 
   // ---- 局部 parse + 拼接 ----
   const baseLine = nextStart - 1;
-  // i0 > 0：chunk 之上有可复用块（head）→ 前导空行由 head 末块吸收
-  //（与全量 emit(a-1) 语义对齐）；i0 === 0：chunk 起始于文档首行，
-  // 无 head 可吸收 → 保持首块自补（与全量路径文档首块行为一致）
-  const local = parseRange(nextSrc, nextLines, nextStart, nextEnd, baseLine, i0 === 0);
+  // 脚注定义桩：从上一轮 mdast root 收集全部 identifier（稳态下即全文档
+  // 定义全集——增量拼接的 root 保留 head + local + tail 全部定义节点）。
+  // 拼接后 chunk 内的 [^id] 在 parse 阶段即可匹配定义，不会回退为字面文本；
+  // 定义在 head/tail 区域时增量基线拼接照常复用，桩仅服务于本次 chunk 解析。
+  const fnIds = new Set<string>();
+  collectFootnoteIds(prev.root.children, fnIds);
+  const footnoteStubs = [...fnIds].map((id) => `[^${id}]:`).join("\n\n");
+  const local = parseRange(
+    nextSrc,
+    nextLines,
+    nextStart,
+    nextEnd,
+    baseLine,
+    i0 === 0,
+    footnoteStubs
+  );
   if (!local.blocks) return runFull(); // 局部含 raw 融合，无法可靠映射 → 全量
 
-  const headBlocks = prev.blocks.slice(0, i0);
-  const tailBlocks = prev.blocks.slice(i1 + 1);
+  // P0 不变量：绝不原地改共享块对象——prev.blocks 可能被主线程滚动同步 /
+  // 大纲 / 上一轮 HAST 拼接引用，原地改写会让旧快照行号异步漂移。
+  // headBlocks / tailBlocks 元素一律先克隆再改。
+  const headBlocks = prev.blocks.slice(0, i0).map((b) => ({ ...b }));
+  // tail 块整体 +delta 在克隆时完成（原循环删除）
+  const tailBlocks = prev.blocks.slice(i1 + 1).map((b) => ({
+    ...b,
+    startLine: b.startLine + delta,
+    endLine: b.endLine + delta,
+  }));
 
-  /* 前导空行归属对齐：chunk 首块不再回拉认领锚前空行（claimLead=false），
-     改由 head 末块把 endLine 延到首块锚前一行为止。此前首块 startLine
-     被拉回 chunk 起点，行数变化型编辑后块行界相对真实锚点永久前移
-     （滚动同步/光标定位按行界选块随之错位，且无法自愈）。 */
   if (local.blocks.length > 0 && headBlocks.length > 0) {
     headBlocks[headBlocks.length - 1].endLine = local.blocks[0].startLine - 1;
   }
 
-  // 行号平移（尾部块整体 +delta）+ 位置重排
   const blocks: PreviewBlock[] = [...headBlocks, ...local.blocks, ...tailBlocks];
   for (let i = 0; i < blocks.length; i++) {
-    blocks[i].index = i;
+    blocks[i].index = i; // 克隆对象上的赋值，安全
   }
-  for (const b of tailBlocks) {
-    b.startLine += delta;
-    b.endLine += delta;
-  }
+  // 原 for (const b of tailBlocks) { b.startLine += delta; ... } 已删除
   if (local.blocks.length === 0) {
     /* 局部区间无锚（纯空行/空 chunk）：不产块，但区间 [nextStart..nextEnd] 的行
        必须有人认领——并入相邻复用块，否则 head/tail 间出现行界空洞。
-       注意必须在 tail 平移之后执行（否则赋值会被随后的 += delta 二次修改） */
+       注意：此时 headBlocks / tailBlocks 已是克隆，赋值安全；
+       nextEnd / nextStart 均为新文档行号，与克隆块语义一致 */
     if (headBlocks.length > 0) {
       headBlocks[headBlocks.length - 1].endLine = nextEnd;
     } else if (tailBlocks.length > 0) {
@@ -1365,6 +1411,7 @@ export function buildBlocksIncremental(
     ...prev.root,
     children,
   };
+
   return {
     root,
     hast,
