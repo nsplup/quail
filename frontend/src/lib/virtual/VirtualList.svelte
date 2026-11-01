@@ -368,6 +368,12 @@
         // 同步基线：补偿写入不参与「单帧位移」判定，避免误入快速滚动空窗
         lastAppliedTop = c2.scrollTop;
         if (pendingTop !== null) pendingTop = c2.scrollTop;
+        // 补偿后的 scrollTop 才是视口真实位置，但本轮 flush 的渲染范围
+        // 是按补偿前的 scrollTop 算的；delta 大时（双击重置分隔线、一批
+        // 高图同时实测等）视口会落在未渲染区，且紧随的 scroll 事件因基线
+        // 已对齐（delta=0）被早退吞掉——必须再 version++ 按新位置重算。
+        // 微任务内完成、先于绘制，无可见闪烁。
+        version++;
       });
     }
   }
@@ -596,7 +602,9 @@
       <div
         use:measure
         data-index={it.i}
-        style="position: absolute; top: {it.top}px; left: 0; width: 100%; visibility: {it.measured ? 'visible' : 'hidden'};"
+        style="position: absolute; top: {it.top}px; left: 0; width: 100%; visibility: {it.measured
+          ? 'visible'
+          : 'hidden'};"
       >
         {@render children(it.item, it.i)}
       </div>
