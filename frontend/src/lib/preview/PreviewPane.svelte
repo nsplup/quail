@@ -42,7 +42,11 @@
   import { openExternal } from "../bridge";
   import MarkdownSegment from "../markdown/MarkdownSegment.svelte";
   import MarkdownFootnotes from "../markdown/MarkdownFootnotes.svelte";
-  import { footnoteList$, refsSnapshot$ } from "../markdown/reference-store";
+  import {
+    footnoteList$,
+    refsSnapshot$,
+    footnoteNumberById$,
+  } from "../markdown/reference-store";
   import type { PreviewApi } from "../types";
 
   let {
@@ -57,7 +61,10 @@
   } = $props();
 
   /** 脚注列表哨兵项（data 末尾占位；children snippet 据此分派渲染组件） */
-  const FOOTNOTES_SENTINEL = { type: "__footnotes__", nodes: [] } as HastSegment;
+  const FOOTNOTES_SENTINEL = {
+    type: "__footnotes__",
+    nodes: [],
+  } as HastSegment;
   /** 虚拟列表数据：有被引用的脚注时末尾挂哨兵项（空脚注不占位） */
   const items = $derived(
     $footnoteList$.length > 0 ? [...segments, FOOTNOTES_SENTINEL] : segments,
@@ -237,7 +244,8 @@
       jumpToElement(mounted);
       return;
     }
-    if (items.length === 0 || items[items.length - 1] !== FOOTNOTES_SENTINEL) return;
+    if (items.length === 0 || items[items.length - 1] !== FOOTNOTES_SENTINEL)
+      return;
     vlist?.scrollToIndex(items.length - 1, { align: "end" });
     afterLayout(() => {
       const el = scrollEl()?.querySelector(`[data-fn-index="${n}"]`);
@@ -251,7 +259,10 @@
     const walk = (n: HastContent): void => {
       if (n.type !== "element") return;
       const el = n as HastElement;
-      if (el.tagName === "md-footnote-ref" && readRefProp(el, "data-identifier") === identifier) {
+      if (
+        el.tagName === "md-footnote-ref" &&
+        readRefProp(el, "data-identifier") === identifier
+      ) {
         count++;
       }
       el.children.forEach(walk);
@@ -272,30 +283,48 @@
     const info = $refsSnapshot$.footnoteRefs[n - 1];
     if (!info || k < 1) return;
     const { identifier } = info;
-    let segIndex = -1;
-    let jInSeg = -1;
+
+    // ① 正文段扫描（原逻辑）：命中直接元素级跳转
     let seen = 0;
     for (let s = 0; s < segments.length; s++) {
       const c = countFnRefNodes(segments[s].nodes, identifier);
       if (seen + c >= k) {
-        segIndex = s;
-        jInSeg = k - seen - 1;
-        break;
+        const segIndex = s;
+        const jInSeg = k - seen - 1;
+        vlist?.scrollToIndex(segIndex, { align: "start" });
+        afterLayout(() => {
+          const seg = scrollEl()?.querySelector(
+            `.md-item[data-index="${segIndex}"]`,
+          );
+          const refs = seg?.querySelectorAll(
+            `[data-fn-ref="${CSS.escape(identifier)}"]`,
+          );
+          const el = refs?.[jInSeg];
+          if (el) jumpToElement(el);
+        });
+        return;
       }
       seen += c;
     }
-    if (segIndex < 0) return;
-    vlist?.scrollToIndex(segIndex, { align: "start" });
-    afterLayout(() => {
-      const seg = scrollEl()?.querySelector(
-        `.md-item[data-index="${segIndex}"]`,
-      );
-      const refs = seg?.querySelectorAll(
-        `[data-fn-ref="${CSS.escape(identifier)}"]`,
-      );
-      const el = refs?.[jInSeg];
-      if (el) jumpToElement(el);
-    });
+
+    // ② 正文未命中 → 第 K 次出现在某脚注定义内（嵌套引用）。
+    //    FootnoteDefEntry.children 已是 HAST（md-footnote-ref 标记由
+    //    processFootnoteContent 保留），footnotes 数组按 defsByBlock 文档序，
+    //    逐项累加即可对齐 walkRefs 统计 count 时的顺序。
+    //    文档序假设：GFM 主流写法（定义在文末），"正文全部引用 → 定义内
+    //    全部引用"即文档序——命中即精确；定义前置于正文的罕见写法下
+    //    K 可能偏差，但用户几乎不可这样写（引用发生在定义书写位置之前）。
+    let remaining = k - seen;
+    for (const def of $refsSnapshot$.footnotes) {
+      const c = countFnRefNodes(def.children, identifier);
+      if (remaining <= c) {
+        const ownerNumber = $footnoteNumberById$.get(def.identifier);
+        if (ownerNumber != null) jumpToFootnoteDef(ownerNumber);
+        return;
+      }
+      remaining -= c;
+    }
+    // 数据不一致（增量窗口 / 无效锚）：保守不动
   }
 
   /**
@@ -367,7 +396,11 @@
       {#if seg === FOOTNOTES_SENTINEL}
         <!-- 脚注列表项（文档末尾，只从全局 STORE 订阅）：包装与 MarkdownSegment
              同构（.md-item > .md-block），保证 .md-block 域下的既有内容样式适用 -->
-        <div class="md-item md-item-footnotes" data-btype="footnotes" data-index={index}>
+        <div
+          class="md-item md-item-footnotes"
+          data-btype="footnotes"
+          data-index={index}
+        >
           <article class="md-block">
             <MarkdownFootnotes />
           </article>
