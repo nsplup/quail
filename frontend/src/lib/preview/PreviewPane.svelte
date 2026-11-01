@@ -214,14 +214,30 @@
     return seg.nodes.some(walk);
   }
 
-  /** 元素级定位：以滚动容器为基准换算绝对 scrollTop（元素可能深嵌在
-   *  section/ol 内，段顶 ≠ 元素顶，故不做 scrollToIndex 兜底近似） */
+  /**
+   * 跳转让位偏移：读查找面板高度变量 --search-panel-h
+   * （面板打开时挂载于祖先节点、关闭时移除；自定义属性沿继承链解析，
+   *  在滚动容器上读取即得当前值）。
+   * 返回 px 数值：变量存在且为合法长度 → 数值；缺失/畸形 → 0。
+   */
+  function jumpOffset(): number {
+    const container = scrollEl();
+    if (!container) return 0;
+    const raw = getComputedStyle(container)
+      .getPropertyValue("--search-panel-h")
+      .trim();
+    const px = Number.parseFloat(raw);
+    // 只接受 px 类正值；空串/非法值/负值一律 0（Number.parseFloat("abc") 为 NaN）
+    return Number.isFinite(px) && px > 0 ? px : 0;
+  }
+
+  // 元素级定位（覆盖标题锚直跳、已挂载脚注、全部双 rAF 二次修正）
   function jumpToElement(el: globalThis.Element): void {
     const container = scrollEl();
     if (!container) return;
     const cr = container.getBoundingClientRect();
     const er = el.getBoundingClientRect();
-    vlist?.scrollTo(container.scrollTop + (er.top - cr.top));
+    vlist?.scrollTo(container.scrollTop + (er.top - cr.top) - jumpOffset());
   }
 
   /* ---------- 脚注跳转（自定义锚 #fn:N / #fnref:N:K） ---------- */
@@ -291,7 +307,10 @@
       if (seen + c >= k) {
         const segIndex = s;
         const jInSeg = k - seen - 1;
-        vlist?.scrollToIndex(segIndex, { align: "start" });
+        vlist?.scrollToIndex(segIndex, {
+          align: "start",
+          offset: jumpOffset(),
+        });
         afterLayout(() => {
           const seg = scrollEl()?.querySelector(
             `.md-item[data-index="${segIndex}"]`,
@@ -345,7 +364,10 @@
       }
       const segIndex = segments.findIndex((s) => segmentHasId(s, id));
       if (segIndex >= 0) {
-        vlist?.scrollToIndex(segIndex, { align: "start" });
+        vlist?.scrollToIndex(segIndex, {
+          align: "start",
+          offset: jumpOffset(),
+        });
         requestAnimationFrame(() =>
           requestAnimationFrame(() => {
             const el = scrollEl()?.querySelector(`[id="${CSS.escape(id)}"]`);
