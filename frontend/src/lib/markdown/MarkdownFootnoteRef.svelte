@@ -62,17 +62,54 @@
   function computeStyle(): void {
     const el = anchorEl;
     if (!el) return;
+
     const rect = el.getBoundingClientRect();
     const vw = window.innerWidth;
     const vh = window.innerHeight;
-    const width = Math.min(480, vw - 16);
-    // 左右夹取：尽量与锚左对齐，不溢出视口
-    const left = Math.max(8, Math.min(rect.left, vw - width - 8));
+
+    const GAP = 8;
+    const MAX_W = 480;
+
+    // 水平活动范围 = 预览区（不能越过 .pane-preview 进入编辑区）；
+    // 单栏 / 找不到预览区时退化为视口。
+    const paneEl = el.closest(".pane-preview");
+    const paneRect = paneEl ? paneEl.getBoundingClientRect() : null;
+    const minX = (paneRect?.left ?? 0) + GAP;
+    const maxX = (paneRect?.right ?? vw) - GAP;
+    const availW = Math.max(0, maxX - minX);
+    const W = Math.min(MAX_W, availW);
+
+    // 两个方向各自可用的横向空间
+    const spaceRight = maxX - rect.left; // 左缘贴锚点左缘，向右展开
+    const spaceLeft = rect.right - minX; // 右缘贴锚点右缘，向左展开
+
+    let horizontal: string;
+    let width = W;
+
+    if (spaceRight >= W) {
+      // 右侧放得下：左对齐，向右展开（常规情形）
+      horizontal = `left: ${rect.left}px;`;
+    } else if (spaceLeft >= W) {
+      // 右侧放不下、左侧放得下：右对齐，向左展开（行尾锚点）
+      horizontal = `right: ${vw - rect.right}px;`;
+    } else if (spaceRight >= spaceLeft) {
+      // 两侧都不够 W：选空间大的一侧并收缩宽度（长脚注 + 窄预览区）
+      horizontal = `left: ${rect.left}px;`;
+      width = Math.max(0, spaceRight);
+    } else {
+      horizontal = `right: ${vw - rect.right}px;`;
+      width = Math.max(0, spaceLeft);
+    }
+
     const below = rect.bottom + 8;
     const above = rect.top - 8;
-    const est = 160; // 初始估高（实测由 max-height 约束兜底）
-    const top = below + est > vh && above - est > 8 ? `bottom: ${vh - above}px;` : `top: ${below}px;`;
-    popStyle = `position: fixed; ${top} left: ${left}px; max-width: ${width}px;`;
+    const est = 160;
+    const top =
+      below + est > vh && above - est > 8
+        ? `bottom: ${vh - above}px;`
+        : `top: ${below}px;`;
+
+    popStyle = `position: fixed; ${top} ${horizontal} max-width: ${width}px;`;
   }
 
   function scheduleOpen(): void {
@@ -115,7 +152,13 @@
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === "Escape") closeNow();
     };
-    const onScroll = (): void => closeNow();
+    const onScroll = (e: Event): void => {
+      const t = e.target;
+      // 浮层内部滚动（max-height 内滚 / 嵌套浮层 / 浮层内横向滚动块）
+      // 不应关闭；只有外部滚动（预览区等）才让定位语义失效
+      if (t instanceof Element && t.closest(".md-fnref-pop")) return;
+      closeNow();
+    };
     window.addEventListener("keydown", onKey);
     window.addEventListener("scroll", onScroll, true);
     return () => {
@@ -140,7 +183,10 @@
     onpointerleave={scheduleClose}
   >
     <sup class="footnote-ref" data-fn-ref={identifier} bind:this={anchorEl}>
-      <a href={`#fn:${number}`} aria-label={$t("footnotes.goto", { values: { n: number } })}>
+      <a
+        href={`#fn:${number}`}
+        aria-label={$t("footnotes.goto", { values: { n: number } })}
+      >
         {number}
       </a>
     </sup>
