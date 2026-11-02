@@ -135,21 +135,20 @@
    *   readNumberAttr 兼容 colSpan/colspan 键名与 number/string 值）；
    * - "nested"：嵌套表格（raw HTML 单元格内的表格，DOM 判定）；
    * - "attrs"：源码侧单元格反编译失败（HTML 来源单元格含未知标签/属性，
-   *   P4 接入：ensureSource 定位后发现 → 整表静态）；
-   * - "embedded"：表格位于脚注定义内容（MarkdownFootnotes 经
-   *   MarkdownNode 以 blockIndex = -1 渲染）：无对应预览块行界，
-   *   源码定位/回写不可靠 → 只读渲染（防止把回写打到错误行区间）。
+   *   见 table-source 的 CellSource.lang）；
+   * - "popover"：浮层上下文（脚注悬停预览等临时副本，DOM 判定）——
+   *   浮层内的表格是主文档的副本，悬停结束即卸载，编辑状态无法维持，
+   *   且与主文档同一份源码会互相干扰。
    * 命中任一条件 → 整表只读渲染，禁止原地编辑与行/列操作。
    */
   function isStatic(node: Element): {
     static: boolean;
-    reason?: "span" | "nested" | "attrs" | "embedded";
+    reason?: "span" | "nested" | "attrs" | "popover";
   } {
     if (isStaticTable(node).static) return { static: true, reason: "span" };
     if (nested) return { static: true, reason: "nested" };
+    if (inPopover) return { static: true, reason: "popover" };
     if (srcRejected) return { static: true, reason: "attrs" };
-    if (blockIndex != null && blockIndex < 0)
-      return { static: true, reason: "embedded" };
     return { static: false };
   }
   const staticInfo = $derived(isStatic(node));
@@ -193,11 +192,24 @@
   let tableEl = $state<HTMLTableElement | null>(null);
   /** 嵌套表格（raw HTML 单元格内的表格）：挂载后经 DOM 判定，只读渲染 */
   let nested = $state(false);
+  /**
+   * 浮层上下文（脚注悬停预览等）：浮层内容是主文档脚注定义的临时副本，
+   * 悬停结束即卸载——在其中编辑会写到主文档同一份源码，浮层消失后编辑
+   * 状态无法维持，且同一份表格在主文档与浮层同时存在会互相干扰。
+   * 与 nested 同构的挂载后 DOM 判定（选择器预留 [data-popover] 供未来
+   * 其他浮层复用；当前命中 FootNoteRef 的 .md-fnref-pop）。
+   */
+  const POPOVER_SELECTOR = ".md-fnref-pop, [data-popover]";
+  let inPopover = $state(false);
 
   $effect(() => {
     // 父链上出现 td/th/table 即嵌套表格：整表定位会命中外层表格源码，
     // 原地编辑会以外层序列化覆盖嵌套结构 → 静态渲染兜底
     nested = Boolean(tableEl?.parentElement?.closest("td, th, table"));
+    // 父链上出现浮层容器：浮层内为临时副本 → 整表静态。
+    // 用 closest 从 tableEl 自身开始向上查；tableEl 是 <table>，
+    // 浮层容器是 <span>，不会命中自身
+    inPopover = Boolean(tableEl?.closest(POPOVER_SELECTOR));
   });
 
   /* node 引用变化（worker 重解析回流）→ 源码缓存失效，交互时重新定位；
@@ -275,7 +287,8 @@
         return src;
       }
     }
-    /* 静态表格（span 合并 / 嵌套 / 源码侧反编译失败）不定位、不缓存 */
+    /* 静态表格（span 合并 / 嵌套 / 源码侧反编译失败 / 浮层上下文）
+      不定位、不缓存 */
     if (isStatic(node).static) return null;
     const api = get(editorApi$);
     if (!api) return null;
