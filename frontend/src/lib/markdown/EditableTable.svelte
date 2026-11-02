@@ -251,6 +251,13 @@
     cellEditor.requestMeasure();
   });
 
+  function tableOrdinalOf(node: Element): number | null {
+    const p = (node.properties ?? {}) as Record<string, unknown>;
+    const v = p["data-table-ordinal"] ?? p.dataTableOrdinal;
+    const n = typeof v === "number" ? v : Number(v);
+    return Number.isFinite(n) && n >= 0 ? n : null;
+  }
+
   /** 懒定位表格源码（缓存在交互期间复用；node 变化后自动失效） */
   function ensureSource(): TableSource | null {
     if (src) {
@@ -278,7 +285,7 @@
     const seed = block
       ? { startLine: block.startLine, endLine: block.endLine }
       : null;
-    const found = locateTableSource(doc, seed, origin);
+    const found = locateTableSource(doc, seed, origin, tableOrdinalOf(node));
     if (!found) return null;
     if (found.staticReason) {
       /* P4：HTML 来源单元格反编译失败（未知标签 / 白名单外属性）→

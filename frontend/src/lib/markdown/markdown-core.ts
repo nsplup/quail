@@ -362,6 +362,24 @@ function isMdlAnchor(node: HastContent): boolean {
   );
 }
 
+function annotateTableOrdinals(root: HastRoot): void {
+  let ordinal = 0;
+  const visit = (node: RootContent): void => {
+    if (node.type === "comment") {
+      if (isMdlAnchor(node)) ordinal = 0;
+      return;
+    }
+    if (node.type !== "element") return;
+    const el = node as HastElement;
+    if (el.tagName === "table") {
+      (el.properties ??= {})["data-table-ordinal"] = String(ordinal++);
+      return;
+    }
+    for (const c of el.children) visit(c);
+  };
+  for (const c of root.children) visit(c);
+}
+
 function mdastToHastRaw(root: Root): RawResult {
   /* 引用声明收集器：definition / footnoteDefinition handler 在转换期间
      写入（walkRefs 按 mdast 节点对象取回），解析结束时 finalize 成快照 */
@@ -498,6 +516,7 @@ function mdastToHastRaw(root: Root): RawResult {
   // 融合后仍无 data-md-table 标记的 <table> 即 raw HTML 来源（融合会原样
   // 保留 markdown 侧属性，见 markMarkdownTables 注释）→ 补打 html 来源标记
   markHtmlTables(sanitized);
+  annotateTableOrdinals(sanitized);
   // 剥除 HAST position：渲染层只消费结构/文本，不读行号（行号在锚 comment 与
   // mdast root 上）；统一剥除后增量（局部转换、position 为 chunk 行号）与全量
   // （全文行号）的 HAST 结构完全一致，渲染层引用对比/快照测试不受干扰。

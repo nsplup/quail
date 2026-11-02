@@ -129,6 +129,39 @@ export function rawRows(s: TableSource): string[][] {
   return s.rows.map((row) => row.map((c) => c.raw));
 }
 
+export function extractAllMarkdownTableRanges(lines: string[]): { start: number; end: number }[] {
+  const out: { start: number; end: number }[] = [];
+  let i = 0;
+  while (i < lines.length - 1) {
+    if (!lines[i].includes("|") || !isDelimiterRow(lines[i + 1])) { i++; continue; }
+    let end = i + 1;
+    let j = i + 2;
+    while (j < lines.length && lines[j].trim() !== "" && lines[j].includes("|")) { end = j; j++; }
+    out.push({ start: i, end });
+    i = end + 1;                              // 跳过本表体，继续找下一张
+  }
+  return out;
+}
+
+export function extractAllHtmlTableRanges(lines: string[]): { start: number; end: number }[] {
+  const out: { start: number; end: number }[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    if (!/<table[\s>]/i.test(lines[i])) { i++; continue; }
+    let depth = 0;
+    let end = -1;
+    for (let j = i; j < lines.length; j++) {
+      depth += (lines[j].match(/<table[\s>]/gi) ?? []).length;
+      depth -= (lines[j].match(/<\/table\s*>/gi) ?? []).length;
+      if (depth <= 0) { end = j; break; }
+    }
+    if (end < 0) break;                       // 未闭合：不认，终止
+    out.push({ start: i, end });
+    i = end + 1;                              // 嵌套表格被外层包含，不会单独入列
+  }
+  return out;
+}
+
 /* ---------------- 来源标记读取（与 markdown-core.ts 的标记约定对齐） ---------------- */
 
 const MD_TABLE_FLAG = "data-md-table";
@@ -805,15 +838,30 @@ function extractInRange(lines: string[], base: number, origin: TableOrigin): Lin
 export function locateTableSource(
   doc: string,
   seed: LineRange | null,
-  origin: TableOrigin
+  origin: TableOrigin,
+  tableOrdinal: number | null = null
 ): TableSource | null {
   const lines = doc.split("\n");
-  let range: LineRange | null = null;
+  let ranges: LineRange[] = [];
+  let usedSeed = false;
   if (seed && seed.startLine >= 1 && seed.endLine <= lines.length && seed.startLine <= seed.endLine) {
-    range = extractInRange(lines.slice(seed.startLine - 1, seed.endLine), seed.startLine, origin);
+    const rs = origin === "html"
+      ? extractAllHtmlTableRanges(lines.slice(seed.startLine - 1, seed.endLine))
+      : extractAllMarkdownTableRanges(lines.slice(seed.startLine - 1, seed.endLine));
+    ranges = rs.map((r) => ({ startLine: seed.startLine + r.start, endLine: seed.startLine + r.end }));
+    usedSeed = ranges.length > 0;
   }
-  if (!range) range = extractInRange(lines, 1, origin);
-  if (!range) return null;
+  if (ranges.length === 0) {
+    const rs = origin === "html" ? extractAllHtmlTableRanges(lines) : extractAllMarkdownTableRanges(lines);
+    ranges = rs.map((r) => ({ startLine: 1 + r.start, endLine: 1 + r.end }));
+  }
+  if (ranges.length === 0) return null;
+  /* 序号只在 seed 内命中时有意义（块内序号）；全文兜底是「全文第 N 个」，
+     语义不同，不能套用块内序号，回退第一个（现状行为） */
+  const idx = usedSeed && tableOrdinal != null && tableOrdinal >= 0 && tableOrdinal < ranges.length
+    ? tableOrdinal
+    : 0;
+  const range = ranges[idx];
   const text = lines.slice(range.startLine - 1, range.endLine).join("\n");
   if (origin === "html") {
     const parsed = parseHtmlTable(text);
