@@ -28,6 +28,8 @@
     用变量统一，避免两处硬编码漂移 */
   :root {
     --scrollbar-thickness: 6px;
+
+    --pane-space: 18px;
   }
 
   html,

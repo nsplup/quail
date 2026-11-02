@@ -182,7 +182,7 @@ const editorTheme = EditorView.theme({
   ".cm-scroller": {
     fontFamily: "var(--ed-font-family, ui-monospace, monospace)",
     lineHeight: "1.75",
-    padding: "10px 0 45vh",
+    padding: "var(--pane-space, 18px) 0 45vh",
     overflow: "auto",
     cursor: "text",
   },
@@ -191,7 +191,7 @@ const editorTheme = EditorView.theme({
     padding: "0",
   },
   ".cm-line": {
-    padding: "0 18px",
+    padding: "0 var(--pane-space, 18px)",
   },
   ".cm-cursor": {
     borderLeftColor: "var(--ed-accent)",
