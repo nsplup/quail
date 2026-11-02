@@ -621,20 +621,34 @@ body.search-open .pane-editor .cm-scroller {
   padding-left: 1.6em;
 }
 
+/* 脚注项：普通块级流（回链已在段落内部，不再需要 flex 布局） */
 .md-block .md-footnotes-item {
   margin: 0.4em 0;
 }
 
-/* 回链组：↩（多次引用带上标序号），左对齐紧跟定义内容 */
+/* 回链组：inline-flex + gap 控制多个回链之间的间距；
+   nowrap 保证单个回链内「图标 + 上标」不被拆行 */
 .md-block .md-footnotes-backrefs {
-  margin-left: 0.35em;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3em;              /* ← 回链之间的间隔（约 4.6px @15.5px 字号） */
+  margin-left: 0.35em;     /* 与脚注正文之间的间隔 */
   white-space: nowrap;
+}
+
+/* 独立块回链（末尾非段落时）：block-level flex 独占一行，上方留一点间距 */
+.md-block .md-footnotes-item > .md-footnotes-backrefs {
+  display: flex;
+  margin: 0.25em 0 0;
 }
 
 .md-block .md-footnotes-backref {
   color: var(--pv-muted);
   text-decoration: none;
-  margin-left: 0.15em;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.05em;             /* 图标与上标序号之间的间隔 */
+  /* 不再设 margin-left：回链之间的间距统一由容器 gap 控制 */
 }
 
 .md-block .md-footnotes-backref:hover {

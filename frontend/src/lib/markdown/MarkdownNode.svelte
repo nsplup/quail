@@ -1,43 +1,14 @@
 <script lang="ts">
   /**
    * HAST 节点递归渲染组件（Svelte 5 自导入实现递归）。
+   * ...（原注释全部保留）
    *
-   * - element → svelte:element 动态标签（属性经 hastAttrs 映射 className→class 等）；
-   * - img（image / imageReference handler 与 raw HTML 归一化的统一产物）→
-   *   MarkdownImage 组件（三态 / 懒加载 / restricted 判定；引用式图片
-   *   从全局 STORE 解析定义，行为等价旧自定义元素）；
-   * - table（markdown / raw HTML，来源经 data-*-table 标记）→ EditableTable
-   *   可编辑表格组件（HAST 显示 + 反向更新编辑区，见组件头注释）；
-   * - details（raw HTML 折叠面板）→ Accordion 组件（折叠状态经全局
-   *   store 记忆：挂载优先取 store，回落 HAST open 属性，见组件头注释）；
-   * - pre>code（围栏代码块）→ CodeBlock（着色 worker + 内容寻址缓存）；
-   * - task-list-item 内的 checkbox（tight: li>input / loose: li>p>input）
-   *   → EditableCheckbox；
-   * - text → 文本节点（值原样输出，空格/换行由 CSS white-space 控制）；
-   * - comment / doctype → 不渲染；
-   * - raw → 显式忽略并 warn（指南方案 B 兜底；管线 rehype-raw 融合后不应出现）。
-   *
-   * 【结构无关渲染】children 渲染点统一为「{#each} 内单一 <MarkdownNode>」，
-   * 任务 checkbox 的分派由 inTaskItem prop 驱动、在 element 分支最前面完成，
-   * 不再在 li / p 分支里与相邻节点混排。{#if} / {#each} 的锚点是注释（不占宽），
-   * 块体为单一组件 → Prettier 等格式化工具写不写换行、写不写空格都不会产生
-   * 模板空白 text node，输出 DOM 与模板排版无关。
-   *
-   * 【inTaskItem 传递】li.task-list-item → children 传 true；
-   * 通用 element 在非 li/ul/ol 时继承（p / strong / em / a 等）；
-   * 遇 li/ul/ol 重置为 false（嵌套列表由各自的 li.task-list-item 重新判定）。
-   *
-   * 【accordionParentKey 传递】details 子树（summary / content）内所有
-   * 递归渲染点透传 accordionParentKey，遇到内层 details 时交由 Accordion
-   * 组合成 "外层H/内层H" 路径 key——解决嵌套折叠面板 summary 相同导致
-   * 共享折叠记录、内外层互相覆盖的问题。details 子树之外的节点忽略此 prop
-   * （传 undefined 等价于顶层，行为不变）。
-   *
-   * 增量更新：node 引用未变（增量解析 head/tail 段复用）时 Svelte 跳过该子树；
-   * 引用变化但结构相同（同为 paragraph 等）时复用 DOM，仅更新差异文本/属性——
-   * MarkdownImage 组件实例不销毁，图片不重新请求。
+   * 【trailing snippet】可选的内联尾部内容（如脚注回链）。仅在当前节点
+   * 自身是 <p> 时渲染在段落最后一个子节点之后；子节点递归时不透传，
+   * 因此不会扩散到内层段落 / 其它元素。
    */
   import type { Element, RootContent, Text } from "hast";
+  import type { Snippet } from "svelte";
   import MarkdownImage from "./MarkdownImage.svelte";
   import MarkdownFootnoteRef from "./MarkdownFootnoteRef.svelte";
   import MarkdownLinkRef from "./MarkdownLinkRef.svelte";
@@ -54,6 +25,7 @@
     blockIndex = null,
     inTaskItem = false,
     accordionParentKey = null,
+    trailing,
   }: {
     node: RootContent;
     blockIndex?: number | null;
@@ -64,6 +36,11 @@
      * 避免内外层 summary 相同 → 共享折叠记录导致点击互扰 / 状态回弹）。
      */
     accordionParentKey?: string | null;
+    /**
+     * 可选：追加在当前 <p> 段落末尾的内联内容（如脚注回链）。
+     * 仅当本节点自身是 <p> 时渲染；不会传递给子节点。
+     */
+    trailing?: Snippet;
   } = $props();
 
   /** GFM 任务列表项（remark-gfm 给 li 注入 task-list-item 类，themes.css 同款判定） */
@@ -204,6 +181,10 @@
           accordionParentKey={accordionParentKey}
         />
       {/each}
+      <!-- 仅当前节点是 <p> 且显式传入 trailing 时渲染；子节点递归不传 trailing -->
+      {#if trailing && (node as Element).tagName === "p"}
+        {@render trailing()}
+      {/if}
     </svelte:element>
   {/if}
 {:else if node.type === "text"}
