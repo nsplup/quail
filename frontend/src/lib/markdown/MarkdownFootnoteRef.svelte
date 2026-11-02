@@ -16,6 +16,12 @@
    *
    * 【渲染点约定】与 MarkdownNode 一致：children 渲染为
    * 「{#each} 内单一 <MarkdownNode>」，块体为单一组件。
+   *
+   * 【行内空白】本组件在 <p> 等行内上下文中被实例化，模板文本内容位置上
+   * 的换行/缩进会被折叠成可见空格。故：`{#if}`/`{:else}`/`{/if}` 与
+   * <span>、`[^{label}]` 之间，`</sup>`/`{#if open}`/`{/if}` 之间，
+   * `{#each}`/子组件/`{/each}` 之间全部紧贴；仅标签属性内部允许换行
+   * （属性不产生文本节点）。
    */
   import MarkdownNode from "./MarkdownNode.svelte";
   import type { Element as HastElement } from "hast";
@@ -173,28 +179,16 @@
   });
 </script>
 
-{#if def && number}
-  <!-- 纯悬停宿主（非交互元素）：pointerenter/leave 只服务预览浮层的
-       生命周期，交互语义在内层 <a>（可聚焦、有 aria-label） -->
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <span
+{#if def && number}<!-- 纯悬停宿主（非交互元素）：pointerenter/leave 只服务预览浮层的生命周期，交互语义在内层 <a>（可聚焦、有 aria-label） --><!-- svelte-ignore a11y_no_static_element_interactions --><span
     class="md-fnref"
     onpointerenter={scheduleOpen}
     onpointerleave={scheduleClose}
-  >
-    <sup class="footnote-ref" data-fn-ref={identifier} bind:this={anchorEl}>
-      <a
+    ><sup class="footnote-ref" data-fn-ref={identifier} bind:this={anchorEl}
+      ><a
         href={`#fn:${number}`}
-        aria-label={$t("footnotes.goto", { values: { n: number } })}
-      >
-        {number}
-      </a>
-    </sup>
-    {#if open}
-      <!-- 浮层渲染在组件子树内（position:fixed 定位），预览区点击委托照常
-           捕获其内层链接（跳列表项 / 外链）；嵌套引用的浮层 DOM 更深，
-           同 z-index 下后序绘制在上方 -->
-      <span
+        aria-label={$t("footnotes.goto", { values: { n: number } })}>{number}</a
+      ></sup
+    >{#if open}<!-- 浮层渲染在组件子树内（position:fixed 定位），预览区点击委托照常捕获其内层链接（跳列表项 / 外链）；嵌套引用的浮层 DOM 更深，同 z-index 下后序绘制在上方 --><span
         class="md-fnref-pop"
         role="tooltip"
         style={popStyle}
@@ -205,14 +199,8 @@
           }
         }}
         onpointerleave={scheduleClose}
-      >
-        {#each def.children as child, i (`fn-${identifier}-${i}`)}
-          <MarkdownNode node={child} />
-        {/each}
-      </span>
-    {/if}
-  </span>
-{:else}
-  <!-- 引用不可用：字面量回退（label 原始书写形式） -->
-  [^{label}]
-{/if}
+        >{#each def.children as child, i (`fn-${identifier}-${i}`)}<MarkdownNode
+            node={child}
+          />{/each}</span
+      >{/if}</span
+  >{:else}[^{label}]{/if}

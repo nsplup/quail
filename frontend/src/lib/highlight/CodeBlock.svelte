@@ -242,41 +242,11 @@
     }
     return escapeHtml(plain);
   });
-
-  /* ---------- 序列化整个 <pre>（模板中无 pre 元素，formatter 无从污染） ---------- */
-
-  function escapeAttr(s: string): string {
-    return s.replace(/[&<>"']/g, (c) =>
-      c === "&"
-        ? "&amp;"
-        : c === "<"
-          ? "&lt;"
-          : c === ">"
-            ? "&gt;"
-            : c === '"'
-              ? "&quot;"
-              : "&#39;",
-    );
-  }
-
-  /** hastAttrs 产物全为 string（false 已跳过、true 已转 ""）：直接拼即可 */
-  function serializeAttrs(attrs: Record<string, string>): string {
-    let out = "";
-    for (const [k, v] of Object.entries(attrs)) {
-      out += ` ${k}="${escapeAttr(v)}"`;
-    }
-    return out;
-  }
-
-  const preHtml = $derived(
-    `<pre${serializeAttrs(hastAttrs(node))}>` +
-      `<code class="${escapeAttr(codeClass)}">${contentHtml}</code>` +
-      `</pre>`,
-  );
 </script>
 
 <div class="codeblock-wrap">
-  {@html preHtml}
+  <pre {...hastAttrs(node)}><code class={codeClass}>{@html contentHtml}</code
+    ></pre>
   <button
     class="code-copy-btn"
     class:copied
