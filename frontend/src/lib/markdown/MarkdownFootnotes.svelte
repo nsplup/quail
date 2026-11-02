@@ -16,15 +16,13 @@
   const items = $derived($footnoteList$);
 </script>
 
-{#snippet backrefs(fn: (typeof items)[number])}
-  <span class="md-footnotes-backrefs">
-    {#each Array(fn.count) as _, k (k)}
-      <a
+{#snippet backrefs(fn: (typeof items)[number])}<span
+    class="md-footnotes-backrefs"
+    >{#each Array(fn.count) as _, k (k)}<a
         class="md-footnotes-backref"
         href={`#fnref:${fn.number}:${k + 1}`}
         aria-label={$t("footnotes.back", { values: { n: k + 1 } })}
-      >
-        <svg
+        ><svg
           class="md-footnotes-backref-icon"
           width="1em"
           height="1em"
@@ -35,21 +33,23 @@
           stroke-linecap="round"
           stroke-linejoin="round"
           aria-hidden="true"
-        >
-          <polyline points="9 14 4 9 9 4"></polyline>
-          <path d="M20 20v-7a4 4 0 0 0-4-4H4"></path>
-        </svg>
-        {#if fn.count > 1}
-          <sup class="md-footnotes-backref-n">{k + 1}</sup>
-        {/if}
-      </a>
-    {/each}
-  </span>
-{/snippet}
+          ><polyline points="9 14 4 9 9 4"></polyline><path
+            d="M20 20v-7a4 4 0 0 0-4-4H4"
+          ></path></svg
+        >{#if fn.count > 1}<sup class="md-footnotes-backref-n">{k + 1}</sup
+          >{/if}</a
+      >{/each}</span
+  >{/snippet}
 
 {#if items.length}
-  <section class="md-footnotes" data-footnotes aria-labelledby="md-footnotes-title">
-    <h2 class="md-footnotes-title" id="md-footnotes-title">{$t("footnotes.title")}</h2>
+  <section
+    class="md-footnotes"
+    data-footnotes
+    aria-labelledby="md-footnotes-title"
+  >
+    <h2 class="md-footnotes-title" id="md-footnotes-title">
+      {$t("footnotes.title")}
+    </h2>
     <ol class="md-footnotes-list">
       {#each items as fn (fn.identifier)}
         <li
@@ -61,14 +61,11 @@
           {#each fn.def.children as child, i (`fi-${fn.identifier}-${i}`)}
             {@const isLast = i === fn.def.children.length - 1}
             {@const isPara =
-              child.type === "element" &&
-              (child as Element).tagName === "p"}
+              child.type === "element" && (child as Element).tagName === "p"}
             {#if isLast && isPara && fn.count > 0}
               <!-- 回链内联在段落末尾（跟脚注文字同行，空间不足随文字换行） -->
               <MarkdownNode node={child} blockIndex={-1}>
-                {#snippet trailing()}
-                  {@render backrefs(fn)}
-                {/snippet}
+                {#snippet trailing()}{@render backrefs(fn)}{/snippet}
               </MarkdownNode>
             {:else}
               <MarkdownNode node={child} blockIndex={-1} />

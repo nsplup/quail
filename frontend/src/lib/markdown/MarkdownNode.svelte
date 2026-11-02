@@ -106,11 +106,12 @@
         (node as Element).properties?.["data-mid"],
       ) === String($previewSearchState.current)}
       data-mid={(node as Element).properties?.["data-mid"] as string}
+      >{#each (node as Element).children as child, i (`${(node as Element).tagName}-${i}`)}<MarkdownNode
+          node={child}
+          {blockIndex}
+          {accordionParentKey}
+        />{/each}</mark
     >
-      {#each (node as Element).children as child, i (`${(node as Element).tagName}-${i}`)}
-        <MarkdownNode node={child} {blockIndex} accordionParentKey={accordionParentKey} />
-      {/each}
-    </mark>
   {:else if inTaskItem && isTaskCheckbox(node)}
     <!-- 任务项 checkbox：tight / loose 均在此分派，模板无需知道父结构 -->
     <EditableCheckbox node={node as Element} {blockIndex} />
@@ -153,14 +154,12 @@
          checkbox 由 element 分支最前面的 inTaskItem 分派处理，
          本分支不特判任何子节点 -->
     <li {...hastAttrs(node as Element)}>
-      {#each (node as Element).children as child, i (`${(node as Element).tagName}-${i}`)}
-        <MarkdownNode
+      {#each (node as Element).children as child, i (`${(node as Element).tagName}-${i}`)}<MarkdownNode
           node={child}
           {blockIndex}
           inTaskItem={true}
-          accordionParentKey={accordionParentKey}
-        />
-      {/each}
+          {accordionParentKey}
+        />{/each}
     </li>
   {:else if VOID_ELEMENTS.has((node as Element).tagName)}
     <!-- void 元素：无子内容，自闭合渲染（避免 dynamic_void_element_content 警告） -->
@@ -172,20 +171,13 @@
     <svelte:element
       this={(node as Element).tagName}
       {...hastAttrs(node as Element)}
-    >
-      {#each (node as Element).children as child, i (`${(node as Element).tagName}-${i}`)}
-        <MarkdownNode
+      >{#each (node as Element).children as child, i (`${(node as Element).tagName}-${i}`)}<MarkdownNode
           node={child}
           {blockIndex}
           inTaskItem={childInTaskItem}
-          accordionParentKey={accordionParentKey}
-        />
-      {/each}
-      <!-- 仅当前节点是 <p> 且显式传入 trailing 时渲染；子节点递归不传 trailing -->
-      {#if trailing && (node as Element).tagName === "p"}
-        {@render trailing()}
-      {/if}
-    </svelte:element>
+          {accordionParentKey}
+        />{/each}{#if trailing && (node as Element).tagName === "p"}{@render trailing()}{/if}</svelte:element
+    >
   {/if}
 {:else if node.type === "text"}
   {(node as Text).value}
