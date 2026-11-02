@@ -71,6 +71,13 @@ export type IndentId = "tab" | "space2" | "space4";
 export interface PreviewApi {
   /** 滚动到指定块（align: start，可带偏移） */
   scrollToIndex(index: number, opts?: { offset?: number }): void;
+  /**
+   * 按查找匹配全局 id（info.ranges 下标）精确跳转：
+   * - 正文段：滚动到段 + 定位到 mark[data-mid=id]；
+   * - 脚注区：滚动到末尾哨兵项 + 定位到脚注内的 mark；
+   * - 装饰未生效时回退到段级 / 脚注项级定位。
+   */
+  scrollToMatch(id: number): void;
   /** 读取当前滚动位置（面板隐藏前保存用） */
   getScrollTop(): number;
   /** 恢复滚动位置（面板重新显示时用） */

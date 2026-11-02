@@ -192,15 +192,12 @@ export function computePreviewMatches(
     info.total += rs.length;
   }
 
-  /* 脚注区伪段（虚拟列表末尾哨兵项）：
-     与正文段同等参与匹配 / 计数 / 导航；文本按脚注列表顺序展平，
-     与 MarkdownFootnotes 的渲染顺序一致。 */
+  /* 脚注区伪段：与正文段同等参与匹配 / 计数 / 导航。
+     展平文本 = 所有脚注 def.children 顺序拼接，与 MarkdownFootnotes 渲染顺序一致。 */
   const fnIndex = segments.length;
   info.base[fnIndex] = info.total;
   if (!info.overflow && footnotes.length > 0) {
-    const text = footnotes
-      .map((f) => flattenHastText(f.def.children))
-      .join("");
+    const text = footnotes.map((f) => flattenHastText(f.def.children)).join("");
     if (text.length <= MAX_TEXT_LENGTH) {
       const rs = findRanges(text, re);
       if (rs.length > 0) {
@@ -293,19 +290,15 @@ export function decorateSegmentNodes(
   return result;
 }
 
-/* 脚注装饰缓存：以 def.children 数组为键（store 增量更新时自然失效），
-   hits 不变时返回同一对象，避免 current 之外的状态更新引发子树重建。 */
+/* 脚注装饰缓存：以 def.children 数组为键，hits 不变时返回同一对象 */
 const footnoteDecorateCache = new WeakMap<
   RootContent[],
   { key: string; result: RootContent[] }
 >();
 
 /**
- * 脚注区查找装饰。
- *
- * 匹配计算把脚注区视为一个伪段（footnoteIndex），展平文本为所有脚注
- * def.children 顺序拼接。本函数按每个脚注在整段展平文本中的偏移，
- * 把全局 hits 换算成脚注局部 hits，再交给 applyMarksToNodes。
+ * 脚注区查找装饰：把全局 hits 按每个脚注在伪段展平文本中的偏移换算成
+ * 脚注局部 hits，再交给 applyMarksToNodes。
  */
 export function decorateFootnotesNodes(
   footnotes: FootnoteSearchEntry[],

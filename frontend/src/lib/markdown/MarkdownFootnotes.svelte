@@ -60,27 +60,24 @@
     </h2>
     <ol class="md-footnotes-list">
       {#each items as fn (fn.identifier)}
+        {@const nodes = decorated.get(fn.identifier) ?? fn.def.children}
         <li
           class="md-footnotes-item"
           id={`fn-${fn.number}`}
           data-fn-index={fn.number}
           data-fn-id={fn.identifier}
         >
-          {#each decorated.get(fn.identifier) ?? fn.def.children as child, i (`fi-${fn.identifier}-${i}`)}
-            {@const isLast =
-              i ===
-              (decorated.get(fn.identifier) ?? fn.def.children).length - 1}
+          {#each nodes as child, i (`fi-${fn.identifier}-${i}`)}
+            {@const isLast = i === nodes.length - 1}
             {@const isPara =
               child.type === "element" && (child as Element).tagName === "p"}
             {#if isLast && isPara && fn.count > 0}
-              <!-- 回链内联在段落末尾（跟脚注文字同行，空间不足随文字换行） -->
               <MarkdownNode node={child} blockIndex={-1}>
                 {#snippet trailing()}{@render backrefs(fn)}{/snippet}
               </MarkdownNode>
             {:else}
               <MarkdownNode node={child} blockIndex={-1} />
               {#if isLast && fn.count > 0}
-                <!-- 最后一块不是段落：回链作为独立块尾随 -->
                 {@render backrefs(fn)}
               {/if}
             {/if}

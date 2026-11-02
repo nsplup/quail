@@ -48,6 +48,12 @@
     footnoteNumberById$,
   } from "../markdown/reference-store";
   import type { PreviewApi } from "../types";
+  import { get } from "svelte/store";
+  import {
+    previewSearchState$,
+    flattenHastText,
+    type PreviewMatchInfo,
+  } from "../preview/previewSearch";
 
   let {
     segments,
@@ -84,11 +90,15 @@
   $effect(() => {
     onready({
       scrollToIndex(index, opts) {
-        if (!vlist || items.length === 0) return;
-        vlist.scrollToIndex(Math.max(0, Math.min(index, items.length - 1)), {
+        // clamp 回退到正文段：正文段下标语义不应误入脚注哨兵项
+        if (!vlist || segments.length === 0) return;
+        vlist.scrollToIndex(Math.max(0, Math.min(index, segments.length - 1)), {
           align: "start",
           offset: opts?.offset ?? 0,
         });
+      },
+      scrollToMatch(id) {
+        scrollToMatch(id);
       },
       getScrollTop() {
         return vlist?.getScrollOffset() ?? 0;
@@ -96,16 +106,16 @@
       setScrollTop(top: number) {
         vlist?.scrollTo(top);
       },
-      getItemOffset(index: number): number {
-        if (!vlist || items.length === 0) return 0;
+      getItemOffset(index) {
+        if (!vlist || segments.length === 0) return 0;
         return vlist.getItemOffset(
-          Math.max(0, Math.min(index, items.length - 1)),
+          Math.max(0, Math.min(index, segments.length - 1)),
         );
       },
-      getItemSize(index: number): number {
-        if (!vlist || items.length === 0) return 0;
+      getItemSize(index) {
+        if (!vlist || segments.length === 0) return 0;
         return vlist.getItemSize(
-          Math.max(0, Math.min(index, items.length - 1)),
+          Math.max(0, Math.min(index, segments.length - 1)),
         );
       },
       refresh() {
@@ -376,6 +386,118 @@
     };
     nodes.forEach(walk);
     return count;
+  }
+
+  /** scrollToMatch 的跳转代数：新跳转让旧的 afterLayout 回调失效 */
+  let matchJumpSeq = 0;
+
+  /** 目标是否已在预览视口可视区（不被查找面板遮挡）内完整可见 */
+  function isVisibleInViewport(
+    el: HTMLElement,
+    container: HTMLElement,
+  ): boolean {
+    const cr = container.getBoundingClientRect();
+    const er = el.getBoundingClientRect();
+    const top = cr.top + jumpOffset();
+    return er.top >= top && er.bottom <= cr.bottom;
+  }
+
+  /**
+   * 查找匹配精确跳转（正文段 / 脚注区统一入口）。
+   *
+   * 依赖装饰器写入的 mark[data-mid="${id}"]：id 即 info.ranges 下标，
+   * 全文档唯一。data-mid 不随 current 变化——只要目标虚拟项已挂载，
+   * 目标 mark 就在 DOM 中，因此「是否挂载」不需要靠 scrollToIndex 试探。
+   *
+   * 分级策略（避免「先跳块再跳元素」的双重滚动）：
+   * ① mark 已渲染且完整可见  → 不动（视口内切换匹配不滚动）；
+   * ② mark 已渲染但视口外    → 直接元素级定位（jumpToElement），绝不跳块；
+   * ③ mark 未渲染（虚拟项未挂载）→ scrollToIndex 挂载后元素级定位；
+   * ④ 装饰仍未生效 / 自渲染分支 → 段级 / 脚注项级回退定位。
+   */
+  function scrollToMatch(id: number): void {
+    const info = get(previewSearchState$).info;
+    if (!info || id < 0 || id >= info.total) return;
+    const segIndex = info.segOf[id];
+    if (segIndex == null) return;
+
+    const seq = ++matchJumpSeq;
+    const isFootnote = segIndex >= segments.length;
+    const container0 = scrollEl();
+    if (!container0) return;
+
+    const findMark = (c: HTMLElement): HTMLElement | null =>
+      c.querySelector<HTMLElement>(`mark.pv-search-hl[data-mid="${id}"]`);
+
+    // ①② 目标 mark 已渲染：按可见性决定是否滚动，不先跳块
+    const mark0 = findMark(container0);
+    if (mark0) {
+      if (isVisibleInViewport(mark0, container0)) return; // 视口内：不动
+      jumpToElement(mark0);
+      return;
+    }
+
+    // ③ 目标 mark 未渲染 = 目标虚拟项未挂载 → 触发挂载
+    if (isFootnote) {
+      if (items.length > segments.length) {
+        // 脚注列表非虚拟化：挂载哨兵项即挂载整列 <ol>
+        vlist?.scrollToIndex(items.length - 1, { align: "end" });
+      }
+    } else {
+      vlist?.scrollToIndex(segIndex, {
+        align: "start",
+        offset: jumpOffset(),
+      });
+    }
+
+    // 挂载 + 装饰落地后（双 rAF：Svelte flush + 布局）元素级定位
+    afterLayout(() => {
+      if (seq !== matchJumpSeq) return; // 已被新跳转接管
+      const container = scrollEl();
+      if (!container) return;
+
+      const markEl = findMark(container);
+      if (markEl) {
+        if (!isVisibleInViewport(markEl, container)) jumpToElement(markEl);
+        return;
+      }
+
+      // ④ 回退：装饰仍未生效（极短窗口）或匹配落在自渲染分支
+      if (isFootnote) {
+        const li = findFootnoteElementByMatch(id, info);
+        if (li) jumpToElement(li);
+      } else {
+        const seg = container.querySelector<HTMLElement>(
+          `.md-item[data-index="${segIndex}"]`,
+        );
+        if (seg) jumpToElement(seg);
+      }
+    });
+  }
+
+  /**
+   * 从匹配全局偏移反查所属脚注项（回退路径用）。
+   * 偏移口径与 computePreviewMatches 一致：按 footnoteList$ 顺序累加。
+   */
+  function findFootnoteElementByMatch(
+    id: number,
+    info: PreviewMatchInfo,
+  ): HTMLElement | null {
+    const range = info.ranges[id];
+    if (!range) return null;
+    let offset = 0;
+    for (const f of get(footnoteList$)) {
+      const len = flattenHastText(f.def.children).length;
+      if (range[0] < offset + len) {
+        return (
+          scrollEl()?.querySelector<HTMLElement>(
+            `[data-fn-id="${CSS.escape(f.identifier)}"]`,
+          ) ?? null
+        );
+      }
+      offset += len;
+    }
+    return null;
   }
 
   /**

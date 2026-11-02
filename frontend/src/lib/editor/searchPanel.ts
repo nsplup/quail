@@ -50,6 +50,7 @@ import {
   type RegexSafetyIssue,
   type SearchSource,
 } from "../preview/previewSearch";
+import { footnoteList$ } from "../markdown/reference-store";
 
 /** 面板开合状态（App 侧联动编辑区 scrollMargins 用） */
 export const searchPanelOpen$ = writable(false);
@@ -406,14 +407,16 @@ function updateEditorStats(): void {
 }
 
 function updatePreviewMatches(): void {
-  // 匹配列表恒计算（与当前项来源无关）：装饰器不依赖来源，来源只决定当前项在哪边
   const { re, bad, unsafe } = buildPreviewPattern({
     search: findInput.value,
     caseSensitive: globalCaseSensitive,
     regexp: globalRegexp,
     wholeWord: globalWholeWord,
   });
-  const info = bad || unsafe || !re ? null : computePreviewMatches(get(segments$), re);
+  const info =
+    bad || unsafe || !re
+      ? null
+      : computePreviewMatches(get(segments$), re, get(footnoteList$));
   previewInfo = info;
   if (info) {
     previewCur = Math.max(0, Math.min(previewCur, info.total - 1));
@@ -523,46 +526,11 @@ function gotoMatch(delta: number): void {
   scrollToPreviewMatch(previewCur);
 }
 
-/** 把第 id 项匹配滚动到预览视口内（未挂载段先跳块，挂载后按 mark 精调） */
+/** 把第 id 项匹配滚动到预览视口内（正文 / 脚注统一由 PreviewPane 处理） */
 function scrollToPreviewMatch(id: number): void {
-  const info = previewInfo;
-  if (!info) return;
-  const seg = info.segOf[id];
-  const sc = document.querySelector<HTMLElement>(".preview-scroll");
-  if (!sc) return;
-  const margin = (panelEl?.offsetHeight ?? 0) + PANEL_GAP;
-  const adjust = (mark: HTMLElement | null): boolean => {
-    if (!mark) return false;
-    const scRect = sc.getBoundingClientRect();
-    const mRect = mark.getBoundingClientRect();
-    if (mRect.top < scRect.top + margin || mRect.bottom > scRect.bottom) {
-      sc.scrollTop += mRect.top - (scRect.top + margin);
-    }
-    return true;
-  };
-  const findMark = (): HTMLElement | null =>
-    sc.querySelector<HTMLElement>(
-      `.md-item[data-index="${seg}"] mark.pv-search-hl[data-mid="${id}"]`,
-    );
-
-  let mark = findMark();
-  if (mark && adjust(mark)) return;
-  // 段未挂载（虚拟滚动）：先对齐段顶，随后等 mark 渲染完成再精调
-  try {
-    get(previewApi$)?.scrollToIndex(seg, { offset: 0 });
-  } catch {
-    /* 预览可能未挂载 */
-  }
-  let frames = 0;
-  const tick = (): void => {
-    mark = findMark();
-    if (mark) {
-      adjust(mark);
-      return;
-    }
-    if (++frames < 60) requestAnimationFrame(tick);
-  };
-  requestAnimationFrame(tick);
+  const api = get(previewApi$);
+  if (!api) return;
+  api.scrollToMatch(id);
 }
 
 /* ------------------------------------------------------------------
@@ -769,6 +737,15 @@ locale.subscribe(() => {
 
 /* 段列表更新（解析增量落地）：重算匹配列表（装饰器不依赖当前项来源） */
 segments$.subscribe(() => {
+  if (panelEl && open) {
+    updatePreviewMatches();
+    updateStatusDisplay();
+    pushPreviewState();
+  }
+});
+
+/* 脚注列表更新：重算匹配（脚注区作为伪段参与） */
+footnoteList$.subscribe(() => {
   if (panelEl && open) {
     updatePreviewMatches();
     updateStatusDisplay();
