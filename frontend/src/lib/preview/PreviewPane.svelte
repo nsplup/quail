@@ -84,12 +84,9 @@
   $effect(() => {
     onready({
       scrollToIndex(index, opts) {
-        if (!vlist || segments.length === 0) return;
-        vlist.scrollToIndex(Math.max(0, Math.min(index, segments.length - 1)), {
+        if (!vlist || items.length === 0) return;
+        vlist.scrollToIndex(Math.max(0, Math.min(index, items.length - 1)), {
           align: "start",
-          // 与原 virtua 映射语义一致：scrollTop = 段顶 - offset
-          // （段顶落在视口顶部下方 offset px）。跳转后视口上方各段的
-          // 实测修正由组件的滚动补偿消化，估计漂移可自愈。
           offset: opts?.offset ?? 0,
         });
       },
@@ -100,15 +97,15 @@
         vlist?.scrollTo(top);
       },
       getItemOffset(index: number): number {
-        if (!vlist || segments.length === 0) return 0;
+        if (!vlist || items.length === 0) return 0;
         return vlist.getItemOffset(
-          Math.max(0, Math.min(index, segments.length - 1)),
+          Math.max(0, Math.min(index, items.length - 1)),
         );
       },
       getItemSize(index: number): number {
-        if (!vlist || segments.length === 0) return 0;
+        if (!vlist || items.length === 0) return 0;
         return vlist.getItemSize(
-          Math.max(0, Math.min(index, segments.length - 1)),
+          Math.max(0, Math.min(index, items.length - 1)),
         );
       },
       refresh() {

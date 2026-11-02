@@ -12,8 +12,16 @@
   import MarkdownNode from "./MarkdownNode.svelte";
   import { footnoteList$ } from "./reference-store";
   import { t } from "../i18n.svelte";
+  import {
+    previewSearchState$,
+    decorateFootnotesNodes,
+  } from "../preview/previewSearch";
 
   const items = $derived($footnoteList$);
+  /** 查找高亮装饰（面板关闭 / 无匹配时原样返回） */
+  const decorated = $derived(
+    decorateFootnotesNodes(items, $previewSearchState$),
+  );
 </script>
 
 {#snippet backrefs(fn: (typeof items)[number])}<span
@@ -58,8 +66,10 @@
           data-fn-index={fn.number}
           data-fn-id={fn.identifier}
         >
-          {#each fn.def.children as child, i (`fi-${fn.identifier}-${i}`)}
-            {@const isLast = i === fn.def.children.length - 1}
+          {#each decorated.get(fn.identifier) ?? fn.def.children as child, i (`fi-${fn.identifier}-${i}`)}
+            {@const isLast =
+              i ===
+              (decorated.get(fn.identifier) ?? fn.def.children).length - 1}
             {@const isPara =
               child.type === "element" && (child as Element).tagName === "p"}
             {#if isLast && isPara && fn.count > 0}

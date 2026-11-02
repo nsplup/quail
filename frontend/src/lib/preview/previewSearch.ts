@@ -16,9 +16,10 @@
  *   （模式本身能匹配空字符串则拒绝），不安全模式直接拦截不上岗。
  */
 import safeRegex from "safe-regex";
-import { writable } from "svelte/store";
+import { get, writable } from "svelte/store";
 import type { RootContent, Element, ElementContent } from "hast";
 import type { HastSegment } from "../markdown/markdown-core";
+import { footnoteList$ } from "../markdown/reference-store";
 
 /** 匹配列表显示上限（超出显示 999+，超出部分不再参与导航/高亮） */
 export const PREVIEW_MATCH_CAP = 999;
@@ -136,19 +137,39 @@ export interface PreviewMatchInfo {
   base: number[];
   /** ranges[id] = 第 id 项在段内展平文本中的 [start, end) */
   ranges: Array<[number, number]>;
+  /**
+   * 脚注区在虚拟列表中的伪段下标（= 正文段数，即末尾哨兵项下标）；
+   * -1 表示无脚注 / 脚注区无匹配。
+   */
+  footnoteIndex: number;
 }
 
 export function emptyPreviewMatchInfo(): PreviewMatchInfo {
-  return { total: 0, overflow: false, segOf: [], base: [], ranges: [] };
+  return {
+    total: 0,
+    overflow: false,
+    segOf: [],
+    base: [],
+    ranges: [],
+    footnoteIndex: -1,
+  };
+}
+
+/** 脚注查找的最小结构（只依赖 identifier + def.children） */
+export interface FootnoteSearchEntry {
+  identifier: string;
+  def: { children: RootContent[] };
 }
 
 /** 对全部段做匹配计算（列表构建的唯一入口；re 为 null 时返回空列表） */
 export function computePreviewMatches(
   segments: HastSegment[],
   re: RegExp | null,
+  footnotes: FootnoteSearchEntry[] = get(footnoteList$),
 ): PreviewMatchInfo {
   const info = emptyPreviewMatchInfo();
-  if (!re || segments.length === 0) return info;
+  if (!re) return info;
+
   for (let i = 0; i < segments.length; i++) {
     info.base[i] = info.total;
     if (info.overflow) continue;
@@ -160,7 +181,6 @@ export function computePreviewMatches(
       info.ranges.push(r);
     }
     if (info.total + rs.length > PREVIEW_MATCH_CAP) {
-      // 截断到上限：多余项不进入列表（total 保持上限，overflow 置位）
       const keep = PREVIEW_MATCH_CAP - info.total;
       info.segOf.length = PREVIEW_MATCH_CAP;
       info.ranges.length = PREVIEW_MATCH_CAP;
@@ -171,7 +191,35 @@ export function computePreviewMatches(
     }
     info.total += rs.length;
   }
-  info.base[segments.length] = info.total;
+
+  /* 脚注区伪段（虚拟列表末尾哨兵项）：
+     与正文段同等参与匹配 / 计数 / 导航；文本按脚注列表顺序展平，
+     与 MarkdownFootnotes 的渲染顺序一致。 */
+  const fnIndex = segments.length;
+  info.base[fnIndex] = info.total;
+  if (!info.overflow && footnotes.length > 0) {
+    const text = footnotes
+      .map((f) => flattenHastText(f.def.children))
+      .join("");
+    if (text.length <= MAX_TEXT_LENGTH) {
+      const rs = findRanges(text, re);
+      if (rs.length > 0) {
+        info.footnoteIndex = fnIndex;
+        for (const r of rs) {
+          info.segOf.push(fnIndex);
+          info.ranges.push(r);
+        }
+        if (info.total + rs.length > PREVIEW_MATCH_CAP) {
+          info.segOf.length = PREVIEW_MATCH_CAP;
+          info.ranges.length = PREVIEW_MATCH_CAP;
+          info.total = PREVIEW_MATCH_CAP;
+          info.overflow = true;
+        } else {
+          info.total += rs.length;
+        }
+      }
+    }
+  }
   return info;
 }
 
@@ -243,6 +291,88 @@ export function decorateSegmentNodes(
   const result = applyMarks(seg, hits); // 不再传 state.current
   decorateCache.set(seg, { key, result });
   return result;
+}
+
+/* 脚注装饰缓存：以 def.children 数组为键（store 增量更新时自然失效），
+   hits 不变时返回同一对象，避免 current 之外的状态更新引发子树重建。 */
+const footnoteDecorateCache = new WeakMap<
+  RootContent[],
+  { key: string; result: RootContent[] }
+>();
+
+/**
+ * 脚注区查找装饰。
+ *
+ * 匹配计算把脚注区视为一个伪段（footnoteIndex），展平文本为所有脚注
+ * def.children 顺序拼接。本函数按每个脚注在整段展平文本中的偏移，
+ * 把全局 hits 换算成脚注局部 hits，再交给 applyMarksToNodes。
+ */
+export function decorateFootnotesNodes(
+  footnotes: FootnoteSearchEntry[],
+  state: PreviewSearchState,
+): Map<string, RootContent[]> {
+  const out = new Map<string, RootContent[]>();
+  const passthrough = (): Map<string, RootContent[]> => {
+    for (const f of footnotes) out.set(f.identifier, f.def.children);
+    return out;
+  };
+
+  if (
+    !state.active ||
+    !state.re ||
+    state.info.total === 0 ||
+    state.info.footnoteIndex < 0
+  ) {
+    return passthrough();
+  }
+
+  const idx = state.info.footnoteIndex;
+  const base = state.info.base[idx] ?? 0;
+  if (base >= state.info.total) return passthrough();
+
+  const hits: Array<{ s: number; e: number; id: number }> = [];
+  for (let id = base; id < state.info.total; id++) {
+    if (state.info.segOf[id] !== idx) break;
+    const [s, e] = state.info.ranges[id];
+    hits.push({ s, e, id });
+  }
+  if (hits.length === 0) return passthrough();
+
+  let offset = 0;
+  for (const f of footnotes) {
+    const len = flattenHastText(f.def.children).length;
+    const localHits: Array<{ s: number; e: number; id: number }> = [];
+    if (len > 0) {
+      for (const h of hits) {
+        if (h.e <= offset) continue;
+        if (h.s >= offset + len) break;
+        localHits.push({
+          s: Math.max(h.s, offset) - offset,
+          e: Math.min(h.e, offset + len) - offset,
+          id: h.id,
+        });
+      }
+    }
+
+    if (localHits.length === 0) {
+      out.set(f.identifier, f.def.children);
+      offset += len;
+      continue;
+    }
+
+    let key = "";
+    for (const h of localHits) key += `|${h.id}:${h.s}:${h.e}`;
+    const cached = footnoteDecorateCache.get(f.def.children);
+    if (cached && cached.key === key) {
+      out.set(f.identifier, cached.result);
+    } else {
+      const result = applyMarksToNodes(f.def.children, localHits);
+      footnoteDecorateCache.set(f.def.children, { key, result });
+      out.set(f.identifier, result);
+    }
+    offset += len;
+  }
+  return out;
 }
 
 function markNode(id: number, children: RootContent[]): RootContent {
