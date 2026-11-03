@@ -35,6 +35,9 @@
    *   滚轮/翻页/同步驱动的常规滚动（单帧 ≤1 视口高）永不触发；
    * - 滚动渲染 rAF 合帧：scroll 事件只记录位置，视口重算统一在 rAF
    *   里做，同帧多次事件至多一次 flush；
+   * - 钉住项（pinned）：渲染范围取「视口 ± overscan ∪ {pinned}」并集，
+   *   钉住项滚出视口也不卸载（可编辑表格单元格编辑态用，防编辑丢失）；
+   *   快速滚动空窗的冻结快照取自 rendered，钉住项天然随快照保留；
    * - 项的绝对定位包装自身构成 BFC，子元素的垂直 margin 计入实测高度，
    *   不存在 margin 折叠导致的定位偏差；块间距仍建议用 padding。
    *
@@ -87,6 +90,12 @@
     estimateSize?: number | ((index: number) => number);
     /** 视口外上下各多渲染的项数 */
     overscan?: number;
+    /** 钉住项索引：即使滚出「视口 ± overscan」范围也保持挂载（渲染范围
+     *  取并集，不扩张连续区间——滚远时只多挂这一项，项仍以其实测 top
+     *  绝对定位在离屏原位，无布局扰动）。用于可编辑表格的单元格编辑
+     *  态：编辑状态活在组件实例里，虚拟化卸载会丢失编辑。编辑结束
+     *  （pinned 置 null）后自然恢复虚拟化回收。越界索引自动忽略。 */
+    pinned?: number | null;
     /** 单项渲染（item, index） */
     children: Snippet<[T, number]>;
     class?: string;
@@ -99,6 +108,7 @@
     getKey,
     estimateSize = 40,
     overscan = 4,
+    pinned = null,
     class: className = "",
     style,
     ...rest
@@ -282,6 +292,30 @@
         top: offsets[i],
         measured: isMeasured(i),
       });
+    }
+    // 钉住项并集：渲染范围 = 视口区间 ∪ {pinned}（不扩张连续区间）。
+    // 编辑中的可编辑表格所在段滚出视口时仍保持挂载，编辑状态不丢；
+    // 越界/非法索引忽略。钉住项常在派生依赖中（pinned 为响应式 prop），
+    // 进入/退出编辑都会触发本派生重算；已在视口区间内时产物不变
+    // （新数组同 key 集 → keyed each 零 DOM 变更）。
+    const p =
+      pinned != null &&
+      Number.isInteger(pinned) &&
+      pinned >= 0 &&
+      pinned < data.length
+        ? pinned
+        : null;
+    if (p !== null && (p < view.start || p > view.end)) {
+      const it: RenderedItem = {
+        i: p,
+        item: data[p],
+        key: getKey !== undefined ? getKey(data[p], p) : p,
+        top: offsets[p],
+        measured: isMeasured(p),
+      };
+      let k = 0;
+      while (k < out.length && out[k].i < p) k++;
+      out.splice(k, 0, it);
     }
     return out;
   });

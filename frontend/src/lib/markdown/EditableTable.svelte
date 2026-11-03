@@ -32,7 +32,7 @@
   import { get } from "svelte/store";
   import { untrack } from "svelte";
   import MarkdownNode from "./MarkdownNode.svelte";
-  import { editorApi$, blocks$, cellEditorHandle$ } from "../stores";
+  import { editorApi$, blocks$, cellEdit$ } from "../stores";
   import {
     createCellEditor,
     type CellEditorHandle,
@@ -174,6 +174,10 @@
   /** 冻结复用的 CM6 单元格编辑器实例（懒创建：首次编辑单元格才构建；
    * 结束编辑不销毁，仅随宿主节点脱离文档，下次编辑重新挂载换文档） */
   let cellEditor: CellEditorHandle | null = null;
+  /** 本实例在全局 cellEdit$ 中的所有权标识。EditableTable 的 effect 每
+   * 个实例都会运行，全局编辑态的写入/清空必须校验 owner——否则滚动时
+   * 挂载/卸载的非编辑实例会误清正在编辑实例写入的状态（钉住失效）。 */
+  const editOwner = Symbol("editable-table-cell-edit");
   /**
    * 本地解析结果（无装饰）：parseCellsPreview 产物，异步防抖落地或提交时即时设置。
    * worker 回流（node 引用变化）时清空，让 worker 的 HAST 接管。
@@ -227,24 +231,44 @@
     rawLocalDisplay = null;
   });
 
-  /* 组件卸载：销毁冻结中的单元格编辑器实例，并清掉全局单元格编辑句柄 */
+  /* 组件卸载：销毁冻结中的单元格编辑器实例，并清掉本实例拥有的全局
+   * 单元格编辑态。所有权保护（owner 校验）必不可少：虚拟滚动会频繁
+   * 挂载/卸载其他表格实例，它们的卸载 effect 也会运行——无守卫的
+   * set(null) 会把正在编辑实例写入的状态清掉（钉住随之失效）。 */
   $effect(() => {
     return () => {
       cellEditor?.destroy();
       cellEditor = null;
-      cellEditorHandle$.set(null);
+      cellEdit$.update((v) => (v && v.owner === editOwner ? null : v));
     };
+  });
+
+  /* 编辑中的表格所在段索引 → 全局编辑态：预览虚拟滚动据此把该段「钉住」
+   * 在渲染范围内（VirtualList pinned），滚出视口也不卸载，编辑状态不丢。
+   * 依赖 editing + blockIndex：增量补丁导致段重定位时同步更新钉住索引。
+   * 只更新本实例拥有的条目——本 effect 在每个表格实例上都会运行，非
+   * 编辑实例（editing 为 null）必须完全无副作用，绝不能清空他表写入的
+   * 状态。条目创建与 editing 归 null 的清空分别在编辑器挂载 effect 与
+   * commitEdit / cancelEdit（均带 owner 校验）。 */
+  $effect(() => {
+    if (!editing || blockIndex == null) return;
+    const bi = blockIndex; // 收窄为 number（闭包内 const 保持收窄）
+    cellEdit$.update((v) =>
+      v && v.owner === editOwner ? { ...v, blockIndex: bi } : v,
+    );
   });
 
   /* 进入编辑态 → 挂载/复用 CM6 单元格编辑器：
    * - 懒创建：首次进入编辑才构建实例（不编辑单元格则不存在实例）；
    * - 复用：把冻结实例的 dom 重新挂载进新宿主并整体换文档（撤销历史
    *   随 history 卸载重装清空）；光标定位到文档末尾（与旧行为一致）。
-   * - 进入编辑态后向全局 store 注入当前实例句柄（cellEditorHandle$），
-   *   供关闭守卫在判定脏状态前检测「正在编辑单元格」并强制提交；
-   *   提交/取消/组件卸载时清空（见 commitEdit / cancelEdit / 卸载 effect）。
+   * - 进入编辑态后向全局 cellEdit$ 写入本实例的编辑态（owner + 段索引
+   *   + 句柄），供关闭守卫强制提交、预览虚拟滚动钉住该段；提交/取消/
+   *   组件卸载时由所有者清空（见 commitEdit / cancelEdit / 卸载 effect）。
    * 源码定位走 untrack：编辑器内容只由「进入编辑」驱动，禁止 node
-   * 引用变化（worker 回流）触发重跑——那会在编辑中重置编辑器文档。 */
+   * 引用变化（worker 回流）触发重跑——那会在编辑中重置编辑器文档。
+   * blockIndex 同样经 untrack 读取：段重定位时由钉住 effect（只做
+   * owner 保护下的索引更新）跟进，编辑器不因此重跑。 */
   $effect(() => {
     if (!editing || !editorHost) return;
     const e = editing;
@@ -265,7 +289,13 @@
     }
     cellEditor.focusEnd();
     cellEditor.requestMeasure();
-    cellEditorHandle$.set(cellEditor);
+    // 写入全局编辑态（owner + 段索引 + 句柄）；blockIndex 经 untrack 读取
+    // 不进依赖，空索引（不应发生）防御性跳过
+    untrack(() => {
+      if (blockIndex == null) return;
+      const bi = blockIndex;
+      cellEdit$.set({ owner: editOwner, blockIndex: bi, handle: cellEditor! });
+    });
   });
 
   function tableOrdinalOf(node: Element): number | null {
@@ -504,9 +534,9 @@
     const e = editing;
     if (!e) return;
     editing = null;
-    // 退出编辑态：同步清空全局单元格编辑句柄（关闭守卫以句柄存在与否
-    // 判定「正在编辑单元格」）
-    cellEditorHandle$.set(null);
+    // 退出编辑态：同步清空本实例拥有的全局单元格编辑态（关闭守卫以
+    // 条目存在与否判定「正在编辑单元格」；owner 校验防误清他表状态）
+    cellEdit$.update((v) => (v && v.owner === editOwner ? null : v));
     const s = ensureSource();
     if (!s || e.r >= s.rows.length) return;
     while (s.rows[e.r].length <= e.c) s.rows[e.r].push(emptyCell());
@@ -531,9 +561,9 @@
   /** 取消编辑（Esc）：丢弃改动与暂存的防抖解析结果 */
   function cancelEdit(): void {
     editing = null;
-    // 退出编辑态：同步清空全局单元格编辑句柄（关闭守卫以句柄存在与否
-    // 判定「正在编辑单元格」）
-    cellEditorHandle$.set(null);
+    // 退出编辑态：同步清空本实例拥有的全局单元格编辑态（owner 校验
+    // 防误清他表状态）
+    cellEdit$.update((v) => (v && v.owner === editOwner ? null : v));
     pendingParsed = null;
     if (cellParseTimer !== undefined) {
       clearTimeout(cellParseTimer);

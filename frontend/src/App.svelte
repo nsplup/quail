@@ -48,7 +48,7 @@
     activeHeading$ as activeHeading,
     dirty$ as dirty,
     guardDirty$ as guardDirty,
-    cellEditorHandle$ as cellEditorHandle,
+    cellEdit$ as cellEdit,
     editorApi$ as editorApi,
     previewApi$ as previewApi,
     bootApp,
@@ -136,7 +136,7 @@
     // 关闭请求 → 前端全权判定：后端不再保存/询问脏状态，所有关闭路径
     // （窗口关闭按钮 / Ctrl+Q / Cmd+Q）都会先取消关闭并转发 close:request
     // 到这里。
-    // 处理顺序：先检测单元格编辑状态（cellEditorHandle$ 非空即正在编辑
+    // 处理顺序：先检测单元格编辑状态（cellEdit$ 非空即正在编辑
     // 可编辑表格单元格）→ 强制提交单元格并退出编辑态 → 等回写落地 →
     // 再判定脏状态：干净 → 直接 ConfirmQuit 退出；脏 → 三选确认
     // （保存/丢弃/取消）→ ConfirmQuit（取消则无操作）。
@@ -151,9 +151,9 @@
         // writeBack → replaceLines 同步进入编辑区（dirty$ 在 CM
         // updateListener 内即时落位），让出一个宏任务确保提交链路与
         // Svelte 副作用（卸载单元格编辑器宿主等）全部结束后再判定脏状态。
-        const cellHandle = get(cellEditorHandle);
-        if (cellHandle) {
-          cellHandle.commit();
+        const cellState = get(cellEdit);
+        if (cellState) {
+          cellState.handle.commit();
           await new Promise<void>((resolve) => setTimeout(resolve, 0));
         }
         const g = get(guardDirty);

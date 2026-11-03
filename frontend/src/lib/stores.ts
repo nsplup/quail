@@ -234,11 +234,22 @@ export const editorApi$ = writable<EditorApi | null>(null);
 /** 脏状态：当前文档与最近一次干净引用（初始化/保存时记录）不一致 */
 export const dirty$ = writable(false);
 /**
- * 当前处于编辑状态的单元格编辑器句柄（可编辑表格进入编辑态时注入，
- * 提交/取消/卸载时清空）。供关闭守卫在判定脏状态前检测：存在句柄即
- * 正在编辑单元格，须先强制提交并等回写落地，再判定是否直接退出。
+ * 当前正在编辑的单元格（可编辑表格）的全局状态，至多一条：
+ * - `handle`：关闭守卫据此检测「正在编辑单元格」，先强制提交再判脏；
+ * - `blockIndex`：预览虚拟滚动据此把该段「钉住」（VirtualList pinned），
+ *   滚出视口也不卸载，编辑状态不丢。
+ *
+ * `owner` 为写入实例的标识（Symbol，每实例唯一）。EditableTable 的
+ * effect 每个实例都会运行，非编辑实例的挂载/卸载不得清空或覆盖他表
+ * 写入的状态——所有写入与清空都必须校验 owner 后进行（update 守卫）。
+ * 进入编辑（编辑器挂载 effect）写入；提交/取消/组件卸载由所有者清空。
  */
-export const cellEditorHandle$ = writable<CellEditorHandle | null>(null);
+export interface CellEditState {
+  owner: symbol;
+  blockIndex: number;
+  handle: CellEditorHandle;
+}
+export const cellEdit$ = writable<CellEditState | null>(null);
 export const previewApi$ = writable<PreviewApi | null>(null);
 
 /* ---------------- 解析调度：200ms 防抖 + IME 组合闸门 + worker 背压 ----------------

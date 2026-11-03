@@ -47,6 +47,7 @@
     refsSnapshot$,
     footnoteNumberById$,
   } from "../markdown/reference-store";
+  import { cellEdit$ } from "../stores";
   import type { PreviewApi } from "../types";
   import { get } from "svelte/store";
   import {
@@ -75,6 +76,15 @@
   const items = $derived(
     $footnoteList$.length > 0 ? [...segments, FOOTNOTES_SENTINEL] : segments,
   );
+
+  /**
+   * 钉住段索引：单元格编辑中的可编辑表格所在段（cellEdit$.blockIndex）。
+   * 传给 VirtualList 后该段滚出「视口 ± overscan」也保持挂载，编辑状态
+   * 不丢；编辑结束（store 归 null）虚拟化自然恢复。越界索引由
+   * VirtualList 忽略（segments 缩短时自愈）。注意哨兵脚注项在末尾，
+   * 但 blockIndex 只指向 segments 区间，无哨兵偏移问题。
+   */
+  const pinnedBlock = $derived($cellEdit$?.blockIndex ?? null);
 
   let paneEl = $state<HTMLDivElement | null>(null);
   /** VirtualList 实例：PreviewApi 与可视区探测的稳定入口 */
@@ -623,6 +633,7 @@
     style="overflow-y: scroll;"
     data={items}
     overscan={10}
+    pinned={pinnedBlock}
     onscroll={handleScroll}
     role="log"
     aria-label="preview"
