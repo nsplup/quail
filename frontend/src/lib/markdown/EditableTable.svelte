@@ -32,7 +32,7 @@
   import { get } from "svelte/store";
   import { untrack } from "svelte";
   import MarkdownNode from "./MarkdownNode.svelte";
-  import { editorApi$, blocks$ } from "../stores";
+  import { editorApi$, blocks$, cellEditorHandle$ } from "../stores";
   import {
     createCellEditor,
     type CellEditorHandle,
@@ -227,11 +227,12 @@
     rawLocalDisplay = null;
   });
 
-  /* 组件卸载：销毁冻结中的单元格编辑器实例 */
+  /* 组件卸载：销毁冻结中的单元格编辑器实例，并清掉全局单元格编辑句柄 */
   $effect(() => {
     return () => {
       cellEditor?.destroy();
       cellEditor = null;
+      cellEditorHandle$.set(null);
     };
   });
 
@@ -239,6 +240,9 @@
    * - 懒创建：首次进入编辑才构建实例（不编辑单元格则不存在实例）；
    * - 复用：把冻结实例的 dom 重新挂载进新宿主并整体换文档（撤销历史
    *   随 history 卸载重装清空）；光标定位到文档末尾（与旧行为一致）。
+   * - 进入编辑态后向全局 store 注入当前实例句柄（cellEditorHandle$），
+   *   供关闭守卫在判定脏状态前检测「正在编辑单元格」并强制提交；
+   *   提交/取消/组件卸载时清空（见 commitEdit / cancelEdit / 卸载 effect）。
    * 源码定位走 untrack：编辑器内容只由「进入编辑」驱动，禁止 node
    * 引用变化（worker 回流）触发重跑——那会在编辑中重置编辑器文档。 */
   $effect(() => {
@@ -261,6 +265,7 @@
     }
     cellEditor.focusEnd();
     cellEditor.requestMeasure();
+    cellEditorHandle$.set(cellEditor);
   });
 
   function tableOrdinalOf(node: Element): number | null {
@@ -499,6 +504,9 @@
     const e = editing;
     if (!e) return;
     editing = null;
+    // 退出编辑态：同步清空全局单元格编辑句柄（关闭守卫以句柄存在与否
+    // 判定「正在编辑单元格」）
+    cellEditorHandle$.set(null);
     const s = ensureSource();
     if (!s || e.r >= s.rows.length) return;
     while (s.rows[e.r].length <= e.c) s.rows[e.r].push(emptyCell());
@@ -523,6 +531,9 @@
   /** 取消编辑（Esc）：丢弃改动与暂存的防抖解析结果 */
   function cancelEdit(): void {
     editing = null;
+    // 退出编辑态：同步清空全局单元格编辑句柄（关闭守卫以句柄存在与否
+    // 判定「正在编辑单元格」）
+    cellEditorHandle$.set(null);
     pendingParsed = null;
     if (cellParseTimer !== undefined) {
       clearTimeout(cellParseTimer);

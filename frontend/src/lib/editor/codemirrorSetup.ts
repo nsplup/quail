@@ -930,6 +930,10 @@ export interface CellEditorHandle {
   focusEnd(): void;
   /** 重新挂载后触发一次量测（脱离/进入文档后 CM 需重新测量几何） */
   requestMeasure(): void;
+  /** 强制提交：等价于 Ctrl/Cmd+Enter / 失焦路径（EditableTable 的
+      commitEdit → writeBack 反向更新编辑区）。供关闭守卫在判定脏状态
+      前强制结束单元格编辑使用。 */
+  commit(): void;
   destroy(): void;
 }
 
@@ -1068,6 +1072,9 @@ export function createCellEditor(
     },
     requestMeasure() {
       view.requestMeasure();
+    },
+    commit() {
+      handlers.oncommit();
     },
     destroy() {
       cancelAnimationFrame(scrollRaf);

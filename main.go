@@ -8,7 +8,9 @@
 //   - 文件拖拽打开走 Wails File Drop 官方通道（EnableFileDrop + 窗口事件），
 //     前端 data-file-drop-target 标注放置区；
 //   - 脏状态关闭拦截：ShouldQuit（应用级退出）+ WindowClosing 拦截钩子
-//     （窗口关闭按钮）双通道，有未保存改动时取消关闭并通知前端弹 confirm。
+//     （窗口关闭按钮）双通道。后端不保存、不询问脏状态：未确认退出时
+//     一律取消关闭并把 close:request 发给前端，由前端判定脏状态后决定
+//     ConfirmQuit 或取消。
 //   - 快捷键（前端 keydown 统一分发）：Ctrl+N 新实例（AppService.NewInstance
 //     拉起新进程，可选携带文件路径）；Ctrl+Q 退出（AppService.CloseWindow，
 //     语义等同窗口关闭，触发脏状态守卫）；Ctrl+O / 拖拽打开按前端判定分流：
@@ -52,14 +54,14 @@ func main() {
                         application.NewService(configSvc),
                 },
                 // 应用级关闭拦截（与下方 WindowClosing 拦截钩子构成完整关闭链）：
-                // 窗口关闭按钮走 WindowClosing，Ctrl+Q（AppService.CloseWindow
-                // 无脏状态时）与 Cmd+Q 等应用级退出走 ShouldQuit。
-                // - 已确认退出或无脏状态 → 直接放行；
-                // - 有脏状态 → ShouldQuit 立即返回 false 阻止退出，异步通知
-                //   前端弹 confirm（close:request），确认后经 ConfirmQuit 退出时
-                //   confirmed 已置位，此处放行。
+                // 窗口关闭按钮走 WindowClosing，Ctrl+Q（AppService.CloseWindow）
+                // 与 Cmd+Q 等应用级退出走 ShouldQuit。
+                // 后端不保存、不询问脏状态：未确认退出时一律返回 false 阻止
+                // 退出，并发 close:request 给前端，由前端判定脏状态后决定
+                // ConfirmQuit 或取消；确认后经 ConfirmQuit 退出时 confirmed
+                // 已置位，此处放行。
                 ShouldQuit: func() bool {
-                        if appSvc.QuitConfirmed() || !appSvc.Dirty() {
+                        if appSvc.QuitConfirmed() {
                                 return true
                         }
                         go appSvc.RequestClose()
@@ -104,13 +106,14 @@ func main() {
                 }
         })
 
-        // 窗口关闭拦截（参考 ref.go 实现思路）：有未保存改动时取消关闭，
-        // 通知前端弹 confirm（close:request），由前端决定 ConfirmQuit 或取消。
-        // 已确认退出（confirmed 置位）或无脏状态时直接放行。
+        // 窗口关闭拦截（参考 ref.go 实现思路）：后端不做脏状态判断，
+        // 未确认退出时一律取消关闭并通知前端（close:request），由前端
+        // 判定脏状态后决定 ConfirmQuit 或取消；已确认退出（confirmed
+        // 置位）时直接放行。
         // 与 ShouldQuit 构成完整关闭链：窗口关闭按钮走这里，
         // Ctrl+Q（AppService.CloseWindow）与 Cmd+Q 等应用级退出走 ShouldQuit。
         win.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
-                if appSvc.QuitConfirmed() || !appSvc.Dirty() {
+                if appSvc.QuitConfirmed() {
                         return
                 }
                 e.Cancel()

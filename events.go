@@ -24,8 +24,9 @@ const (
         EventFileDropped EventType = "file:dropped"
         // EventConfigChanged 配置文件被外部修改或保存；payload: ConfigEventData。
         EventConfigChanged EventType = "config:changed"
-        // EventCloseRequest RequestClose 触发的关闭请求；前端弹 confirm，
-        // 确认后调用 AppService.ConfirmQuit。payload: nil。
+        // EventCloseRequest RequestClose 触发的关闭请求；后端不做脏状态
+        // 判断，一律发到前端：前端判定脏状态后决定直接 ConfirmQuit 或
+        // 弹 confirm。payload: nil。
         EventCloseRequest EventType = "close:request"
 )
 

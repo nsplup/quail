@@ -23,7 +23,7 @@ import type {
   PreviewApi,
   PreviewBlock,
 } from "./types";
-import type { EditorApi } from "./editor/codemirrorSetup";
+import type { EditorApi, CellEditorHandle } from "./editor/codemirrorSetup";
 import { blockIndexForLine } from "./markdown";
 import { setRefsSnapshot, clearRefsSnapshot } from "./markdown/reference-store";
 import type { HastSegment } from "./markdown/markdown-core";
@@ -233,6 +233,12 @@ export const parseContext$ = writable<ParseContext>("edit");
 export const editorApi$ = writable<EditorApi | null>(null);
 /** 脏状态：当前文档与最近一次干净引用（初始化/保存时记录）不一致 */
 export const dirty$ = writable(false);
+/**
+ * 当前处于编辑状态的单元格编辑器句柄（可编辑表格进入编辑态时注入，
+ * 提交/取消/卸载时清空）。供关闭守卫在判定脏状态前检测：存在句柄即
+ * 正在编辑单元格，须先强制提交并等回写落地，再判定是否直接退出。
+ */
+export const cellEditorHandle$ = writable<CellEditorHandle | null>(null);
 export const previewApi$ = writable<PreviewApi | null>(null);
 
 /* ---------------- 解析调度：200ms 防抖 + IME 组合闸门 + worker 背压 ----------------

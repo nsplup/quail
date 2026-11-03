@@ -12,7 +12,6 @@ import { withDialogMask } from "./confirm";
 
 const {
   Ready,
-  HasUnsavedChanges,
   RequestClose,
   ConfirmQuit,
   SetTitle,
@@ -74,11 +73,6 @@ export interface QuailConfig {
 /** 首帧就绪：显示窗口 */
 export async function ready(): Promise<void> {
   await Ready();
-}
-
-/** 上报脏状态 */
-export async function reportDirty(dirty: boolean): Promise<void> {
-  await HasUnsavedChanges(dirty);
 }
 
 /** 窗口标题与文档名同步 */

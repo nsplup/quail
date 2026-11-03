@@ -20,7 +20,6 @@
     saveDocument,
     confirmQuit,
     onBackendEvent,
-    reportDirty,
     pickOpenPaths,
     openDocument,
     newInstance,
@@ -49,6 +48,7 @@
     activeHeading$ as activeHeading,
     dirty$ as dirty,
     guardDirty$ as guardDirty,
+    cellEditorHandle$ as cellEditorHandle,
     editorApi$ as editorApi,
     previewApi$ as previewApi,
     bootApp,
@@ -133,22 +133,35 @@
   /* ---------------- 启动 ---------------- */
   onMount(async () => {
     setLang(currentLang());
-    // 关闭请求 → 三选确认（保存/丢弃/取消）→ ConfirmQuit（取消则无操作）。
-    // 后端已启用脏状态关闭拦截（ShouldQuit + WindowClosing）：
-    // 有未保存改动时后端先取消关闭，再发 close:request 到这里。
-    // closeDialogOpen 防重入：对话框打开期间重复的 close:request
+    // 关闭请求 → 前端全权判定：后端不再保存/询问脏状态，所有关闭路径
+    // （窗口关闭按钮 / Ctrl+Q / Cmd+Q）都会先取消关闭并转发 close:request
+    // 到这里。
+    // 处理顺序：先检测单元格编辑状态（cellEditorHandle$ 非空即正在编辑
+    // 可编辑表格单元格）→ 强制提交单元格并退出编辑态 → 等回写落地 →
+    // 再判定脏状态：干净 → 直接 ConfirmQuit 退出；脏 → 三选确认
+    // （保存/丢弃/取消）→ ConfirmQuit（取消则无操作）。
+    // closeDialogOpen 防重入：处理期间重复的 close:request
     // （如连续点击标题栏关闭按钮）不叠加弹窗。
     let closeDialogOpen = false;
     void onBackendEvent("close:request", async () => {
       if (closeDialogOpen) return;
       closeDialogOpen = true;
       try {
-        // close:request 仅在守卫脏时由后端发出；confirm 消息仅为兜底
+        // 单元格编辑中：强制提交（等价 Ctrl+Enter / 失焦路径）。提交经
+        // writeBack → replaceLines 同步进入编辑区（dirty$ 在 CM
+        // updateListener 内即时落位），让出一个宏任务确保提交链路与
+        // Svelte 副作用（卸载单元格编辑器宿主等）全部结束后再判定脏状态。
+        const cellHandle = get(cellEditorHandle);
+        if (cellHandle) {
+          cellHandle.commit();
+          await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        }
         const g = get(guardDirty);
-        const res = await confirmDialog(
-          g ? get(t)("confirm.quitDirty") : get(t)("confirm.quit"),
-          g ? "dirty" : "confirm",
-        );
+        if (!g) {
+          await confirmQuit(); // 干净（含单元格提交后无改动）：直接退出
+          return;
+        }
+        const res = await confirmDialog(get(t)("confirm.quitDirty"), "dirty");
         if (res === "cancel") return; // 中止关闭
         if (res === "save") {
           await save(); // 先保存当前文档（未命名走另存为；deleted 走确认重建）
@@ -175,12 +188,9 @@
     await bootApp();
   });
 
-  // 守卫脏状态上报后端（供 WindowClosing 拦截钩子与 ShouldQuit 关闭守卫
-  // 使用）：内容与干净基线不一致即拦截。窗口标题的星号标记
-  // 同用 guardDirty 口径，与打开/退出的脏状态守卫保持一致
-  $effect(() => {
-    void reportDirty($guardDirty);
-  });
+  // 守卫脏状态（guardDirty）仅留在前端使用：关闭守卫、打开替换确认与
+  // 窗口标题的星号标记同用这一口径，与打开/退出的脏状态守卫保持一致。
+  // 后端不再保存脏状态、也不再向前端索要（原 reportDirty 上报已移除）。
 
   // 查找悬浮面板开合联动：
   // - 把 App 的 setMode（含预览滚动位置保存/恢复）交给面板，
