@@ -12,7 +12,7 @@
    * - 挂载时折叠状态优先取全局 store（accordionOpen$，见 stores.ts），
    *   无记录再回落 HAST details 的 open 属性（源码 `<details open>`）；
    * - 用户切换折叠 → 本地翻转即时反馈，同时经 setAccordionOpen 上报到
-   *   全局 store——预览为虚拟滚动（VList），段滚出视口即卸载、滚回时
+   *   全局 store——预览为虚拟滚动（VirtualList），段滚出视口即卸载、滚回时
    *   重新挂载，store 记录让重挂载恢复用户上次的折叠状态，而非每次
    *   都回落源码 open 属性。
    *

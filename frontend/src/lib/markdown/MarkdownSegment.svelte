@@ -1,6 +1,6 @@
 <script lang="ts">
   /**
-   * 预览段渲染器：VList 的单个虚拟项（一个 HAST 段）。
+   * 预览段渲染器：VirtualList 的单个虚拟项（一个 HAST 段）。
    *
    * - 段容器按索引复用：worker 增量只重发被替换区间，未变段对象引用不变 →
    *   MarkdownNode 递归组件按 props 引用相等跳过子树——文本变化只更新
