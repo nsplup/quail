@@ -1,11 +1,6 @@
 # Quail
 
-一个基于 **Wails v3（Go + Webview）** 构建的轻量级跨平台 Markdown 桌面编辑器，采用 **单窗口单文档、多实例** 的编辑模型：每个文件一个独立窗口，命令行多路径 / 对话框多选 / 拖拽多文件都会逐个拉起新实例装载。
-
-- **编辑器**：CodeMirror 6（源码/双栏/预览三种布局，分隔线可拖拽调比例）
-- **预览**：unified（remark → hast）管线运行在 Web Worker，虚拟滚动渲染长文档
-- **后端**：Go 服务（文件读写 / 配置 / 图片代理），事件驱动与前端通信
-- **界面**：Svelte 5 + Tailwind CSS 4，25 套主题，中英双语（zh / en）
+![](https://github.com/nsplup/quail/blob/master/docs/assets/screenshot.png)
 
 ---
 
