@@ -8,7 +8,10 @@ package main
 //
 // 本地白名单：已打开文档时，仅允许文档所在目录本身或其 assets/ 子目录下的
 // 文件；文档未保存（未打开）、路径越权、路径逃逸（../）一律 403 JSON 错误，
-// 前端 md-image 在 error 态展示"访问受限"。
+// 前端 md-image 在 error 态展示"访问受限"。白名单之外另有内容魔数校验：
+// 仅放行真实图片文件——白名单目录可能含任意非图片资源（笔记附件、数据
+// 文件等），纯路径校验不足以防目录内敏感文件被代理读出，本地与远程统一
+// "必须为图片"口径。
 //
 // 远程：仅 http/https；15s 超时；20MB 上限；校验 Content-Type 为 image/*；
 // 缓存 os.UserCacheDir()/quail/（key = sha256(url)），原子写入，命中直回。
@@ -62,7 +65,7 @@ func ImgProxyMiddleware(fs *FileService) application.Middleware {
         }
 }
 
-// serveLocal 本地文档目录图片。
+// serveLocal 本地文档目录图片（白名单 + 内容魔数双校验：仅放行真实图片）。
 func serveLocal(w http.ResponseWriter, r *http.Request, fs *FileService) {
         docPath := fs.CurrentPath()
         if docPath == "" {
@@ -113,7 +116,15 @@ func serveLocal(w http.ResponseWriter, r *http.Request, fs *FileService) {
                 }
                 return
         }
-        w.Header().Set("Content-Type", imageContentType(target))
+        // 内容魔数校验（白名单之外的第二道门）：只放行真实图片文件。
+        // 白名单目录可能含任意文件（笔记附件、数据文件等），仅路径校验
+        // 不足以防目录内敏感文件被代理读出；嗅探与远程代理同一套魔数口径，
+        // 未识别内容一律 403（不依赖扩展名，伪扩展名同样拦截）。
+        if !isImageContent(data) {
+                writeProxyError(w, http.StatusForbidden, "not an image")
+                return
+        }
+        w.Header().Set("Content-Type", sniffImageContentType(data))
         w.Header().Set("Cache-Control", "no-cache")
         _, _ = w.Write(data)
 }
@@ -236,30 +247,65 @@ func pathWithinDirOn(goos, dir, target string) bool {
         return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
 }
 
+// imageMagic 按内容魔数识别已知图片格式，返回 Content-Type。
+// 命中任意一种已知图片格式 → (类型, true)；未识别 → ("", false)。
+func imageMagic(data []byte) (string, bool) {
+        switch {
+        case len(data) >= 4 && data[0] == 0x89 && data[1] == 'P' && data[2] == 'N' && data[3] == 'G':
+                return "image/png", true
+        case len(data) >= 6 && (string(data[:6]) == "GIF87a" || string(data[:6]) == "GIF89a"):
+                return "image/gif", true
+        case len(data) >= 12 && string(data[:4]) == "RIFF" && string(data[8:12]) == "WEBP":
+                return "image/webp", true
+        case len(data) >= 2 && data[0] == 'B' && data[1] == 'M':
+                return "image/bmp", true
+        case len(data) >= 4 && data[0] == 0x00 && data[1] == 0x00 && data[2] == 0x01 && data[3] == 0x00:
+                return "image/x-icon", true
+        case len(data) >= 12 && string(data[4:8]) == "ftyp" && (string(data[8:12]) == "avif" || string(data[8:12]) == "avis"):
+                return "image/avif", true
+        case isSVGData(data):
+                return "image/svg+xml", true
+        case len(data) >= 3 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF:
+                return "image/jpeg", true
+        default:
+                return "", false
+        }
+}
+
 // sniffImageContentType 按内容魔数判定图片 Content-Type。
 // 远程图片的 URL 扩展名与实际格式常不一致（无扩展名/伪扩展名），
 // 按扩展名回 Content-Type 会错标（如 SVG 被标成 image/jpeg 拒渲染）。
+// 调用方须先用 isImageContent 校验（本地代理如此），否则未识别内容
+// 落入 jpeg 兜底。
 func sniffImageContentType(data []byte) string {
-        switch {
-        case len(data) >= 4 && data[0] == 0x89 && data[1] == 'P' && data[2] == 'N' && data[3] == 'G':
-                return "image/png"
-        case len(data) >= 6 && (string(data[:6]) == "GIF87a" || string(data[:6]) == "GIF89a"):
-                return "image/gif"
-        case len(data) >= 12 && string(data[:4]) == "RIFF" && string(data[8:12]) == "WEBP":
-                return "image/webp"
-        case len(data) >= 2 && data[0] == 'B' && data[1] == 'M':
-                return "image/bmp"
-        case len(data) >= 4 && data[0] == 0x00 && data[1] == 0x00 && data[2] == 0x01 && data[3] == 0x00:
-                return "image/x-icon"
-        case len(data) >= 12 && string(data[4:8]) == "ftyp" && (string(data[8:12]) == "avif" || string(data[8:12]) == "avis"):
-                return "image/avif"
-        case isSVGData(data):
-                return "image/svg+xml"
-        case len(data) >= 3 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF:
-                return "image/jpeg"
-        default:
-                return "image/jpeg" // 兜底（jpeg 魔数较宽松，x-doom 等罕见格式不细分）
+        if ct, ok := imageMagic(data); ok {
+                return ct
         }
+        return "image/jpeg" // 兜底（jpeg 魔数较宽松，x-doom 等罕见格式不细分）
+}
+
+// isImageContent 严格判定数据是否为已知图片格式（无兜底）：任何未识别
+// 内容一律 false。本地代理（serveLocal / resolveLocalTarget）据此拒绝
+// 白名单目录内的非图片文件，与远程代理"必须为图片"口径统一。
+func isImageContent(data []byte) bool {
+        _, ok := imageMagic(data)
+        return ok
+}
+
+// isImageFile 按文件头魔数判定磁盘文件是否为图片（只读前 4KB 嗅探，
+// 不整读大文件）。
+func isImageFile(path string) bool {
+        fh, err := os.Open(path)
+        if err != nil {
+                return false
+        }
+        defer fh.Close()
+        head := make([]byte, 4096)
+        n, err := io.ReadFull(fh, head)
+        if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
+                return false
+        }
+        return isImageContent(head[:n])
 }
 
 // isSVGData 宽容识别 SVG 文本（允许 BOM / 前置空白 / <?xml 头）。
@@ -271,28 +317,7 @@ func isSVGData(data []byte) bool {
         return bytes.HasPrefix(s, []byte("<svg")) || bytes.HasPrefix(s, []byte("<?xml"))
 }
 
-// imageContentType 按扩展名给 Content-Type（本地文档目录资源用）。
-func imageContentType(path string) string {
-        switch strings.ToLower(filepath.Ext(path)) {
-        case ".png":
-                return "image/png"
-        case ".gif":
-                return "image/gif"
-        case ".webp":
-                return "image/webp"
-        case ".svg":
-                return "image/svg+xml"
-        case ".bmp":
-                return "image/bmp"
-        case ".ico":
-                return "image/x-icon"
-        case ".avif":
-                return "image/avif"
-        default:
-                return "image/jpeg"
-        }
-}
-
+// sha256HexStr 字节串 sha256 hex 编码。
 func sha256HexStr(s string) string {
         sum := sha256.Sum256([]byte(s))
         return hex.EncodeToString(sum[:])
