@@ -7,8 +7,7 @@
  */
 
 import { AppService, FileService, ConfigService } from "@bindings";
-import { Events, Browser } from "@wailsio/runtime";
-import { withDialogMask } from "./confirm";
+import { Events, Browser, Dialogs } from "@wailsio/runtime";
 
 const {
   Ready,
@@ -20,9 +19,6 @@ const {
 } = AppService;
 
 const {
-  PickOpen,
-  PickSave,
-  PickImageSave,
   ImageFilePath,
   ImageSaveFile,
   Open,
@@ -158,12 +154,18 @@ export async function startupFiles(): Promise<QuailStartupFiles> {
 }
 
 /** 弹系统打开对话框（可多选），返回所选路径列表（取消返回空数组）。
- * 弹窗期间显示空白遮罩（只有遮罩无面板，不可点击关闭），
- * 等待弹窗得到结果后遮罩关闭。 */
+ * 经运行时 Dialogs 模块弹出，对话框自动附属当前窗口（窗口模态），
+ * 弹窗期间 webview 不可交互，无需前端遮罩。 */
 export async function pickOpenPaths(): Promise<string[]> {
-  const paths = await withDialogMask<string[]>(
-    async () => (await PickOpen()) ?? []
-  );
+  const picked = await Dialogs.OpenFile({
+    Title: "打开 Markdown 文档",
+    AllowsMultipleSelection: true,
+    Filters: [
+      { DisplayName: "Markdown", Pattern: "*.md;*.markdown" },
+      { DisplayName: "Text", Pattern: "*.txt" },
+    ],
+  });
+  const paths = Array.isArray(picked) ? picked : picked ? [picked] : [];
   return paths.filter((p) => !!p);
 }
 
@@ -186,15 +188,17 @@ export async function saveDocumentAs(path: string, content: string): Promise<Qua
 }
 
 /** 弹系统另存对话框并保存（取消返回 null；defaultName 由调用方按界面语言传入）。
- * 系统弹窗存续期间显示空白遮罩（只有遮罩无面板，不可点击关闭），
- * 等待弹窗得到结果后遮罩关闭。 */
+ * 经运行时 Dialogs 模块弹出，对话框自动附属当前窗口（窗口模态），
+ * 弹窗期间 webview 不可交互，无需前端遮罩。 */
 export async function saveAsViaDialog(
   content: string,
   defaultName = "untitled.md"
 ): Promise<QuailSaveResult | null> {
-  const path = await withDialogMask<string | null>(
-    async () => await PickSave(defaultName)
-  );
+  const path = await Dialogs.SaveFile({
+    Title: "另存为",
+    Filename: defaultName || "untitled.md",
+    Filters: [{ DisplayName: "Markdown", Pattern: "*.md;*.markdown" }],
+  });
   if (!path) return null;
   return (await SaveAs(path, content)) as unknown as QuailSaveResult;
 }
@@ -220,15 +224,23 @@ export async function imageFilePath(proxySrc: string): Promise<string | null> {
 /**
  * 图片另存为：弹系统「保存图片」对话框（取消返回 null），选定路径后由
  * 后端读取源文件（本地资源 / 远程缓存）原子写入，字节不经前端往返。
- * 弹窗期间与文档另存为同口径显示空白遮罩（withDialogMask）。
+ * 经运行时 Dialogs 模块弹出，对话框自动附属当前窗口（窗口模态），
+ * 与文档另存为同口径。
  */
 export async function saveImageViaDialog(
   proxySrc: string,
   defaultName: string
 ): Promise<string | null> {
-  const path = await withDialogMask<string | null>(
-    async () => await PickImageSave(defaultName)
-  );
+  const path = await Dialogs.SaveFile({
+    Title: "另存为",
+    Filename: defaultName || "image.png",
+    Filters: [
+      {
+        DisplayName: "Image",
+        Pattern: "*.png;*.jpg;*.jpeg;*.gif;*.webp;*.svg;*.bmp;*.ico;*.avif",
+      },
+    ],
+  });
   if (!path) return null;
   await ImageSaveFile(proxySrc, path);
   return path;

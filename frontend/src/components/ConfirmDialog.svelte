@@ -9,16 +9,9 @@
    *   默认 focus outline（不再有 active class 高亮，也不劫持按键）。
    *   Enter 触发当前聚焦按钮；Esc 经 focus-trap 的 escapeDeactivates 触发
    *   onDeactivate → answer("cancel")（安全侧默认）。
-   *   打开面板时 focus-trap 自动聚焦面板内第一个可聚焦按钮。
-   * - 系统弹窗专用空白遮罩（dialogMask$）：只有遮罩没有面板。内部放置一个
-   *   占位元素（无面板时容器内没有任何可聚焦节点，focus-trap 无法激活），
-   *   同样建立 trap，阻断遮罩期间的焦点逃逸。 */
+   *   打开面板时 focus-trap 自动聚焦面板内第一个可聚焦按钮。 */
   import { get } from "svelte/store";
-  import {
-    confirm$,
-    dialogMask$ as dialogMaskStore,
-    type ConfirmResult,
-  } from "../lib/confirm";
+  import { confirm$, type ConfirmResult } from "../lib/confirm";
   import { focusTrap } from "../lib/focusTrap";
   import { t } from "../lib/i18n.svelte";
   import Icon from "./Icon.svelte";
@@ -34,7 +27,6 @@
 
   // store 自动订阅在 runes 模式下仍受支持，$derived 会追踪其变化
   let cur = $derived($confirm$);
-  let dialogMask = $derived($dialogMaskStore);
 
   let buttons = $derived.by((): Btn[] => {
     const c = cur;
@@ -82,35 +74,7 @@
     /** 不再归还焦点以避免焦点被重置到编辑器顶部引发预期外的滚动同步 */
     returnFocusOnDeactivate: false,
   });
-
-  /** 系统弹窗空白遮罩的 trap：
-   * - 容器内没有任何可聚焦节点，靠占位元素 + fallbackFocus 兜底激活；
-   * - escapeDeactivates 关闭：Esc 属于系统弹窗自身，遮罩保持到
-   *   withDialogMask 结束（元素卸载时由 attachment 清理函数 deactivate）。 */
-  const maskTrap = focusTrap({
-    allowOutsideClick: true,
-    escapeDeactivates: false,
-    fallbackFocus: "[data-mask-placeholder]",
-    /** 不再归还焦点以避免焦点被重置到编辑器顶部引发预期外的滚动同步 */
-    returnFocusOnDeactivate: false,
-  });
 </script>
-
-{#if dialogMask}
-  <!-- 系统弹窗专用空白 confirm：只有遮罩没有面板。不绑定任何点击处理
-       （无法通过点击关闭），仅在系统弹窗得到结果后由 withDialogMask
-       关闭；期间阻断对界面的进一步交互。 -->
-  <div
-    class="fixed inset-0 z-[70] bg-black/45"
-    role="presentation"
-    {@attach maskTrap}
-  >
-    <!-- 占位元素：纯遮罩容器内没有任何可聚焦节点，focus-trap 激活时
-         会因找不到可聚焦目标而失败；该占位节点不可 Tab 进入
-         （tabindex="-1"），仅作为 fallbackFocus 的落点。 -->
-    <div class="mask-placeholder" tabindex="-1" data-mask-placeholder></div>
-  </div>
-{/if}
 
 {#if cur}
   <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -162,8 +126,5 @@
     display: inline-flex;
     align-items: center;
     gap: 0.375rem;
-  }
-  .mask-placeholder {
-    outline: none !important;
   }
 </style>

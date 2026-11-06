@@ -118,7 +118,7 @@ quail/
     │   │   ├── bridge.ts           # Wails 桥接层（bindings 封装 + 外链校验）
     │   │   ├── stores.ts           # 全局状态中心 + 解析调度器 + bootApp
     │   │   ├── settings.ts         # 设置 KV 抽象（后端配置为唯一事实源）
-    │   │   ├── confirm.ts          # 确认弹窗 + 系统弹窗遮罩
+    │   │   ├── confirm.ts          # 确认弹窗
     │   │   ├── i18n.svelte.ts      # svelte-i18n 初始化（zh/en，system 探测）
     │   │   ├── i18n-messages.ts    # 中英文消息表
     │   │   ├── themes.ts           # 主题变量注入与字体链
@@ -194,8 +194,8 @@ quail/
 - **`Open(path)`**：读盘 → 编码检测转 UTF-8（原编码名记入 `DocState.Encoding`）→ 过滤二进制（非文本静默丢弃）→ 持有 `path / encoding / bom / lastKnown(sha256)` → 启动 fsnotify 目录监听，过滤出当前文档的变动，300ms 防抖合并后广播 `file:changed`（携带转码后的新内容）或 `file:deleted`；
 - **`Save(content, force)`**：sha256 对比 `lastKnown` 检测外部修改冲突（冲突返回 `SaveResult{Conflict:true}`，不覆盖磁盘；`force=true` 跳过校验用于确认覆盖/重建场景）→ 原子写：**同目录临时文件 + fsync + rename**，保留原文件权限，原文件带 BOM 则补写；
 - **`SaveAs(path, content)`**：原子写新路径并把目录监听迁移过去；
-- **`PickOpen / PickSave / PickImageSave`**：系统对话框（打开可多选）；
 - **`CloseDoc`**：停止监听、清空文档状态；
+- 系统对话框不再经 Go 绑定暴露：前端经运行时 `Dialogs` 模块（`@wailsio/runtime`）弹出，窗口模态；
 - 图片动作（见 `image_actions.go`）：`ImageFilePath`（把 imgproxy 代理 URL 解析为磁盘绝对路径；远程图未命中缓存先经 singleflight 下载）、`ImageSaveFile`（源文件字节在后端读取并原子写入，**不经前端往返**）、`OpenFileWithExternal`（系统默认程序打开）。
 
 ### 配置服务 ConfigService
@@ -251,7 +251,7 @@ AssetServer 中间件，前端 `<md-image>` 统一指向两条代理路径：
 
 - 封装三个服务的所有调用（`ready / setTitle / requestClose / confirmQuit / closeWindow / newInstance`、`startupFiles / pickOpenPaths / openDocument / saveDocument / saveAsViaDialog`、`loadConfig / persistConfigFields`、图片动作）；
 - **外链白名单**：`openExternal` 仅放行合法 http/https；显式携带其他 scheme（`file:` / `javascript:` / `data:` 等）一律拒绝；未携带协议的裸域按 https 补全后复验，仍非法则静默忽略——不转发任何未校验内容到系统层；
-- 系统对话框存续期间经 `withDialogMask` 显示空白遮罩，阻断期间交互。
+- 系统对话框经运行时 `Dialogs` 模块（`@wailsio/runtime`）弹出，自动附属当前窗口（窗口模态），弹窗期间 webview 不可交互。
 
 ### 全局状态与解析管线
 
@@ -302,7 +302,7 @@ AssetServer 中间件，前端 `<md-image>` 统一指向两条代理路径：
 
 ### 快捷键
 
-`window` keydown 统一分发（遮罩守卫：设置面板 / confirm 弹窗 / 系统弹窗遮罩打开期间阻断全部界面快捷键）：
+`window` keydown 统一分发（弹层守卫：设置面板 / confirm 弹窗打开期间阻断全部界面快捷键；系统对话框为窗口模态，弹窗期间天然无输入）：
 
 | 快捷键 | 行为 |
 |---|---|

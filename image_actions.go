@@ -7,9 +7,9 @@ package main
 //     绝对路径（local = 白名单内且魔数校验通过的目标图片；remote = 代理
 //     缓存文件，未命中缓存时先经 singleflight 下载缓存再返回），前端再以
 //     wails runtime Browser.OpenFile(path) 交系统默认程序打开；
-//   - 另存为：PickImageSave 弹图片格式保存对话框选定目标路径，
-//     ImageSaveFile 由后端读取源文件字节并原子写入（字节不经前端往返，
-//     复用 writeFileAtomic 保障写入完整性）；
+//   - 另存为：前端经运行时 Dialogs.SaveFile 弹图片格式保存对话框选定
+//     目标路径（窗口模态），ImageSaveFile 由后端读取源文件字节并原子
+//     写入（字节不经前端往返，复用 writeFileAtomic 保障写入完整性）；
 //
 // 代理 URL 口径与 ImgProxyMiddleware 完全一致：
 //   /__imgproxy/local?p=<相对或绝对路径>   /__imgproxy/remote?url=<encoded URL>
@@ -32,24 +32,6 @@ import (
 // local 与代理返回同口径：白名单 + 内容魔数校验，非图片文件拒绝。
 func (f *FileService) ImageFilePath(proxySrc string) (string, error) {
         return resolveProxyTarget(f, proxySrc)
-}
-
-// PickImageSave 弹出系统"保存图片"对话框（图片格式过滤器），返回目标路径
-// （取消返回空串）。
-func (f *FileService) PickImageSave(defaultName string) (string, error) {
-        app := application.Get()
-        if app == nil {
-                return "", nil
-        }
-        if defaultName == "" {
-                defaultName = "image.png"
-        }
-        return app.Dialog.SaveFile().
-                SetMessage("另存为").
-                SetFilename(defaultName).
-                AddFilter("Image", "*.png;*.jpg;*.jpeg;*.gif;*.webp;*.svg;*.bmp;*.ico;*.avif").
-                AddFilter("All files", "*.*").
-                PromptForSingleSelection()
 }
 
 // ImageSaveFile 把 imgproxy 代理 URL 指向的图片写入 destPath（另存为用）。

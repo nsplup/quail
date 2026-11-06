@@ -39,7 +39,7 @@ import {
 } from "./searchPanel";
 import { markdownEmphasis } from "./emphasis"
 import { dirty$, setImeComposing, settingsOpen$ } from "../stores";
-import { confirm$, dialogMask$ } from "../confirm";
+import { confirm$ } from "../confirm";
 import { get } from "svelte/store";
 /* 行前缀语义单一源（markdown/table-source）：replaceLines 的
    preservePrefix 与表格源码解析共用同一前缀提取规则 */
@@ -361,9 +361,9 @@ export function createEditorApi(
   /* 历史独立 Compartment：打开文档时卸载再重装 = 清空撤销历史 */
   const historyCompartment = new Compartment();
   const phrasesCompartment = new Compartment();
-  /* 可编辑性 Compartment：任一遮罩（设置面板 / confirm 弹窗 / 系统弹窗
-     空白遮罩）开启期间切换为不可编辑，全部关闭后恢复
-     （响应 settingsOpen$ / confirm$ / dialogMask$ 开关状态） */
+  /* 可编辑性 Compartment：任一弹层（设置面板 / confirm 弹窗）
+     开启期间切换为不可编辑，全部关闭后恢复
+     （响应 settingsOpen$ / confirm$ 开关状态） */
   const editableCompartment = new Compartment();
   /* 查找悬浮面板顶部余量 Compartment：面板开合时动态重配置
      scrollMargins（悬浮卡片不占布局高度，改由 facet 让编辑器滚动留边） */
@@ -563,15 +563,14 @@ export function createEditorApi(
 
   view.scrollDOM.addEventListener("scroll", onScroll, { passive: true });
 
-  /* 遮罩联动：任一遮罩（设置面板 / confirm 弹窗 / 系统弹窗空白遮罩，
+  /* 弹层联动：任一弹层（设置面板 / confirm 弹窗，
      与 App 快捷键的 overlayOpen 同口径）开启期间编辑器切换为不可编辑
      （CM6 会同步移除 contenteditable 并拒绝输入），全部关闭后恢复。
-     三个源订阅同一同步函数，状态变化经去重后才 dispatch，
+     两个源订阅同一同步函数，状态变化经去重后才 dispatch，
      避免创建期与同值切换产生无谓的重配置事务。 */
   let overlayOn = false;
   const syncEditable = () => {
-    const on =
-      get(settingsOpen$) || get(confirm$) !== null || get(dialogMask$);
+    const on = get(settingsOpen$) || get(confirm$) !== null;
     if (on === overlayOn) return;
     overlayOn = on;
     view.dispatch({
@@ -584,7 +583,6 @@ export function createEditorApi(
   const unsubOverlays = [
     settingsOpen$.subscribe(syncEditable),
     confirm$.subscribe(syncEditable),
-    dialogMask$.subscribe(syncEditable),
   ];
 
   /* 反向更新前置钩子：EditableTable 经 replaceLines 回写表格前，
@@ -902,7 +900,7 @@ export function createEditorApi(
  * - 与编辑区共用同一套语言（markdown / lezer 高亮）、自动换行、
  *   按键（defaultKeymap / historyKeymap / Tab 缩进）、撤销历史参数
  *   与 --ed-* 主题变量；仅去掉编辑区面板专属能力（查找面板、
- *   滚动同步上报、IME 全局闸门、遮罩禁用、Mod-s）；
+ *   滚动同步上报、IME 全局闸门、弹层禁用、Mod-s）；
  * - 懒创建：EditableTable 首次进入单元格编辑时才构建实例；
  * - 冻结复用：结束单元格编辑后不销毁实例，DOM 脱离文档挂起
  *   （Svelte 卸载宿主节点即完成冻结），下次编辑把 dom 重新挂载

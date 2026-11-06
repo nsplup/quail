@@ -279,39 +279,6 @@ func (f *FileService) SaveAs(path, content string) (*SaveResult, error) {
         return &SaveResult{Ok: true, Path: abs, Dir: filepath.Dir(abs), Name: filepath.Base(abs)}, nil
 }
 
-// PickOpen 弹出系统"打开文件"对话框（可多选），返回所选路径列表
-// （取消返回空列表；顺序与用户选择顺序一致）。
-func (f *FileService) PickOpen() ([]string, error) {
-        app := application.Get()
-        if app == nil {
-                return []string{}, nil
-        }
-        return app.Dialog.OpenFile().
-                SetTitle("打开 Markdown 文档").
-                AddFilter("Markdown", "*.md;*.markdown").
-                AddFilter("Text", "*.txt").
-                // 多选由 PromptForMultipleSelection 自身置位
-                //（wails v3：allowsMultipleSelection=true → 平台多选实现），
-                // 平台行为：Windows 走多文件对话框，macOS/Linux 原生多选。
-                PromptForMultipleSelection()
-}
-
-// PickSave 弹出系统"保存文件"对话框，返回目标路径（取消返回空串）。
-func (f *FileService) PickSave(defaultName string) (string, error) {
-        app := application.Get()
-        if app == nil {
-                return "", nil
-        }
-        if defaultName == "" {
-                defaultName = "untitled.md"
-        }
-        return app.Dialog.SaveFile().
-                SetMessage("另存为").
-                SetFilename(defaultName).
-                AddFilter("Markdown", "*.md;*.markdown").
-                PromptForSingleSelection()
-}
-
 // CloseDoc 关闭当前文档（停止监听、清空持有态）。
 func (f *FileService) CloseDoc() {
         f.mu.Lock()

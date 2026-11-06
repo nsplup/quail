@@ -15,7 +15,6 @@
   import ContextMenu from "./components/ContextMenu.svelte";
   import ConfirmDialog from "./components/ConfirmDialog.svelte";
   import Banner from "./components/Banner.svelte";
-  import { dialogMask$ as dialogMask } from "./lib/confirm";
   import {
     saveDocument,
     confirmQuit,
@@ -177,10 +176,10 @@
     // 当前实例为未命名空白文档且无编辑记录 → 原地装载；否则新实例装载。
     // 支持文件列表：首个文件走该分流，其余文件逐个拉起新实例装载。
     void onBackendEvent("file:dropped", async (d: { files?: string[] }) => {
-      // 遮罩开启期间（设置面板 / confirm 弹窗 / 系统弹窗空白遮罩，与
-      // 快捷键的 overlayOpen 同口径）：停止响应拖拽打开，避免遮罩交互
-      // 流程未结束时装载新文档、遮罩结果与拖拽装载相互覆盖
-      if (get(settingsOpen) || get(confirm$) !== null || get(dialogMask)) {
+      // 弹层开启期间（设置面板 / confirm 弹窗，与快捷键的 overlayOpen
+      // 同口径）：停止响应拖拽打开，避免弹层交互流程未结束时装载新文档、
+      // 弹层结果与拖拽装载相互覆盖
+      if (get(settingsOpen) || get(confirm$) !== null) {
         return;
       }
       await openPaths(d?.files ?? []);
@@ -215,13 +214,9 @@
   $effect(() => {
     const onKey = (e: KeyboardEvent) => {
       const settingsOpenNow = get(settingsOpen);
-      // 系统弹窗空白遮罩打开期间（Ctrl+O / Ctrl+Shift+S 等系统弹窗存续）
-      // 与设置面板 / confirm 弹窗同等对待：阻断所有界面快捷键
-      const dialogMaskOn = get(dialogMask);
-      const overlayOpen =
-        settingsOpenNow || get(confirm$) !== null || dialogMaskOn;
+      const overlayOpen = settingsOpenNow || get(confirm$) !== null;
 
-      /* ---- 遮罩守卫：设置面板 / confirm 弹窗 / 系统弹窗遮罩打开期间 ---- */
+      /* ---- 弹层守卫：设置面板 / confirm 弹窗打开期间 ---- */
       if (overlayOpen) return;
 
       /* ---- 常规状态：文档/窗口级快捷键 ---- */
