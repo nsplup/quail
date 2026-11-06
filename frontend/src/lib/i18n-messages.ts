@@ -12,6 +12,11 @@ export const zhMessages = {
     open: "打开",
     saveAs: "另存为",
   },
+  dialogs: {
+    open: "打开 Markdown 文档",
+    saveAs: "另存为",
+    save: "保存",
+  },
   confirm: {
     ok: "确定",
     save: "保存",
@@ -160,6 +165,11 @@ export const enMessages = {
     cancel: "Cancel",
     open: "Open",
     saveAs: "Save As",
+  },
+  dialogs: {
+    open: "Open Markdown Document",
+    saveAs: "Save As",
+    save: "Save",
   },
   confirm: {
     ok: "OK",

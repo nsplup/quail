@@ -289,9 +289,10 @@
       return;
     }
     // 无路径文档（含未命名空白文档）：保存即另存为，不做脏状态静默
-    // 返回——空白文档 Ctrl+S 也始终弹出另存为，保证能主动落盘
+    // 返回——空白文档 Ctrl+S 也始终弹出另存为，保证能主动落盘。
+    // 保存路线：对话框标题为「保存」而非「另存为」
     if (!get(docState)?.path) {
-      await saveFileAs();
+      await saveFileAs("save");
       return;
     }
     if (!get(dirty) && !force) return; // 非脏状态静默：无修改不写后端、不弹提示

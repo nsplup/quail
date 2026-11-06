@@ -572,10 +572,17 @@ export function loadOpenedDoc(state: QuailDocState): void {
   get(editorApi$)?.setDoc(state.content);
 }
 
-/** 另存为（Wails 原生保存对话框 → FileService.SaveAs） */
-export async function saveFileAs(): Promise<void> {
-  // 对话框默认文件名跟随界面语言（后端不做 i18n）
-  const res = await saveAsViaDialog(get(doc$), `${get(t)("doc.untitled")}.md`);
+/** 另存为（Wails 原生保存对话框 → FileService.SaveAs）。
+ * kind 透传对话框标题语义：保存路线（无路径文档 Ctrl+S）为 "save"，
+ * 显式另存为（Shift+Ctrl+S / file:deleted 横幅）为 "saveAs"（默认）。 */
+export async function saveFileAs(kind: "save" | "saveAs" = "saveAs"): Promise<void> {
+  // 对话框默认文件名：已命名文档用当前文档名，未命名文档按界面语言回落
+  // 「未命名.md」（后端不做 i18n）
+  const res = await saveAsViaDialog(
+    get(doc$),
+    get(docState$)?.name || `${get(t)("doc.untitled")}.md`,
+    kind
+  );
   if (res?.ok) {
     // dir/name 优先用后端按平台规范填充的字段（Windows 反斜杠路径由
     // filepath 解析）；后端字段缺失时前端兜底按 / 与 \ 双分隔符切分

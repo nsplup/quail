@@ -8,6 +8,8 @@
 
 import { AppService, FileService, ConfigService } from "@bindings";
 import { Events, Browser, Dialogs } from "@wailsio/runtime";
+import { get } from "svelte/store";
+import { t } from "./i18n.svelte";
 
 const {
   Ready,
@@ -158,7 +160,7 @@ export async function startupFiles(): Promise<QuailStartupFiles> {
  * 弹窗期间 webview 不可交互，无需前端遮罩。 */
 export async function pickOpenPaths(): Promise<string[]> {
   const picked = await Dialogs.OpenFile({
-    Title: "打开 Markdown 文档",
+    Title: get(t)("dialogs.open"),
     AllowsMultipleSelection: true,
     Filters: [
       { DisplayName: "Markdown", Pattern: "*.md;*.markdown" },
@@ -187,15 +189,17 @@ export async function saveDocumentAs(path: string, content: string): Promise<Qua
   return (await SaveAs(path, content)) as unknown as QuailSaveResult;
 }
 
-/** 弹系统另存对话框并保存（取消返回 null；defaultName 由调用方按界面语言传入）。
- * 经运行时 Dialogs 模块弹出，对话框自动附属当前窗口（窗口模态），
- * 弹窗期间 webview 不可交互，无需前端遮罩。 */
+/** 弹系统另存对话框并保存（取消返回 null；defaultName 由调用方按界面语言传入；
+ * kind 决定对话框标题语义：保存路线（无路径文档 Ctrl+S）传 "save"，显式另存为
+ * 传 "saveAs"（默认））。经运行时 Dialogs 模块弹出，对话框自动附属当前窗口
+ * （窗口模态），弹窗期间 webview 不可交互，无需前端遮罩。 */
 export async function saveAsViaDialog(
   content: string,
-  defaultName = "untitled.md"
+  defaultName = "untitled.md",
+  kind: "save" | "saveAs" = "saveAs"
 ): Promise<QuailSaveResult | null> {
   const path = await Dialogs.SaveFile({
-    Title: "另存为",
+    Title: get(t)(kind === "save" ? "dialogs.save" : "dialogs.saveAs"),
     Filename: defaultName || "untitled.md",
     Filters: [{ DisplayName: "Markdown", Pattern: "*.md;*.markdown" }],
   });
@@ -232,7 +236,7 @@ export async function saveImageViaDialog(
   defaultName: string
 ): Promise<string | null> {
   const path = await Dialogs.SaveFile({
-    Title: "另存为",
+    Title: get(t)("dialogs.saveAs"),
     Filename: defaultName || "image.png",
     Filters: [
       {
