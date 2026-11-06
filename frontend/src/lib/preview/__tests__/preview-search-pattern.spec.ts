@@ -193,3 +193,80 @@ describe("computePreviewMatches：全段匹配列表", () => {
     expect(info.footnoteIndex).toBe(-1);
   });
 });
+
+describe("跨块级元素边界不匹配", () => {
+  const cell = (tag: string, text: string) => ({
+    type: "element",
+    tagName: tag,
+    children: [{ type: "text", value: text }],
+  });
+  const asSeg = (nodes: unknown[]): HastSegment =>
+    ({ type: "block", nodes } as unknown as HastSegment);
+
+  it("表格单元格：<td>foo</td><td>bar</td> 不匹配 foobar", () => {
+    const { re } = pat("foobar");
+    const seg = asSeg([
+      {
+        type: "element",
+        tagName: "table",
+        children: [{
+          type: "element",
+          tagName: "tr",
+          children: [cell("td", "foo"), cell("td", "bar")],
+        }],
+      },
+    ]);
+    const info = computePreviewMatches([seg], re!, []);
+    expect(info.total).toBe(0);
+    // 但 foo / bar 各自仍能命中
+    expect(computePreviewMatches([seg], pat("foo").re!, []).total).toBe(1);
+    expect(computePreviewMatches([seg], pat("bar").re!, []).total).toBe(1);
+  });
+
+  it("列表项：<li>foo</li><li>bar</li> 不匹配 foobar", () => {
+    const { re } = pat("foobar");
+    const seg = asSeg([{
+      type: "element",
+      tagName: "ul",
+      children: [cell("li", "foo"), cell("li", "bar")],
+    }]);
+    expect(computePreviewMatches([seg], re!, []).total).toBe(0);
+  });
+
+  it("段落：<p>foo</p><p>bar</p> 不匹配 foobar", () => {
+    const { re } = pat("foobar");
+    const seg = asSeg([cell("p", "foo"), cell("p", "bar")]);
+    expect(computePreviewMatches([seg], re!, []).total).toBe(0);
+  });
+
+  it("内联元素之间仍可跨节点匹配", () => {
+    const { re } = pat("foobar");
+    const seg = asSeg([{
+      type: "element",
+      tagName: "p",
+      children: [
+        { type: "text", value: "foo" },
+        cell("span", "bar"),
+        { type: "text", value: "baz" },
+      ],
+    }]);
+    // "foo" + "bar" + "baz" 无分隔 → "foobarbaz"
+    expect(computePreviewMatches([seg], re!, []).total).toBe(1);
+    // 匹配到的段内位置应在 0
+    const info = computePreviewMatches([seg], re!, []);
+    expect(info.ranges[0]).toEqual([0, 6]);
+  });
+
+  it("脚注之间不跨边界匹配", () => {
+    const { re } = pat("foobar");
+    const info = computePreviewMatches(
+      [],
+      re!,
+      [
+        { identifier: "f1", def: { children: [{ type: "text", value: "foo" }] as unknown as RootContent[] } },
+        { identifier: "f2", def: { children: [{ type: "text", value: "bar" }] as unknown as RootContent[] } },
+      ],
+    );
+    expect(info.total).toBe(0);
+  });
+});

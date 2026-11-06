@@ -89,17 +89,57 @@ export function checkRegexSafety(o: PreviewPatternOpts): RegexSafetyIssue | null
  *  匹配列表（HAST 文本展平）
  * ------------------------------------------------------------------ */
 
-/** HAST 子树 → 展平文本（与 MarkdownNode 渲染文本同源同序） */
+/* ------------------------------------------------------------------
+ *  块级元素判定（用于文本展平时的分隔符插入）
+ *
+ *  匹配不得跨越块级元素边界：<td>foo</td><td>bar</td> 展平后为
+ *  "foo\nbar"，搜索 "foobar" 不再命中；<li> / <p> 同理。
+ *
+ *  注意：flattenHastText 与 applyMarksToNodes 必须共用同一判定与同一
+ *  分隔符逻辑，否则偏移量错位、高亮全部错乱。
+ * ------------------------------------------------------------------ */
+const BLOCK_TAGS = new Set([
+  "address", "article", "aside", "blockquote", "details", "dialog",
+  "div", "dl", "dt", "dd", "fieldset", "figcaption", "figure",
+  "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6", "header",
+  "hgroup", "hr", "li", "main", "nav", "ol", "p", "pre", "section",
+  "table", "tbody", "thead", "tfoot", "tr", "td", "th", "caption",
+  "colgroup", "col", "ul",
+]);
+
+/** HAST 子树 → 展平文本（块级元素边界插入 \n 分隔符）
+ *
+ *  分隔符规则：遍历到文本节点时，若上一访问对象是块级元素且已有文本，
+ *  先追加一个 \n。块级元素进入/退出都置 lastWasBlock=true，因此
+ *  空块级元素（hr 等）也会产生分隔。
+ *
+ *  与 applyMarksToNodes 的偏移量约定必须完全一致。
+ */
 export function flattenHastText(nodes: RootContent[]): string {
   let out = "";
+  let lastWasBlock = false;
   const visit = (n: unknown): void => {
     if (!n || typeof n !== "object") return;
-    const node = n as { type?: string; value?: unknown; children?: unknown[] };
+    const node = n as {
+      type?: string;
+      value?: unknown;
+      children?: unknown[];
+      tagName?: string;
+    };
     if (node.type === "text") {
+      if (lastWasBlock && out.length > 0) out += "\n";
       out += String(node.value ?? "");
+      lastWasBlock = false;
       return;
     }
-    if (Array.isArray(node.children)) for (const c of node.children) visit(c);
+    if (node.type === "element") {
+      const isBlock = BLOCK_TAGS.has(node.tagName ?? "");
+      if (isBlock) lastWasBlock = true;
+      if (Array.isArray(node.children)) {
+        for (const c of node.children) visit(c);
+      }
+      if (isBlock) lastWasBlock = true;
+    }
   };
   for (const n of nodes) visit(n);
   return out;
@@ -192,30 +232,38 @@ export function computePreviewMatches(
     info.total += rs.length;
   }
 
-  /* 脚注区伪段：与正文段同等参与匹配 / 计数 / 导航。
-     展平文本 = 所有脚注 def.children 顺序拼接，与 MarkdownFootnotes 渲染顺序一致。 */
+  /* 脚注区伪段：逐脚注调用 findRanges（不再 join 后统一匹配），
+     跨脚注边界的匹配被自然阻断；offsets 仍是各脚注 flattenHastText
+     长度的累加，与 decorateFootnotesNodes / findFootnoteElementByMatch
+     的口径完全一致。 */
   const fnIndex = segments.length;
   info.base[fnIndex] = info.total;
   if (!info.overflow && footnotes.length > 0) {
-    const text = footnotes.map((f) => flattenHastText(f.def.children)).join("");
-    if (text.length <= MAX_TEXT_LENGTH) {
+    let anyFnHits = false;
+    let offset = 0;
+    for (const f of footnotes) {
+      if (info.overflow) break;
+      const text = flattenHastText(f.def.children);
+      if (text.length > MAX_TEXT_LENGTH) {
+        offset += text.length;
+        continue;
+      }
       const rs = findRanges(text, re);
       if (rs.length > 0) {
-        info.footnoteIndex = fnIndex;
+        anyFnHits = true;
         for (const r of rs) {
+          if (info.total >= PREVIEW_MATCH_CAP) {
+            info.overflow = true;
+            break;
+          }
           info.segOf.push(fnIndex);
-          info.ranges.push(r);
-        }
-        if (info.total + rs.length > PREVIEW_MATCH_CAP) {
-          info.segOf.length = PREVIEW_MATCH_CAP;
-          info.ranges.length = PREVIEW_MATCH_CAP;
-          info.total = PREVIEW_MATCH_CAP;
-          info.overflow = true;
-        } else {
-          info.total += rs.length;
+          info.ranges.push([r[0] + offset, r[1] + offset]);
+          info.total++;
         }
       }
+      offset += text.length;
     }
+    if (anyFnHits) info.footnoteIndex = fnIndex;
   }
   return info;
 }
@@ -395,13 +443,13 @@ export function applyMarksToNodes(
   nodes: RootContent[],
   hits: Array<{ s: number; e: number; id: number }>,
 ): RootContent[] {
-  /* 无命中 = 无操作：返回原引用（与 decorateCellMap 的 active=false 短路
-     风格一致，也让下游 {#each} keyed diff 直接跳过整棵子树）。
-     调用方（decorateSegmentNodes / decorateCellMap）虽已在外部过滤，这里
-     作为函数不变量再保一次——避免"未命中也重建整树"的隐式行为。 */
   if (hits.length === 0) return nodes;
 
   const offset = { value: 0 };
+  /* 与 flattenHastText 完全一致的分隔符状态机：
+     进入/退出块级元素置 lastWasBlock=true；
+     文本节点若紧跟在块级元素之后且已有文本 → 偏移量 +1（对应 \n）。 */
+  let lastWasBlock = false;
 
   const wrapNodes = (ns: RootContent[]): RootContent[] => {
     let changed = false;
@@ -423,8 +471,11 @@ export function applyMarksToNodes(
       type?: string;
       value?: unknown;
       children?: RootContent[];
+      tagName?: string;
     };
     if (node.type === "text") {
+      if (lastWasBlock && offset.value > 0) offset.value += 1;
+      lastWasBlock = false;
       const value = String(node.value ?? "");
       const start = offset.value;
       const end = start + value.length;
@@ -453,14 +504,17 @@ export function applyMarksToNodes(
         pieces.push({ type: "text", value: value.slice(pos - start) });
       return pieces;
     }
-    if (
-      node.type === "element" &&
-      Array.isArray(node.children) &&
-      node.children.length > 0
-    ) {
-      const children = wrapNodes(node.children);
-      if (children === node.children) return [n];
-      return [{ ...node, children } as unknown as RootContent];
+    if (node.type === "element") {
+      const isBlock = BLOCK_TAGS.has(node.tagName ?? "");
+      if (isBlock) lastWasBlock = true;
+      if (Array.isArray(node.children) && node.children.length > 0) {
+        const children = wrapNodes(node.children);
+        if (isBlock) lastWasBlock = true;
+        if (children === node.children) return [n];
+        return [{ ...node, children } as unknown as RootContent];
+      }
+      if (isBlock) lastWasBlock = true;
+      return [n];
     }
     return [n];
   };
