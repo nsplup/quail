@@ -9,6 +9,10 @@
  *   与虚拟滚动重挂载 / worker 增量补丁天然兼容；
  * - 段内展平文本与 MarkdownNode 渲染文本同源同序（CodeBlock / 表格 /
  *   图片等自渲染分支除外：计数与导航照常，段内精确高亮降级为块级滚动）；
+ *   其中两类节点【彻底排除匹配】（isSearchExcluded）：md-math（LaTeX，
+ *   MathJax SVG 自渲染）与 pre>code.language-mermaid（Mermaid SVG 自
+ *   渲染）——渲染产物均为 SVG 无文本，源码在展平层整棵剔除（不计数 /
+ *   不导航 / 不装饰），flattenHastText 与 applyMarksToNodes 双侧同步跳过；
  * - 全词匹配与编辑区口径一致（\b 词界断言）；零宽匹配、超大文本与
  *   匹配数量均有保护上限；
  * - 正则安全校验（参考外部 HTML Playground 的 buildSearchPattern）：
@@ -107,6 +111,52 @@ const BLOCK_TAGS = new Set([
   "colgroup", "col", "ul",
 ]);
 
+/**
+ * 查找排除节点：md-math（LaTeX，MathJax SVG 自渲染）与
+ * pre>code.language-mermaid（Mermaid SVG 自渲染）。
+ *
+ * 两者的渲染产物均为 SVG、无文本内容——源码文本在展平层整棵剔除后，
+ * 展平文本与 MarkdownNode 渲染文本恰好恢复「同源同序」不变量
+ * （此前预览中写作 $...$ / ```mermaid``` 均按普通文本/代码参与匹配）。
+ *
+ * 语义（产品决策：彻底排除匹配）：不计数、不导航、不装饰、不高亮——
+ * 即便装饰器把 mark 切进其子树也不会被自渲染组件消费，索性在源头不产。
+ *
+ * 【关键约定】本判定必须同时应用于 flattenHastText 与
+ * applyMarksToNodes——两处共用同一偏移状态机（BLOCK_TAGS 分隔符 +
+ * 子树跳过），单侧跳过会造成偏移错位、高亮全部错乱。
+ */
+function isSearchExcluded(n: unknown): boolean {
+  if (!n || typeof n !== "object") return false;
+  const node = n as {
+    type?: string;
+    tagName?: string;
+    children?: unknown[];
+    properties?: { className?: unknown };
+  };
+  if (node.type !== "element") return false;
+  if (node.tagName === "md-math") return true;
+  if (node.tagName === "pre" && Array.isArray(node.children)) {
+    for (const c of node.children) {
+      if (!c || typeof c !== "object") continue;
+      const el = c as {
+        type?: string;
+        tagName?: string;
+        properties?: { className?: unknown };
+      };
+      if (el.type !== "element" || el.tagName !== "code") continue;
+      const cls = el.properties?.className;
+      const list = Array.isArray(cls)
+        ? cls.map(String)
+        : cls != null
+          ? [String(cls)]
+          : [];
+      if (list.includes("language-mermaid")) return true;
+    }
+  }
+  return false;
+}
+
 /** HAST 子树 → 展平文本（块级元素边界插入 \n 分隔符）
  *
  *  分隔符规则：遍历到文本节点时，若上一访问对象是块级元素且已有文本，
@@ -135,7 +185,9 @@ export function flattenHastText(nodes: RootContent[]): string {
     if (node.type === "element") {
       const isBlock = BLOCK_TAGS.has(node.tagName ?? "");
       if (isBlock) lastWasBlock = true;
-      if (Array.isArray(node.children)) {
+      // 查找排除节点（md-math / mermaid 围栏）：整棵子树跳过——不产出
+      // 文本、不进入偏移状态机；与 applyMarksToNodes.wrapNode 严格同步
+      if (!isSearchExcluded(n) && Array.isArray(node.children)) {
         for (const c of node.children) visit(c);
       }
       if (isBlock) lastWasBlock = true;
@@ -507,6 +559,11 @@ export function applyMarksToNodes(
     if (node.type === "element") {
       const isBlock = BLOCK_TAGS.has(node.tagName ?? "");
       if (isBlock) lastWasBlock = true;
+      // 查找排除节点（md-math / mermaid 围栏）：整棵子树原样保留——
+      // 不递归、不推进偏移量（其子树内不存在任何命中区间，因为
+      // flattenHastText 同侧跳过后命中区间不可能落入该子树）；
+      // 与 flattenHastText.visit 严格同步
+      if (isSearchExcluded(n)) return [n];
       if (Array.isArray(node.children) && node.children.length > 0) {
         const children = wrapNodes(node.children);
         if (isBlock) lastWasBlock = true;

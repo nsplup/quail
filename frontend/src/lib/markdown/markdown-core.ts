@@ -25,6 +25,7 @@ import { unified } from "unified";
 import remarkParse from "remark-parse";
 import remarkGfm from "remark-gfm";
 import remarkSlug from "remark-slug";
+import remarkMath from "remark-math";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import type { Schema } from "hast-util-sanitize";
 import type { Plugin } from "unified";
@@ -48,6 +49,7 @@ import type {
   FootnoteReference,
   LinkReference,
 } from "mdast";
+import type { Math, InlineMath } from "mdast-util-math";
 import type { PreviewBlock, OutlineItem } from "../types";
 import { rewriteImageSrc } from "../imgproxy";
 import {
@@ -62,7 +64,12 @@ import {
 const processor = unified()
   .use(remarkParse)
   .use(remarkGfm)
-  .use(remarkSlug as unknown as Plugin<[]>);
+  .use(remarkSlug as unknown as Plugin<[]>)
+  // 数学公式语法（remark-math）：$...$ → inlineMath、$$...$$ → math。
+  // 两者经下方 handler 转为 md-math 自定义元素（LaTeX 源码原样承载），
+  // 渲染由 MarkdownNode 分派到 MarkdownMath 组件（MathJax SVG 自渲染）。
+  // 预览查找对 md-math 彻底排除匹配（见 previewSearch.ts isSearchExcluded）。
+  .use(remarkMath as unknown as Plugin<[]>);
 
 /** Markdown 源码 → mdast AST（含 GFM 扩展：表格 / 任务列表 / 删除线 / 自动链接 / 脚注）。
  * remark 转换阶段（run）在此同步执行：remark-slug 为标题注入 GitHub 风格 slug id
@@ -103,6 +110,9 @@ const sanitizeSchema = {
     ...(defaultSchema.tagNames ?? []),
     "md-footnote-ref",
     "md-link-ref",
+    // 数学公式（remark-math handler 产物）：LaTeX 源码承载元素，
+    // MarkdownNode 分派 MarkdownMath 组件渲染；查找彻底排除匹配
+    "md-math",
   ],
   attributes: {
     ...(defaultSchema.attributes ?? {}),
@@ -133,6 +143,10 @@ interface MdastToHastState {
   definitionById: Map<string, { url?: string | null }>;
   /** 转换 node.children（内部按 handlers 递归，产出与主链路同构的 HAST） */
   all(node: { children: MdastContent[] }): HastContent[];
+  /** 复制 mdast 节点的 position 到转换产物。顶层块级自定义元素
+   *  （md-math）必须带 position，否则锚注入（只认 position）不会给它
+   *  生成独立行号锚 → 独立成段/块失效（行内自定义元素无此依赖） */
+  patch(from: unknown, to: unknown): void;
 }
 
 /* ---------------- 引用声明收集与全局 STORE 快照（worker 侧） ----------------
@@ -380,6 +394,26 @@ function annotateTableOrdinals(root: HastRoot): void {
   for (const c of root.children) visit(c);
 }
 
+/** 数学公式 → md-math 自定义元素（LaTeX 源码原样承载为唯一 text 子节点）。
+ *  display="1" 为独立块（$$...$$），display="0" 为行内（$...$）；
+ *  渲染由 MarkdownNode 分派 MarkdownMath 组件（MathJax SVG），查找彻底排除。
+ *  经 state.patch 复制 position：$$ 块是顶层节点，锚注入依赖 position
+ *  生成独立行号锚（独立成段/块，滚动同步 / 增量解析全通）。 */
+function mdMathElement(
+  state: MdastToHastState,
+  node: Math | InlineMath,
+  display: "1" | "0",
+): HastContent {
+  const el = {
+    type: "element",
+    tagName: "md-math",
+    properties: { "data-display": display },
+    children: [{ type: "text", value: node.value }],
+  };
+  state.patch(node, el);
+  return el as unknown as HastContent;
+}
+
 function mdastToHastRaw(root: Root): RawResult {
   /* 引用声明收集器：definition / footnoteDefinition handler 在转换期间
      写入（walkRefs 按 mdast 节点对象取回），解析结束时 finalize 成快照 */
@@ -428,6 +462,13 @@ function mdastToHastRaw(root: Root): RawResult {
           },
           children: state.all(node),
         }) as unknown as HastContent) as never,
+      // 数学公式（remark-math）：$$...$$ 独立块 / $...$ 行内 → md-math
+      // 元素（LaTeX 源码原样承载，MarkdownMath 组件 MathJax SVG 自渲染；
+      // $$ 块是顶层节点 → 自动获得行号锚，独立成段/块，滚动同步全通）
+      math: ((state: MdastToHastState, node: Math) =>
+        mdMathElement(state, node, "1")) as never,
+      inlineMath: ((state: MdastToHastState, node: InlineMath) =>
+        mdMathElement(state, node, "0")) as never,
       // 脚注引用（[^label]）：标记化（默认 handler 会产出 sup + 注册
       // footnoteOrder，进而触发 toHast 顶层 footer() 追加 section.footnotes
       // ——重写后不再注册，脚注列表完全由 STORE 驱动的组件渲染）

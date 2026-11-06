@@ -17,6 +17,8 @@
   import EditableCheckbox from "./EditableCheckbox.svelte";
   import Accordion from "./Accordion.svelte";
   import CodeBlock from "../highlight/CodeBlock.svelte";
+  import MarkdownMath from "./MarkdownMath.svelte";
+  import MermaidBlock from "./MermaidBlock.svelte";
   import { hastAttrs } from "./hast-attrs";
   import { previewSearchState$ as previewSearchState } from "../preview/previewSearch";
 
@@ -56,6 +58,24 @@
     n.type === "element" &&
     (n as Element).tagName === "input" &&
     (n as Element).properties?.type === "checkbox";
+
+  /** pre>code 的围栏信息串语言（language-x class 小写；无标注 = ""）。
+   *  供 mermaid 围栏分派 MermaidBlock 使用（判定与 CodeBlock.classList 同口径） */
+  const fenceLang = (n: RootContent): string => {
+    if (n.type !== "element") return "";
+    for (const c of (n as Element).children) {
+      if (c.type !== "element" || (c as Element).tagName !== "code") continue;
+      const cls = (c as Element).properties?.className;
+      const list = Array.isArray(cls)
+        ? cls.map(String)
+        : cls != null
+          ? [String(cls)]
+          : [];
+      const lang = list.find((v) => v.startsWith("language-"));
+      return lang ? lang.slice("language-".length).toLowerCase() : "";
+    }
+    return "";
+  };
 
   /** HTML void 元素：无内容模型。hast 中它们 children 恒为空，但若仍走
    *  带 {#each} 子内容的 svelte:element 分支，Svelte 5 运行时会因
@@ -146,9 +166,21 @@
       {blockIndex}
       parentKey={accordionParentKey}
     />
+  {:else if (node as Element).tagName === "md-math"}
+    <!-- 数学公式（remark-math handler 产物）：md-math 数据层标记 →
+         MarkdownMath 组件 MathJax SVG 自渲染（data-display 区分独立块 /
+         行内，尺寸行为对齐 MarkdownImage）。查找彻底排除匹配，见
+         previewSearch.ts isSearchExcluded -->
+    <MarkdownMath node={node as Element} />
   {:else if (node as Element).tagName === "pre" && (node as Element).children.some((c) => c.type === "element" && c.tagName === "code")}
-    <!-- 围栏代码块（pre>code）→ CodeBlock；其余 pre 走通用分支 -->
-    <CodeBlock node={node as Element} />
+    {#if fenceLang(node) === "mermaid"}
+      <!-- mermaid 围栏 → MermaidBlock（SVG 自渲染 + 主题色同步；
+           查找彻底排除匹配，见 previewSearch.ts isSearchExcluded） -->
+      <MermaidBlock node={node as Element} />
+    {:else}
+      <!-- 围栏代码块（pre>code）→ CodeBlock；其余 pre 走通用分支 -->
+      <CodeBlock node={node as Element} />
+    {/if}
   {:else if isTaskListItem(node)}
     <!-- 任务列表项：children 全部在 inTaskItem=true 上下文递归；
          checkbox 由 element 分支最前面的 inTaskItem 分派处理，
