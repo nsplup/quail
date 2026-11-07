@@ -24,7 +24,7 @@
 import { unified } from "unified";
 import remarkParse from "remark-parse";
 import remarkGfm from "remark-gfm";
-import remarkSlug from "remark-slug";
+import rehypeSlug from "rehype-slug";
 import remarkMath from "remark-math";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import type { Schema } from "hast-util-sanitize";
@@ -59,12 +59,12 @@ import {
   splitLines,
 } from "./blocks";
 
-/* remark-slug 自带的 @types/mdast / vfile 版本与项目顶层 unified 实例存在
+/* rehype-slug 自带的 @types/mdast / vfile 版本与项目顶层 unified 实例存在
    结构性版本差（dual-package type 实例），对统一管线做一次收窄转换 */
 const processor = unified()
   .use(remarkParse)
   .use(remarkGfm)
-  .use(remarkSlug as unknown as Plugin<[]>)
+  .use(rehypeSlug as unknown as Plugin<[]>)
   // 数学公式语法（remark-math）：$...$ → inlineMath、$$...$$ → math。
   // 两者经下方 handler 转为 md-math 自定义元素（LaTeX 源码原样承载），
   // 渲染由 MarkdownNode 分派到 MarkdownMath 组件（MathJax SVG 自渲染）。
@@ -72,7 +72,7 @@ const processor = unified()
   .use(remarkMath as unknown as Plugin<[]>);
 
 /** Markdown 源码 → mdast AST（含 GFM 扩展：表格 / 任务列表 / 删除线 / 自动链接 / 脚注）。
- * remark 转换阶段（run）在此同步执行：remark-slug 为标题注入 GitHub 风格 slug id
+ * remark 转换阶段（run）在此同步执行：rehype-slug 为标题注入 GitHub 风格 slug id
  * （data.hProperties.id，经 toHast 落为元素 id 属性）——页内锚点跳转的定位依据。
  * 注意：增量路径的局部 chunk 独立 parse，标题 id 去重仅在其 chunk 内生效，
  * 与全量 parse 的文档级去重可能存在差异（锚点跳转取首个命中，且 idle 自愈
@@ -92,7 +92,7 @@ export function parseMarkdown(src: string): Root {
  *   文档，DOM clobbering 风险由 tagNames / attributes / protocols
  *   白名单兜底；
  * - id 显式进 '*' 白名单（默认已含，显式声明固化语义）：标题锚点
- *   （remark-slug）与脚注定义 / 回链 id 的载体；
+ *   （rehype-slug）与脚注定义 / 回链 id 的载体；
  * - md-footnote-ref / md-link-ref 进 tagNames：脚注引用与链接引用
  *   handler 产物的数据层标记标签——只存在于 HAST 数据（渲染层
  *   MarkdownNode 映射为组件，永不进 DOM），未知标签默认被 unwrap，
@@ -1126,7 +1126,7 @@ function parseRange(
   const chunk =
     lines.slice(fromLine - 1, toLine).join("\n") +
     (footnoteStubs ? "\n\n" + footnoteStubs : "");
-  // 与 parseMarkdown 同链路：runSync 执行 remark 转换（remark-slug 注入标题 id）
+  // 与 parseMarkdown 同链路：runSync 执行 remark 转换（rehype-slug 注入标题 id）
   const root = processor.runSync(processor.parse(chunk)) as unknown as Root;
   // 过滤桩定义：桩拼在 chunk 之后 → position.start.line > chunkLines；
   // chunk 内真实定义（编辑发生在定义区时）行号 ≤ chunkLines，保留。

@@ -4,10 +4,12 @@
    *
    * - 动态 import：首次遇到 mermaid 围栏才加载 chunk（~1MB 级，主 bundle
    *   与启动耗时零影响）；
-   * - 主题同步（产品要求）：渲染时实时读取根元素当前主题 CSS 变量
-   *   （applyThemeVars 写入的 --pv-* / --ed-*），映射进 mermaid
-   *   themeVariables——图表配色跟随具体主题而非仅深浅二态；深浅基座
-   *   由 THEMES 条目的 dark 标志决定（dark / neutral）；
+   * - 主题同步（产品要求）：不再逐变量手工映射 themeVariables，而是从当前
+   *   配色方案推断一个气质相近的 mermaid 官方主题打底（见 themes.ts 的
+   *   inferMermaidTheme：深色 → dark；强调色绿系 → forest；低饱和灰调 →
+   *   neutral；其余 → default）。仅额外覆盖 background / fontFamily /
+   *   fontSize：SVG 背景必须与 .mermaid-wrap 容器（--pv-code-bg）同色，
+   *   否则官方主题自带背景色会在容器内形成色块断层；
    * - 缓存键 = contentHash(themeId + "\0" + code)：主题切换产生新键，
    *   同主题下源码不变跨重挂载（虚拟滚动往返）即时命中，防闪烁；
    *   键内掺 themeId 防止主题切换后串色；
@@ -16,7 +18,8 @@
    * - 编辑防抖：文本变化 250ms 后才渲染；首次挂载直发（同 CodeBlock）。
    */
   import { contentHash } from "../worker/contentHash";
-  import { THEMES } from "../themes";
+  import { getTheme, inferMermaidTheme, type MermaidTheme } from "../themes";
+  import type { ThemeId } from "../types";
 
   const MERMAID_CACHE_MAX = 32;
   interface MermaidEntry {
@@ -50,44 +53,21 @@
   }
 
   /**
-   * 主题 CSS 变量 → mermaid themeVariables（每次渲染实时读取——
-   * applyThemeVars 把当前主题变量写在根元素 style 上，此处与预览区
-   * 取同一套 --pv-* / --ed-*，保证图表与正文/代码块配色一致）。
+   * 由主题条目构建 mermaid 初始化配置：官方主题打底（推断结果），
+   * 仅覆写背景与字体，其余配色交给官方主题（允许不完全匹配）。
    */
-  function buildThemeVariables(themeId: string): {
-    dark: boolean;
-    vars: Record<string, string>;
+  function buildMermaidConfig(themeId: ThemeId): {
+    theme: MermaidTheme;
+    themeVariables: Record<string, string>;
   } {
-    const dark = THEMES.find((t) => t.id === themeId)?.dark ?? false;
-    const root =
-      typeof document === "undefined"
-        ? null
-        : getComputedStyle(document.documentElement);
-    const v = (name: string, fallback: string): string => {
-      const raw = root?.getPropertyValue(name).trim();
-      return raw ? raw : fallback;
-    };
+    const theme = getTheme(themeId);
     return {
-      dark,
-      vars: {
-        background: v("--pv-code-bg", "#f8f9fa"),
-        primaryColor: v("--pv-quote-bg", "#eef1f4"),
-        primaryTextColor: v("--pv-fg", "#1f2937"),
-        primaryBorderColor: v("--pv-border", "#d1d5db"),
-        secondaryColor: v("--pv-bg", "#ffffff"),
-        secondaryTextColor: v("--pv-fg-strong", "#111827"),
-        secondaryBorderColor: v("--pv-border", "#d1d5db"),
-        tertiaryColor: v("--pv-code-bg", "#f8f9fa"),
-        tertiaryTextColor: v("--pv-fg", "#1f2937"),
-        tertiaryBorderColor: v("--pv-border", "#d1d5db"),
-        mainBkg: v("--pv-quote-bg", "#eef1f4"),
-        nodeBorder: v("--pv-border", "#d1d5db"),
-        lineColor: v("--pv-muted", "#6b7280"),
-        textColor: v("--pv-fg", "#1f2937"),
-        edgeLabelBackground: v("--pv-code-bg", "#f8f9fa"),
-        clusterBkg: v("--pv-quote-bg", "#eef1f4"),
-        clusterBorder: v("--pv-border", "#d1d5db"),
-        fontFamily: v("--pv-font-family", "ui-sans-serif, system-ui, sans-serif"),
+      theme: inferMermaidTheme(theme),
+      themeVariables: {
+        background: theme.vars["--pv-code-bg"] ?? "transparent",
+        fontFamily:
+          theme.vars["--pv-font-family"] ??
+          "ui-sans-serif, system-ui, sans-serif",
         fontSize: "14px",
       },
     };
@@ -95,7 +75,7 @@
 
   type RenderMermaid = (
     code: string,
-    themeId: string,
+    themeId: ThemeId,
   ) => Promise<MermaidEntry>;
   let renderer: Promise<RenderMermaid> | null = null;
 
@@ -104,16 +84,16 @@
     renderer ??= (async () => {
       const mermaid = (await import("mermaid")).default;
       let seq = 0;
-      return async (code: string, themeId: string): Promise<MermaidEntry> => {
+      return async (code: string, themeId: ThemeId): Promise<MermaidEntry> => {
         try {
-          const { dark, vars } = buildThemeVariables(themeId);
+          const { theme, themeVariables } = buildMermaidConfig(themeId);
           // initialize 每次渲染前调用：主题切换后更新全局配置（官方推荐做法）
           mermaid.initialize({
             startOnLoad: false,
             securityLevel: "strict",
             suppressErrorRendering: true,
-            theme: dark ? "dark" : "neutral",
-            themeVariables: vars,
+            theme,
+            themeVariables,
           });
           const { svg } = await mermaid.render(`mermaid-${++seq}`, code);
           return { svg, error: null };
@@ -137,8 +117,8 @@
    * - 【块背景色】与代码块一致：恒有块背景（--pv-code-bg + --pv-border
    *   同款容器），区别于 MarkdownMath 的透明融合（产品要求）；
    * - 主题同步：$effect 依赖 theme$，主题切换 → 重新渲染本块（缓存键
-   *   含 themeId，同源码不串色）；渲染期实时读取 CSS 变量映射
-   *   themeVariables（见模块级 buildThemeVariables）；
+   *   含 themeId，同源码不串色）；渲染期按推断出的官方主题渲染
+   *   （见模块级 buildMermaidConfig / themes.ts inferMermaidTheme）；
    * - 查找：彻底排除匹配（不计数/不导航/不装饰），见 previewSearch.ts
    *   isSearchExcluded——本组件不渲染任何 mark，与该约定一致。
    * - 渲染失败（图表语法错误）：错误占位态 + 错误信息；源码复制按钮
@@ -169,16 +149,25 @@
   });
 
   /* 挂载首帧同步命中缓存；未命中 debounce 250ms 渲染（防打字洪峰）。
-     只写 entry 不读 entry：不建立对 entry 的依赖，避免写入触发重跑死循环 */
+     entry 是 $derived（只读）：只从缓存读，不直接赋值（$derived 不可写）；
+     缓存写入后通过 cacheVersion 自增这一响应式信号触发 derived 重算回显。
+     effect 不读 cacheVersion，故不会因版本变化而重跑，无死循环。 */
+  let cacheVersion = $state(0);
+
   let entry = $derived.by(() => {
+    void cacheVersion; // 订阅：缓存写入后触发重算
     if (!code.trim()) return null;
     return mermaidCacheGet(mermaidCacheKey($theme, code)) ?? null;
   });
 
   let seq = 0;
   let debounceTimer: ReturnType<typeof setTimeout> | undefined;
+  /* effect cleanup 后置 true：跳过对已销毁实例的状态写入。
+     注意缓存本身仍会写入（跨实例共享，下次挂载可命中）。 */
+  let disposed = false;
 
   $effect(() => {
+    disposed = false; // effect 重跑（依赖变化）时复位
     const th = $theme; // 订阅主题：切换即重渲染（缓存键随 themeId 变化）
     const src = code;
     if (!src.trim()) return;
@@ -189,13 +178,17 @@
         void (async () => {
           const r = await (await getRenderer())(src, th);
           if (mySeq !== seq) return; // 过期响应丢弃
+          // 缓存写入跨实例共享：即使本实例已销毁也值得写（下次挂载直接命中）
           mermaidCacheSet(mermaidCacheKey(th, src), r);
-          entry = r;
+          if (!disposed) cacheVersion++; // 仅在存活实例上触发回显
         })();
       },
       mySeq === 1 ? 0 : 250,
     );
-    return () => clearTimeout(debounceTimer);
+    return () => {
+      clearTimeout(debounceTimer);
+      disposed = true;
+    };
   });
 
   /* ---------- 源码复制按钮（与 CodeBlock 同款交互） ---------- */

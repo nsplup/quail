@@ -1096,3 +1096,99 @@ export function applyThemeVars(
   el.style.setProperty("--pv-font-size", `${fontSizePreview}px`);
   el.dataset.theme = id;
 }
+
+/* ==================== Mermaid 主题推断（Redux & Forest 精简版） ==================== */
+
+/**
+ * 候选主题收敛为 redux 系列 + forest：
+ * - redux / redux-dark / redux-color / redux-dark-color：Mermaid 11.14 引入的
+ *   现代几何排版，无渐变（渐变是 neo 系列的专属特征）。
+ * - forest：经典绿系主题，无深色变体，仅用于浅色绿系配色。
+ *
+ * 不包含 neo / neo-dark：使用蓝到粉的渐变描边，与统一打底目标冲突。
+ */
+export type MermaidTheme =
+  | "redux"
+  | "redux-dark"
+  | "redux-color"
+  | "redux-dark-color"
+  | "forest";
+
+/** #rgb / #rrggbb → HSL（h: 0-360，s/l: 0-1）；解析失败返回 null */
+export function hexToHsl(
+  hex: string
+): { h: number; s: number; l: number } | null {
+  const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return null;
+  let h6 = m[1];
+  if (h6.length === 3) h6 = [...h6].map((c) => c + c).join("");
+  const r = parseInt(h6.slice(0, 2), 16) / 255;
+  const g = parseInt(h6.slice(2, 4), 16) / 255;
+  const b = parseInt(h6.slice(4, 6), 16) / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  if (max === min) return { h: 0, s: 0, l };
+  const d = max - min;
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  let h: number;
+  if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) * 60;
+  else if (max === g) h = ((b - r) / d + 2) * 60;
+  else h = ((r - g) / d + 4) * 60;
+  return { h, s, l };
+}
+
+/**
+ * 调色板平均饱和度：取 accent / string / link / code 四个语义色的 s 平均值。
+ * 用于区分“分类色板”（高饱和）与“单色克制”（低饱和）。
+ */
+function paletteAvgSat(theme: Theme): number | null {
+  const keys = ["--ui-accent", "--ed-string", "--ed-link", "--ed-code"];
+  let satSum = 0;
+  let n = 0;
+  for (const k of keys) {
+    const hsl = hexToHsl(theme.vars[k] ?? "");
+    if (!hsl) continue;
+    satSum += hsl.s;
+    n++;
+  }
+  return n >= 2 ? satSum / n : null;
+}
+
+/** 判断强调色是否落在绿系区间（色相 60°–180° 且饱和度 ≥ 0.3） */
+function isGreenAccent(theme: Theme): boolean {
+  const accent = hexToHsl(theme.vars["--ui-accent"] ?? "");
+  return !!accent && accent.s >= 0.3 && accent.h >= 60 && accent.h <= 180;
+}
+
+/**
+ * 从当前配色方案推断 Mermaid 主题（redux 系列 + forest）。
+ *
+ * 浅色：
+ * - 绿系强调色 → forest（保留绿意气质）；
+ * - 高饱和（avgSat ≥ 0.45）→ redux-color（分类色板承接多语义色）；
+ * - 低饱和（avgSat ≤ 0.30）→ redux（单色克制）；
+ * - 其余 → redux-color（兜底，适应性最广）。
+ *
+ * 深色：
+ * - 高饱和（avgSat ≥ 0.45）→ redux-dark-color；
+ * - 低饱和（avgSat ≤ 0.30）→ redux-dark；
+ * - 其余 → redux-dark-color（兜底）。
+ *
+ * 注意：forest 无深色变体，深色绿系主题不映射到 forest，
+ * 而是按饱和度走 redux-dark 系列，避免深色背景上强行应用浅色绿系主题。
+ */
+export function inferMermaidTheme(theme: Theme): MermaidTheme {
+  const avgSat = paletteAvgSat(theme);
+
+  if (!theme.dark) {
+    if (isGreenAccent(theme)) return "forest";
+    if (avgSat !== null && avgSat >= 0.45) return "redux-color";
+    if (avgSat !== null && avgSat <= 0.3) return "redux";
+    return "redux-color";
+  }
+
+  if (avgSat !== null && avgSat >= 0.45) return "redux-dark-color";
+  if (avgSat !== null && avgSat <= 0.3) return "redux-dark";
+  return "redux-dark-color";
+}

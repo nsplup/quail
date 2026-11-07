@@ -78,7 +78,7 @@
 | 前端框架 | Svelte 5（runes：`$state` / `$effect`）+ TypeScript + Vite 8 |
 | 样式 | Tailwind CSS 4 |
 | 编辑器 | CodeMirror 6（`@codemirror/*` 全家桶） |
-| Markdown | unified 11：`remark-parse` + `remark-gfm` + `remark-slug` → `mdast-util-to-hast` + `hast-util-raw` + `hast-util-to-html`，`rehype-sanitize` 清洗 |
+| Markdown | unified 11：`remark-parse` + `remark-gfm` + `rehype-slug` → `mdast-util-to-hast` + `hast-util-raw` + `hast-util-to-html`，`rehype-sanitize` 清洗 |
 | 代码高亮 | highlight.js 11（Web Worker 着色） |
 | 国际化 | svelte-i18n |
 | 测试 | 前端 Vitest；后端 Go 原生 testing |

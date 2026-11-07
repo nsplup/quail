@@ -205,7 +205,7 @@
   /**
    * 锚点 id 候选序列（去重保序）：
    * 1. href 原文解码值——脚注链接（#user-content-fn-N）与带前缀书写的标题锚；
-   * 2. 去 user-content- 前缀的裸 id——标题锚点（remark-slug 产物）的主流写法；
+   * 2. 去 user-content- 前缀的裸 id——标题锚点（rehype-slug 产物）的主流写法；
    * 3. 补 user-content- 前缀——文档按 GitHub 习惯书写（#hello ↔ user-content-hello）。
    */
   function anchorIdCandidates(raw: string): string[] {
