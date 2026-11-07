@@ -2,21 +2,22 @@
   /**
    * 模块级 MathJax SVG 渲染管线 + LRU 缓存（跨组件实例共享）。
    *
-   * - 选型（决策点 B）：LaTeX 渲染成 SVG 必须用 MathJax v3（tex-svg），
-   *   KaTeX 仅支持 HTML+MathML 输出、无 SVG 能力；
-   * - mathjax-full 模块化 API + LiteAdaptor（LiteDOM 无真实 DOM 依赖）+
-   *   动态 import：首次遇到公式才加载 chunk，主 bundle 与启动耗时零影响
-   *   （桌面应用无网络成本，仅省首帧内存）；
-   * - fontCache: "none" → 每个 SVG 自带 glyph 定义，无跨实例 <defs> 引用，
-   *   {@html} 插入 / 缓存复用均安全；
-   * - 颜色：SVG 输出的 glyph fill/stroke 恒为 currentColor → 公式颜色
-   *   自然继承正文 --pv-fg，随主题切换，无需按主题重渲染；
-   * - 缓存键 = contentHash(displayMode + "\0" + tex)：虚拟滚动卸载/重挂载
-   *   首帧同步命中，不闪加载占位（与 CodeBlock 的 hlCache 同模式）；
-   * - 编辑防抖：文本变化 250ms 后才请求；首次挂载直发（同 CodeBlock）。
+   * - 选型：LaTeX → SVG 用 MathJax v3（tex-svg）；KaTeX 无 SVG 能力；
+   * - mathjax-full + LiteAdaptor + 动态 import：首次遇到公式才加载 chunk；
+   * - fontCache: "none" → 每个 SVG 自带 glyph 定义，无跨实例 <defs> 引用；
+   * - 颜色：SVG 的 glyph fill/stroke 恒为 currentColor → 继承正文 --pv-fg，
+   *   随主题切换，无需按主题重渲染；
+   * - TeX 错误必须抛出：默认 formatError 会把语法错误编译成 merror 节点
+   *   → SVG 渲染成黑色长条且 convert 不抛异常，组件无从感知；
+   * - 缓存键 = contentHash(displayMode + "\0" + tex)；
+   * - 编辑防抖：文本变化 250ms 后才请求；首次挂载直发。
    *
-   * 首帧布局：缓存未命中首帧为空白占位（SVG 不可预知高度，无法像
-   * CodeBlock 那样用等高纯文本垫底），命中后零闪烁——这是可接受折衷。
+   * 【无渲染竞态说明】doc.convert 是纯同步（LiteAdaptor 无真实 DOM、单
+   * 线程下不可能真并发），convert 期间不修改 TeX/SVG 配置（AllPackages、
+   * fontCache 在初始化时固定）。因此不需要 Mermaid 那样的串行队列。
+   *
+   * 【renderer 失败重置】动态 import 失败时 renderer 变成永久 rejected
+   * promise，后续所有渲染都会撞同一失败。失败后置 null 允许重试。
    */
   import { contentHash } from "../worker/contentHash";
 
@@ -29,6 +30,7 @@
   }
   const mathCache = new Map<string, MathEntry>();
 
+  /** 读取并刷新 LRU（有副作用；仅供 effect 等允许副作用的场景） */
   function mathCacheGet(key: string): MathEntry | undefined {
     const v = mathCache.get(key);
     if (v !== undefined) {
@@ -36,6 +38,11 @@
       mathCache.set(key, v);
     }
     return v;
+  }
+
+  /** 纯查询，不刷新 LRU（供 $derived 等纯计算场景使用） */
+  function mathCachePeek(key: string): MathEntry | undefined {
+    return mathCache.get(key);
   }
 
   function mathCacheSet(key: string, entry: MathEntry): void {
@@ -51,55 +58,91 @@
     return contentHash((display ? "1" : "0") + "\0" + tex);
   }
 
+  function extractErrorMessage(e: unknown): string {
+    if (e == null) return "Unknown error";
+    if (typeof e === "string") return e;
+    if (e instanceof Error) {
+      const anyE = e as { str?: unknown };
+      if (typeof anyE.str === "string" && anyE.str.trim()) return anyE.str;
+      return e.message || e.toString();
+    }
+    if (typeof e === "object") {
+      const anyE = e as { str?: unknown; message?: unknown };
+      if (typeof anyE.str === "string" && anyE.str.trim()) return anyE.str;
+      if (typeof anyE.message === "string" && anyE.message.trim()) {
+        return anyE.message;
+      }
+      try {
+        const json = JSON.stringify(e);
+        if (json && json !== "{}") return json;
+      } catch {
+        /* ignore */
+      }
+    }
+    return String(e);
+  }
+
   type RenderMath = (tex: string, display: boolean) => Promise<MathEntry>;
   let renderer: Promise<RenderMath> | null = null;
 
   /** 惰性加载 MathJax 并构建渲染函数（模块级单例） */
   async function getRenderer(): Promise<RenderMath> {
-    renderer ??= (async () => {
-      const [
-        { mathjax },
-        { TeX },
-        { SVG },
-        { AllPackages },
-        { liteAdaptor },
-        { RegisterHTMLHandler },
-      ] = await Promise.all([
-        import("mathjax-full/js/mathjax.js"),
-        import("mathjax-full/js/input/tex.js"),
-        import("mathjax-full/js/output/svg.js"),
-        import("mathjax-full/js/input/tex/AllPackages.js"),
-        import("mathjax-full/js/adaptors/liteAdaptor.js"),
-        import("mathjax-full/js/handlers/html.js"),
-      ]);
-      const adaptor = liteAdaptor();
-      RegisterHTMLHandler(adaptor);
-      const texJax = new TeX({ packages: AllPackages });
-      const svgJax = new SVG({ fontCache: "none" });
-      const doc = mathjax.document("", { InputJax: texJax, OutputJax: svgJax });
-      return async (tex: string, display: boolean): Promise<MathEntry> => {
-        try {
-          const node = doc.convert(tex, {
-            display,
-            em: 16,
-            ex: 8,
-            containerWidth: 1280,
-          });
-          // LiteAdaptor 产物为 <mjx-container><svg .../></mjx-container>，
-          // 截取 svg 根（viewBox + ex 单位 width/height 齐备，行为同 img）
-          const html = adaptor.outerHTML(node);
-          const i = html.indexOf("<svg");
-          const j = html.lastIndexOf("</svg>");
-          if (i === -1 || j === -1) throw new Error("no svg output");
-          return { svg: html.slice(i, j + 6), error: null };
-        } catch (e) {
-          return {
-            svg: null,
-            error: e instanceof Error ? e.message : String(e),
-          };
-        }
-      };
-    })();
+    if (!renderer) {
+      renderer = (async () => {
+        const [
+          { mathjax },
+          { TeX },
+          { SVG },
+          { AllPackages },
+          { liteAdaptor },
+          { RegisterHTMLHandler },
+        ] = await Promise.all([
+          import("mathjax-full/js/mathjax.js"),
+          import("mathjax-full/js/input/tex.js"),
+          import("mathjax-full/js/output/svg.js"),
+          import("mathjax-full/js/input/tex/AllPackages.js"),
+          import("mathjax-full/js/adaptors/liteAdaptor.js"),
+          import("mathjax-full/js/handlers/html.js"),
+        ]);
+        const adaptor = liteAdaptor();
+        RegisterHTMLHandler(adaptor);
+        // formatError 抛出：TeX 语法错误 → convert 抛异常 → 组件错误占位态
+        const texJax = new TeX({
+          packages: AllPackages,
+          formatError: (_jax: unknown, err: Error) => {
+            throw err;
+          },
+        });
+        const svgJax = new SVG({ fontCache: "none" });
+        const doc = mathjax.document("", {
+          InputJax: texJax,
+          OutputJax: svgJax,
+        });
+        return async (tex: string, display: boolean): Promise<MathEntry> => {
+          try {
+            const node = doc.convert(tex, {
+              display,
+              em: 16,
+              ex: 8,
+              containerWidth: 1280,
+            });
+            // LiteAdaptor 产物为 <mjx-container><svg .../></mjx-container>，
+            // 截取 svg 根（viewBox + ex 单位 width/height 齐备）
+            const html = adaptor.outerHTML(node);
+            const i = html.indexOf("<svg");
+            const j = html.lastIndexOf("</svg>");
+            if (i === -1 || j === -1) throw new Error("no svg output");
+            return { svg: html.slice(i, j + 6), error: null };
+          } catch (e) {
+            return { svg: null, error: extractErrorMessage(e) };
+          }
+        };
+      })();
+      // 初始化失败时重置，允许后续挂载重试；原 rejection 仍抛给调用方
+      renderer.catch(() => {
+        renderer = null;
+      });
+    }
     return renderer;
   }
 </script>
@@ -108,16 +151,14 @@
   /**
    * 数学公式组件（MarkdownNode 对 md-math 的分派产物）。
    *
-   * - 形态（对齐 MarkdownImage 的行内/独立块约定，由 handler 的
-   *   data-display 标记驱动，无需上下文推断）：
-   *   · 独立块（$$...$$，data-display="1"）：容器满宽、水平居中，
-   *     SVG width:100% + height:auto（viewBox 保比例，高度自适应）；
-   *   · 行内（$...$）：不干预 MathJax 原生 ex 单位 width/height
-   *     （默认宽高，随正文字号缩放）。
-   * - 【无块背景色】独立块与行内均透明背景，与正文直接融合（产品要求，
-   *   区别于代码块 / Mermaid 的块背景）。
-   * - 查找：彻底排除匹配（不计数/不导航/不装饰），见 previewSearch.ts
-   *   isSearchExcluded——本组件不渲染任何 mark，与该约定一致。
+   * 【seq 语义】与 MermaidBlock 相同：每次 effect run 都无条件 ++seq，
+   * 保证上一次 effect run 启动的 async 通过 mySeq !== seq 可靠过期；
+   * 命中缓存时不启动新 async 也必须让旧 async 失效，否则 lastShown 会
+   * 被旧 code 的渲染结果污染。
+   *
+   * 【firstRun】实例级首帧标志：首次 effect run 直发（0ms），此后走
+   * 250ms 防抖。用实例标志而非 seq 判断，避免虚拟滚动重挂载时首次也
+   * 走防抖。
    */
   import type { Element } from "hast";
   import { t } from "../i18n.svelte";
@@ -144,53 +185,134 @@
     ] === "1",
   );
 
-  /* 挂载首帧同步命中缓存；未命中 debounce 250ms 渲染（防打字洪峰）。
-     只写 entry 不读 entry：不建立对 entry 的依赖，避免写入触发重跑死循环 */
-  let entry = $derived.by(() => {
+  let cacheVersion = $state(0);
+
+  /* $derived 内必须用纯查询（peek）：get 会刷新 LRU，属于副作用。 */
+  const cached = $derived.by(() => {
+    void cacheVersion; // 订阅：缓存写入后触发重算
     if (!tex.trim()) return null;
-    return mathCacheGet(mathCacheKey(display, tex)) ?? null;
+    return mathCachePeek(mathCacheKey(display, tex)) ?? null;
   });
 
+  let lastShown = $state<MathEntry | null>(null);
+
   let seq = 0;
+  let firstRun = true;
   let debounceTimer: ReturnType<typeof setTimeout> | undefined;
+  /* effect cleanup 后置 true：跳过对已销毁实例的状态写入 */
+  let disposed = false;
+
+  type MathPhase = "ready" | "error" | "updating" | "parsing";
+  const phase = $derived<MathPhase>(
+    cached
+      ? cached.svg
+        ? "ready"
+        : "error"
+      : lastShown
+        ? "updating"
+        : "parsing",
+  );
+
+  const errorTitle = $derived(
+    phase === "error" && cached?.error
+      ? $t("preview.mathRenderFailed") + cached.error
+      : undefined,
+  );
 
   $effect(() => {
+    disposed = false;
+    /* 无条件递增：保证上一次 effect run 启动的 async 可靠过期 */
+    const mySeq = ++seq;
+    const immediate = firstRun;
+    firstRun = false;
+
     const src = tex;
     const disp = display;
-    if (!src.trim()) return;
-    if (mathCacheGet(mathCacheKey(disp, src))) return; // 首帧已命中
-    const mySeq = ++seq;
+    if (!src.trim()) {
+      /* 空源码：清空 lastShown，避免旧 SVG 残留 */
+      lastShown = null;
+      return;
+    }
+
+    const hit = mathCacheGet(mathCacheKey(disp, src));
+    if (hit) {
+      lastShown = hit;
+      return;
+    }
+
     debounceTimer = setTimeout(
       () => {
         void (async () => {
-          const r = await (await getRenderer())(src, disp);
-          if (mySeq !== seq) return; // 过期响应丢弃
+          // 防抖等待期其他实例可能已完成同一 key 的渲染并写入缓存，复用
+          const again = mathCacheGet(mathCacheKey(disp, src));
+          if (again) {
+            if (mySeq !== seq) return;
+            lastShown = again;
+            if (!disposed) cacheVersion++;
+            return;
+          }
+          let r: MathEntry;
+          try {
+            const render = await getRenderer();
+            r = await render(src, disp);
+          } catch (e) {
+            // getRenderer 初始化失败兜底：否则 unhandled rejection 且
+            // 组件永久停留 parsing
+            r = { svg: null, error: extractErrorMessage(e) };
+          }
+          if (mySeq !== seq) return;
           mathCacheSet(mathCacheKey(disp, src), r);
-          entry = r;
+          lastShown = r;
+          if (!disposed) cacheVersion++;
         })();
       },
-      mySeq === 1 ? 0 : 250,
+      immediate ? 0 : 250,
     );
-    return () => clearTimeout(debounceTimer);
+    return () => {
+      clearTimeout(debounceTimer);
+      disposed = true;
+    };
   });
 </script>
 
 {#if display}
-  <span class="md-math md-math-display">
-    {#if entry?.svg}{@html entry.svg}{:else if entry?.error}<span class="md-math-error"
-        >{$t("preview.mathRenderFailed")}{entry.error}</span
-      >{/if}
+  <span class="md-math md-math-display" title={errorTitle}>
+    {#if phase === "ready"}
+      {@html cached?.svg}
+    {:else if phase === "error"}
+      <!-- 错误终态：字面量淡化（无扫光），错误详情在 title -->
+      <span class="md-math-lit">{tex}</span>
+    {:else if phase === "updating"}
+      <!-- 块更新：旧 SVG 继续显示、淡化；旧内容为错误占位时退回字面量 -->
+      {#if lastShown?.svg}
+        <span class="md-skel">{@html lastShown.svg}</span>
+      {:else}
+        <span class="md-skel"><span class="md-math-lit">{tex}</span></span>
+      {/if}
+    {:else}
+      <!-- 解析中：TeX 字面量淡化 -->
+      <span class="md-skel"><span class="md-math-lit">{tex}</span></span>
+    {/if}
   </span>
 {:else}
-  <span class="md-math md-math-inline">
-    {#if entry?.svg}{@html entry.svg}{:else if entry?.error}<span class="md-math-error"
-        >{$t("preview.mathRenderFailed")}{entry.error}</span
-      >{/if}
+  <span class="md-math md-math-inline" title={errorTitle}>
+    {#if phase === "ready"}
+      {@html cached?.svg}
+    {:else if phase === "error"}
+      <span class="md-math-lit">{tex}</span>
+    {:else if phase === "updating"}
+      {#if lastShown?.svg}
+        <span class="md-skel">{@html lastShown.svg}</span>
+      {:else}
+        <span class="md-skel"><span class="md-math-lit">{tex}</span></span>
+      {/if}
+    {:else}
+      <span class="md-skel"><span class="md-math-lit">{tex}</span></span>
+    {/if}
   </span>
 {/if}
 
 <style>
-  /* 【无块背景色】独立块与行内均透明，与正文融合（产品要求） */
   .md-math {
     background: transparent;
     color: inherit; /* MathJax SVG glyph 为 currentColor → 随正文色 */
@@ -221,10 +343,32 @@
     vertical-align: middle;
   }
 
-  /* 渲染失败：muted 提示 + 错误信息（纯文本节点，无注入通道） */
-  .md-math-error {
+  /* 字面量（解析中 / 块更新回退 / 错误终态）：淡化 + 保留源码排版 */
+  .md-math-lit {
     color: var(--pv-muted);
-    font-size: 0.85em;
+    white-space: pre-wrap;
     word-break: break-all;
+    line-height: inherit;
+  }
+  .md-math-display .md-math-lit {
+    display: inline-block;
+    text-align: left;
+    max-width: 100%;
+  }
+
+  /* 占位淡化（与 MermaidBlock 同款）：仅降低不透明度，不引入扫光动画 */
+  .md-skel {
+    display: inline-block;
+    opacity: 0.45;
+  }
+
+  /* display 块内的占位容器改成块级全宽：
+   1) 让 {@html lastShown.svg} 中的 SVG width:100% 有正确包含块；
+   2) 占位尺寸与就绪态（满宽居中）一致，避免块更新时尺寸跳变。 */
+  .md-math-display .md-skel {
+    display: block;
+    width: 100%;
+    min-height: 1.5em;
+    text-align: center;
   }
 </style>
