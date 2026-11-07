@@ -59,17 +59,61 @@ import {
   splitLines,
 } from "./blocks";
 
-/* rehype-slug 自带的 @types/mdast / vfile 版本与项目顶层 unified 实例存在
-   结构性版本差（dual-package type 实例），对统一管线做一次收窄转换 */
+
+/* ---------------- 行内公式空格守卫（$ a $ 非公式） ----------------
+ * micromark-extension-math 对行内 $ 不做开闭内侧空白检查，「$ a $」、
+ * 「价格 $5 与 $3」这类正文会被整体误吞成 inlineMath。Pandoc / KaTeX
+ * auto-render / GitHub 均按「$ 内侧紧邻空白不是公式」处理。
+ * 在 mdast transformer 阶段（runSync 内、toHast 之前）把 value 首尾
+ * 带空白的 inlineMath 还原为字面 text（position 原样保留）：
+ * - 注册在共享 processor 上，parseMarkdown 与增量 parseRange 全覆盖；
+ * - 块级 $$（type "math"）不触碰：$$ 内侧任意空白合法且常见（多行
+ *   书写）；行内 $$..$$（remark-math 也产出 type "math"）同样不受影响；
+ * - 还原后 inlineMath handler 不会为其产出 md-math → 这些文本可被
+ *   预览查找命中（符合 isSearchExcluded 的语义预期）。 */
+function stripSpacedInlineMath(root: Root): void {
+  const visit = (parent: { children?: MdastContent[] }): void => {
+    const kids = parent.children;
+    if (!Array.isArray(kids)) return;
+    for (let i = 0; i < kids.length; i++) {
+      const k = kids[i] as { type?: string; value?: unknown; position?: unknown };
+      if (k.type === "inlineMath") {
+        const v = typeof k.value === "string" ? k.value : "";
+        if (/^\s/.test(v) || /\s$/.test(v)) {
+          kids[i] = {
+            type: "text",
+            value: `$${v}$`, // 逐字还原源码字面量（micromark 保留内部原文）
+            ...(k.position ? { position: k.position } : {}),
+          } as unknown as MdastContent;
+          continue;
+        }
+      }
+      visit(kids[i] as { children?: MdastContent[] });
+    }
+  };
+  visit(root);
+}
+
 const processor = unified()
   .use(remarkParse)
   .use(remarkGfm)
-  .use(rehypeSlug as unknown as Plugin<[]>)
   // 数学公式语法（remark-math）：$...$ → inlineMath、$$...$$ → math。
   // 两者经下方 handler 转为 md-math 自定义元素（LaTeX 源码原样承载），
   // 渲染由 MarkdownNode 分派到 MarkdownMath 组件（MathJax SVG 自渲染）。
   // 预览查找对 md-math 彻底排除匹配（见 previewSearch.ts isSearchExcluded）。
-  .use(remarkMath as unknown as Plugin<[]>);
+  .use(remarkMath as unknown as Plugin<[]>)
+  // 行内公式空格守卫：transformer 在 runSync 阶段对 mdast 执行，
+  // 先于 toHast 的 inlineMath handler，误匹配不会进 HAST / md-math。
+  .use((() => (tree: never) => {
+    stripSpacedInlineMath(tree as unknown as Root);
+  }) as unknown as Plugin<[]>);
+
+/** rehype-slug 专用 processor：transformer 只认 HAST（element + h1..h6），
+ *  必须在 toHast 产物上执行——runSync 阶段的树是 mdast，直接 .use 进
+ *  主管线是纯 no-op（这正是迁移后锚点失效的原因）。每次 runSync 调用
+ *  transformer 一次，slugger 状态按调用独立，全量/增量/例行重建多次
+ *  转换不会出现 intro-1 式串号。 */
+const slugProcessor = unified().use(rehypeSlug as unknown as Plugin<[]>);
 
 /** Markdown 源码 → mdast AST（含 GFM 扩展：表格 / 任务列表 / 删除线 / 自动链接 / 脚注）。
  * remark 转换阶段（run）在此同步执行：rehype-slug 为标题注入 GitHub 风格 slug id
@@ -542,6 +586,11 @@ function mdastToHastRaw(root: Root): RawResult {
   }
   // 无 raw HTML 时跳过 parse5 全树重解析（大文档主要成本），锚天然保留
   const result = hasRaw ? (rehypeRaw(anchored as never) as HastRoot) : anchored;
+  // 标题锚点（GitHub 风格 slug id）：HAST 层执行（原因见 slugProcessor 注释）。
+  // 放 sanitize 之前：id 在 sanitize 白名单（'*' 属性 + clobberPrefix ""）
+  // 原样放行；rehype-slug 自身避让文档已有 id——脚注回链 id 安全，
+  // raw HTML 书写的 <h2 id="custom"> 也不会被覆盖。
+  slugProcessor.runSync(result as never);
   // rehype-sanitize 净化（XSS 白名单）。必须在 rehype-raw 融合之后——
   // 融合前 raw HTML 只是 text / raw 节点，净化形同虚设；
   // normalizeHtmlImages / annotateImageContext 在其后执行，
