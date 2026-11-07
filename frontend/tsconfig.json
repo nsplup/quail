@@ -14,9 +14,8 @@
     "allowJs": true,
     "checkJs": true,
     "isolatedModules": true,
-    "baseUrl": ".",
     "paths": {
-      "@bindings": ["bindings/quail"]
+      "@bindings": ["./bindings/quail"]
     }
   },
   "include": ["src/**/*.ts", "src/**/*.js", "src/**/*.svelte", "bindings"],
