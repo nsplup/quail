@@ -64,28 +64,58 @@ import {
  * micromark-extension-math 对行内 $ 不做开闭内侧空白检查，「$ a $」、
  * 「价格 $5 与 $3」这类正文会被整体误吞成 inlineMath。Pandoc / KaTeX
  * auto-render / GitHub 均按「$ 内侧紧邻空白不是公式」处理。
- * 在 mdast transformer 阶段（runSync 内、toHast 之前）把 value 首尾
- * 带空白的 inlineMath 还原为字面 text（position 原样保留）：
+ * 在 mdast transformer 阶段（runSync 内、toHast 之前）把「源码原文 $…$
+ * 内侧带空白」的 inlineMath 还原为字面 text（position 原样保留）：
  * - 注册在共享 processor 上，parseMarkdown 与增量 parseRange 全覆盖；
  * - 块级 $$（type "math"）不触碰：$$ 内侧任意空白合法且常见（多行
  *   书写）；行内 $$..$$（remark-math 也产出 type "math"）同样不受影响；
  * - 还原后 inlineMath handler 不会为其产出 md-math → 这些文本可被
- *   预览查找命中（符合 isSearchExcluded 的语义预期）。 */
-function stripSpacedInlineMath(root: Root): void {
+ *   预览查找命中（符合 isSearchExcluded 的语义预期）。
+ *
+ * 【判定必须基于源码原文而非 value】micromark-extension-math v3 的
+ * resolveMathText 在「$ 开闭两侧同时紧邻空白」时会把边缘空白转为
+ * mathTextPadding token 并排除出 value——「$ a $」的 inlineMath.value
+ * 是 "a"（首尾无空白），value 层面与「$a$」无法区分，仅看 value 的
+ * 空白守卫对 $ a $ 永远漏判（正文与脚注列表同样失效）。因此 transformer
+ * 以 (tree, file) 取源码，按 position.offset 切出 $…$ 原文判定内侧空白；
+ * 仅当 position.offset 缺失时退回旧的 value 判定（v2 行为，边缘空白
+ * 会保留在 value 中）。 */
+function stripSpacedInlineMath(root: Root, src: string): void {
   const visit = (parent: { children?: MdastContent[] }): void => {
     const kids = parent.children;
     if (!Array.isArray(kids)) return;
     for (let i = 0; i < kids.length; i++) {
-      const k = kids[i] as { type?: string; value?: unknown; position?: unknown };
+      const k = kids[i] as {
+        type?: string;
+        value?: unknown;
+        position?: { start?: { offset?: number }; end?: { offset?: number } };
+      };
       if (k.type === "inlineMath") {
-        const v = typeof k.value === "string" ? k.value : "";
-        if (/^\s/.test(v) || /\s$/.test(v)) {
-          kids[i] = {
-            type: "text",
-            value: `$${v}$`, // 逐字还原源码字面量（micromark 保留内部原文）
-            ...(k.position ? { position: k.position } : {}),
-          } as unknown as MdastContent;
-          continue;
+        const st = k.position?.start?.offset;
+        const en = k.position?.end?.offset;
+        if (typeof st === "number" && typeof en === "number" && st < en) {
+          // 源码原文（含美元符），内侧原文 = 剥去首尾 $ 序列
+          const raw = src.slice(st, en);
+          const inner = raw.replace(/^\$+/, "").replace(/\$+$/, "");
+          if (/^\s/.test(inner) || /\s$/.test(inner)) {
+            kids[i] = {
+              type: "text",
+              value: raw, // 逐字还原源码字面量（含原有空白）
+              ...(k.position ? { position: k.position } : {}),
+            } as unknown as MdastContent;
+            continue;
+          }
+        } else {
+          // 无可靠 offset（防御分支）：退回 value 判定（remark-math v2 语义）
+          const v = typeof k.value === "string" ? k.value : "";
+          if (/^\s/.test(v) || /\s$/.test(v)) {
+            kids[i] = {
+              type: "text",
+              value: `$${v}$`, // 逐字还原源码字面量（v2 保留内部原文）
+              ...(k.position ? { position: k.position } : {}),
+            } as unknown as MdastContent;
+            continue;
+          }
         }
       }
       visit(kids[i] as { children?: MdastContent[] });
@@ -104,8 +134,15 @@ const processor = unified()
   .use(remarkMath as unknown as Plugin<[]>)
   // 行内公式空格守卫：transformer 在 runSync 阶段对 mdast 执行，
   // 先于 toHast 的 inlineMath handler，误匹配不会进 HAST / md-math。
-  .use((() => (tree: never) => {
-    stripSpacedInlineMath(tree as unknown as Root);
+  // file.value 为本次 parse 的源码（全量 = 全文；增量 = chunk 文本，
+  // 二者的 position.offset 均与之一致），见 parseMarkdown / parseRange。
+  .use((() => (tree: never, file: unknown) => {
+    stripSpacedInlineMath(
+      tree as unknown as Root,
+      typeof (file as { value?: unknown })?.value === "string"
+        ? (file as { value: string }).value
+        : "",
+    );
   }) as unknown as Plugin<[]>);
 
 /** rehype-slug 专用 processor：transformer 只认 HAST（element + h1..h6），
@@ -122,7 +159,9 @@ const slugProcessor = unified().use(rehypeSlug as unknown as Plugin<[]>);
  * 与全量 parse 的文档级去重可能存在差异（锚点跳转取首个命中，且 idle 自愈
  * 全量重建会最终对齐）。 */
 export function parseMarkdown(src: string): Root {
-  return processor.runSync(processor.parse(src)) as unknown as Root;
+  // 源码必须显式传给 run（第二参数）：runSync(tree) 只收树、会新建空
+  // VFile，transformer 的 file.value 为空 → 公式守卫无法按 offset 切原文。
+  return processor.runSync(processor.parse(src), src) as unknown as Root;
 }
 
 /* ---------------- rehype-sanitize 净化 schema ----------------
@@ -1175,8 +1214,10 @@ function parseRange(
   const chunk =
     lines.slice(fromLine - 1, toLine).join("\n") +
     (footnoteStubs ? "\n\n" + footnoteStubs : "");
-  // 与 parseMarkdown 同链路：runSync 执行 remark 转换（rehype-slug 注入标题 id）
-  const root = processor.runSync(processor.parse(chunk)) as unknown as Root;
+  // 与 parseMarkdown 同链路：runSync 执行 remark 转换（rehype-slug 注入标题 id）。
+  // chunk 源码显式传给 run：chunk 内 position.offset 与之一致，
+  // 公式守卫按 offset 切原文判定（见 stripSpacedInlineMath）。
+  const root = processor.runSync(processor.parse(chunk), chunk) as unknown as Root;
   // 过滤桩定义：桩拼在 chunk 之后 → position.start.line > chunkLines；
   // chunk 内真实定义（编辑发生在定义区时）行号 ≤ chunkLines，保留。
   // 注意：必须用过滤后的 children 构建 HAST——否则桩会进 refsCollector
