@@ -162,6 +162,7 @@
    */
   import type { Element } from "hast";
   import { t } from "../i18n.svelte";
+  import { readDataAttr } from "./hast-attrs";
 
   let { node }: { node: Element } = $props();
 
@@ -178,11 +179,15 @@
     return out;
   });
 
-  /** 独立块（$$...$$）＝ data-display="1"；行内（$...$）＝ "0" */
+  /** 独立块（$$...$$）＝ data-display="1"；行内（$...$）＝ "0"。
+   *  属性键双形态兼容：rehype-raw 融合路径会把 kebab（data-display）
+   *  规范化为 camelCase（dataDisplay），读取必须两种键名都兼容，
+   *  否则文档含任意 raw HTML 时独立块会被降级成行内渲染。 */
   const display = $derived(
-    (node.properties as Record<string, unknown> | undefined)?.[
-      "data-display"
-    ] === "1",
+    readDataAttr(
+      node.properties as Record<string, unknown> | undefined,
+      "data-display",
+    ) === "1",
   );
 
   let cacheVersion = $state(0);
@@ -324,16 +329,17 @@
     line-height: 1;
   }
 
-  /* 独立块：满宽居中；SVG 满宽 + height:auto（viewBox 保比例自适应） */
+  /* 独立块：不再占满宽度，改用相对字号（1.5em）与行内（1em）区分。
+     MathJax SVG 的 width/height 为 ex 单位 → 随 font-size 等比缩放，
+     放大不变形；块级独占一行 + 居中。 */
   .md-math-display {
     display: block;
-    width: 100%;
+    font-size: 1.5em;
     text-align: center;
     margin: 0.6em 0;
   }
 
   .md-math-display :global(svg) {
-    width: 100%;
     height: auto;
     max-width: 100%;
   }
@@ -362,12 +368,11 @@
     opacity: 0.45;
   }
 
-  /* display 块内的占位容器改成块级全宽：
-   1) 让 {@html lastShown.svg} 中的 SVG width:100% 有正确包含块；
-   2) 占位尺寸与就绪态（满宽居中）一致，避免块更新时尺寸跳变。 */
+  /* display 块内的占位容器：块级居中，不再满宽（与就绪态一致）；
+     字号继承 .md-math-display 的 1.5em，占位与就绪态视觉尺度一致，
+     避免块更新时尺寸跳变。 */
   .md-math-display .md-skel {
     display: block;
-    width: 100%;
     min-height: 1.5em;
     text-align: center;
   }

@@ -478,10 +478,19 @@ function annotateTableOrdinals(root: HastRoot): void {
 }
 
 /** 数学公式 → md-math 自定义元素（LaTeX 源码原样承载为唯一 text 子节点）。
- *  display="1" 为独立块（$$...$$），display="0" 为行内（$...$）；
+ *  dataDisplay="1" 为独立块（$$...$$），dataDisplay="0" 为行内（$...$）；
  *  渲染由 MarkdownNode 分派 MarkdownMath 组件（MathJax SVG），查找彻底排除。
  *  经 state.patch 复制 position：$$ 块是顶层节点，锚注入依赖 position
- *  生成独立行号锚（独立成段/块，滚动同步 / 增量解析全通）。 */
+ *  生成独立行号锚（独立成段/块，滚动同步 / 增量解析全通）。
+ *
+ *  【属性键必须写 camelCase（dataDisplay）】rehype-raw（parse5 /
+ *  property-information）会把 HAST properties 的 kebab-case data-* 键
+ *  规范化为 camelCase（data-display → dataDisplay），而 sanitize 保留
+ *  原键形态。若此处写 kebab，文档含任意 raw HTML（rehype-raw 融合路径）
+ *  时键会变 camelCase、不含 raw 时保持 kebab——同一属性两种键名，消费方
+ *  只读一种即出现「有无 raw HTML 行为不一致」。写侧统一为 property-
+ *  information 的规范化形态后，两条路径产物完全一致；读取侧
+ *  （MarkdownMath.readDataAttr）仍兼容双形态，防御历史产物。 */
 function mdMathElement(
   state: MdastToHastState,
   node: Math | InlineMath,
@@ -490,7 +499,7 @@ function mdMathElement(
   const el = {
     type: "element",
     tagName: "md-math",
-    properties: { "data-display": display },
+    properties: { dataDisplay: display },
     children: [{ type: "text", value: node.value }],
   };
   state.patch(node, el);

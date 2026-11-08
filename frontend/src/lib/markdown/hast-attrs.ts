@@ -55,3 +55,19 @@ export function readNumberAttr(
   const n = typeof v === "number" ? v : Number(String(v ?? ""));
   return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1;
 }
+
+/**
+ * 读取 data-* 属性（kebab-case 名义键）：兼容 kebab-case（data-display，
+ * toHast handler 直写且未经 rehype-raw 的产物）与 property-information
+ * 规范化后的 camelCase 键（dataDisplay，rehype-raw 融合路径产物）。
+ * 历史约定与 readRefProp / readNumberAttr 同款双形态防御。
+ */
+export function readDataAttr(
+  props: Record<string, unknown> | undefined,
+  name: string,
+): string | undefined {
+  const p = props ?? {};
+  const camel = name.replace(/-([a-z])/g, (_, ch: string) => ch.toUpperCase());
+  const v = p[name] ?? p[camel];
+  return v == null ? undefined : String(v);
+}
