@@ -77,7 +77,8 @@ describe("管线：remark-math 语法接入", () => {
   it("$$ 块 → md-math[data-display=1]，LaTeX 源码原样承载", () => {
     const math = firstEl(hast.children as RootContent[], "md-math");
     expect(math).not.toBeNull();
-    expect((math!.properties as Record<string, unknown>)["data-display"]).toBe("1");
+    // 属性键写侧为规范化形态 dataDisplay（camelCase），详见 mdMathElement 注释
+    expect((math!.properties as Record<string, unknown>)["dataDisplay"]).toBe("1");
     expect(collectAllText(math!.children as RootContent[])).toContain("E = mc^2");
   });
 
@@ -91,7 +92,7 @@ describe("管线：remark-math 语法接入", () => {
     ) as Element | undefined;
     expect(p).toBeDefined();
     const im = firstEl(p!.children as RootContent[], "md-math")!;
-    expect((im.properties as Record<string, unknown>)["data-display"]).toBe("0");
+    expect((im.properties as Record<string, unknown>)["dataDisplay"]).toBe("0");
     expect(collectAllText(im.children as RootContent[])).toContain("x + y");
   });
 

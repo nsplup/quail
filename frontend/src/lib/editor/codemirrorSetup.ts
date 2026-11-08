@@ -38,8 +38,8 @@ import {
   getPanelTopMargin,
 } from "./searchPanel";
 import { markdownEmphasis } from "./emphasis"
-import { dirty$, setImeComposing, settingsOpen$ } from "../stores";
-import { confirm$ } from "../confirm";
+import { dirty$, setImeComposing } from "../stores";
+import { overlayOpen$ } from "../overlay";
 import { get } from "svelte/store";
 /* 行前缀语义单一源（markdown/table-source）：replaceLines 的
    preservePrefix 与表格源码解析共用同一前缀提取规则 */
@@ -361,9 +361,9 @@ export function createEditorApi(
   /* 历史独立 Compartment：打开文档时卸载再重装 = 清空撤销历史 */
   const historyCompartment = new Compartment();
   const phrasesCompartment = new Compartment();
-  /* 可编辑性 Compartment：任一弹层（设置面板 / confirm 弹窗）
-     开启期间切换为不可编辑，全部关闭后恢复
-     （响应 settingsOpen$ / confirm$ 开关状态） */
+  /* 可编辑性 Compartment：任一弹层遮罩（设置面板 / confirm 弹窗，未来
+     可扩展）开启期间切换为不可编辑，全部关闭后恢复
+     （响应 overlayOpen$ —— 全局遮罩状态，见 stores.ts） */
   const editableCompartment = new Compartment();
   /* 查找悬浮面板顶部余量 Compartment：面板开合时动态重配置
      scrollMargins（悬浮卡片不占布局高度，改由 facet 让编辑器滚动留边） */
@@ -563,14 +563,15 @@ export function createEditorApi(
 
   view.scrollDOM.addEventListener("scroll", onScroll, { passive: true });
 
-  /* 弹层联动：任一弹层（设置面板 / confirm 弹窗，
-     与 App 快捷键的 overlayOpen 同口径）开启期间编辑器切换为不可编辑
+  /* 弹层联动：任一弹层遮罩（设置面板 / confirm 弹窗，未来可扩展，
+     与全局快捷键守卫同一状态源）开启期间编辑器切换为不可编辑
      （CM6 会同步移除 contenteditable 并拒绝输入），全部关闭后恢复。
-     两个源订阅同一同步函数，状态变化经去重后才 dispatch，
-     避免创建期与同值切换产生无谓的重配置事务。 */
+     单一源 overlayOpen$（stores.ts 派生自 overlayRegistry$）订阅同一同步
+     函数，状态变化经去重后才 dispatch，避免创建期与同值切换产生无谓的
+     重配置事务。 */
   let overlayOn = false;
   const syncEditable = () => {
-    const on = get(settingsOpen$) || get(confirm$) !== null;
+    const on = get(overlayOpen$);
     if (on === overlayOn) return;
     overlayOn = on;
     view.dispatch({
@@ -580,10 +581,7 @@ export function createEditorApi(
       ]),
     });
   };
-  const unsubOverlays = [
-    settingsOpen$.subscribe(syncEditable),
-    confirm$.subscribe(syncEditable),
-  ];
+  const unsubOverlays = [overlayOpen$.subscribe(syncEditable)];
 
   /* 反向更新前置钩子：EditableTable 经 replaceLines 回写表格前，
    App 侧需要先清残留同步状态。钩子集在 createEditorApi 作用域内，

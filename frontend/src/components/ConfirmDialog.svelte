@@ -15,15 +15,13 @@
   import { focusTrap } from "../lib/focusTrap";
   import { t } from "../lib/i18n.svelte";
   import Icon from "./Icon.svelte";
+  import Overlay from "./Overlay.svelte";
 
   type Btn = {
     value: ConfirmResult;
     label: string;
     icon?: "floppy" | "trash" | "close";
   };
-
-  // 仅事件处理内部使用，不需要响应式
-  let pressedOnOverlay = false;
 
   // store 自动订阅在 runes 模式下仍受支持，$derived 会追踪其变化
   let cur = $derived($confirm$);
@@ -77,19 +75,7 @@
 </script>
 
 {#if cur}
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div
-    class="fixed inset-0 z-[70] flex items-center justify-center bg-black/45 p-4"
-    role="presentation"
-    onpointerdown={(e) => {
-      pressedOnOverlay = e.target === e.currentTarget;
-    }}
-    onpointerup={(e) => {
-      if (pressedOnOverlay && e.target === e.currentTarget) answer("cancel");
-      pressedOnOverlay = false;
-    }}
-  >
+  <Overlay zIndex={70} class="p-4" onOverlayClick={() => answer("cancel")}>
     <div
       class="qd-box w-full max-w-sm rounded-xl border p-4 shadow-2xl"
       {@attach dialogTrap}
@@ -111,7 +97,7 @@
         {/each}
       </div>
     </div>
-  </div>
+  </Overlay>
 {/if}
 
 <style>

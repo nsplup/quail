@@ -25,12 +25,13 @@
     closeWindow,
     setTitle,
   } from "./lib/bridge";
-  import { confirmDialog, confirm$ } from "./lib/confirm";
+  import { confirmDialog } from "./lib/confirm";
+  import { installGlobalShortcuts } from "./lib/shortcuts";
+  import { overlayOpen$ as overlayOpen } from "./lib/overlay";
   import {
     mode$ as mode,
     theme$ as theme,
     indent$ as indent,
-    settingsOpen$ as settingsOpen,
     outlineOpen$ as outlineOpen,
     outlineAutoTrack$ as outlineAutoTrack,
     topIndex$ as topIndex,
@@ -176,10 +177,10 @@
     // 当前实例为未命名空白文档且无编辑记录 → 原地装载；否则新实例装载。
     // 支持文件列表：首个文件走该分流，其余文件逐个拉起新实例装载。
     void onBackendEvent("file:dropped", async (d: { files?: string[] }) => {
-      // 弹层开启期间（设置面板 / confirm 弹窗，与快捷键的 overlayOpen
-      // 同口径）：停止响应拖拽打开，避免弹层交互流程未结束时装载新文档、
-      // 弹层结果与拖拽装载相互覆盖
-      if (get(settingsOpen) || get(confirm$) !== null) {
+      // 弹层开启期间（任一遮罩：设置面板 / confirm 弹窗，与快捷键守卫
+      // 同一状态源 overlayOpen$）：停止响应拖拽打开，避免弹层交互流程
+      // 未结束时装载新文档、弹层结果与拖拽装载相互覆盖
+      if (get(overlayOpen)) {
         return;
       }
       await openPaths(d?.files ?? []);
@@ -211,74 +212,22 @@
     void setTitle($guardDirty ? `* ${name}` : name);
   });
 
+  // 全局快捷键：声明式配置 GLOBAL_SHORTCUTS 与安装器在 lib/shortcuts.ts
+  // （可被其他模块复用 / 扩展），App 只注入装配函数作为 action 处理器。
+  // 弹层守卫（overlayOpen$）与 preventDefault 在安装器内统一处理；
+  // undo/redo 的 CM6 / 原生输入控件焦点守卫、save/find 的
+  // defaultPrevented 守卫分别挂在各 spec 的 when 上（见 shortcuts.ts）。
   $effect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const settingsOpenNow = get(settingsOpen);
-      const overlayOpen = settingsOpenNow || get(confirm$) !== null;
-
-      /* ---- 弹层守卫：设置面板 / confirm 弹窗打开期间 ---- */
-      if (overlayOpen) return;
-
-      /* ---- 常规状态：文档/窗口级快捷键 ---- */
-      const mod = e.ctrlKey || e.metaKey;
-      if (!mod) return;
-      const k = e.key.toLowerCase();
-      if (k === "n") {
-        e.preventDefault();
-        void spawnInstance(); // 新实例：未命名空文档
-      } else if (k === "o") {
-        e.preventDefault();
-        void openFile();
-      } else if (k === "q") {
-        e.preventDefault();
-        void closeWindow();
-      } else if ((k === "z" || k === "y") && !e.altKey) {
-        // 撤销 / 重做全局快捷键（Mod-Z / Mod-Shift-Z / Mod-Y）：
-        // - 焦点在任意 CM6 实例（主编辑区 / 单元格编辑器 / 查找面板）内部
-        //   → 直接跳出，由 CM6 自身 keymap 处理（主编辑区撤销编辑历史、
-        //   单元格编辑器撤销单元格内容，互不串扰）；
-        // - 焦点在 CM6 以外的原生输入控件（大纲筛选框等）→ 跳出，保留其
-        //   自身的原生撤销语义（不劫持）；
-        // - 其余焦点（预览区 / 无焦点）→ 始终由编辑区的 CM6 实例执行
-        //   （编辑区组件常驻挂载，预览/源码模式下均可撤销）。
-        const target = e.target instanceof Element ? e.target : null;
-        if (target?.closest(".cm-editor")) return;
-        if (
-          target instanceof HTMLInputElement ||
-          target instanceof HTMLTextAreaElement ||
-          (target instanceof HTMLElement && target.isContentEditable)
-        ) {
-          return;
-        }
-        e.preventDefault();
-        if (k === "z" && !e.shiftKey) get(editorApi)?.undo();
-        else get(editorApi)?.redo();
-      } else if (k === "s" && e.shiftKey) {
-        e.preventDefault();
-        void saveFileAs();
-      } else if (k === "s" && !e.altKey) {
-        // Ctrl/Cmd+S：全局保存兜底。CM6 聚焦时其 keymap（Mod-s）已处理并
-        // preventDefault，事件冒泡到 window 时 defaultPrevented 为 true，此处
-        // 跳过避免双重保存；非 CM6 聚焦状态（预览区 / 查找面板输入框 /
-        // 设置面板 / 无焦点）由此触发保存。
-        if (e.defaultPrevented) return;
-        e.preventDefault();
-        void save();
-        return;
-      } else if (k === "f" && !e.altKey) {
-        // Ctrl/Cmd+F：全局打开查找替换悬浮面板（右上角卡片，独立于编辑区
-        // 挂载点，预览模式无需切回双栏）。CM6 聚焦时其 keymap（Mod-f）已
-        // 处理并 preventDefault（面板已开 → 拉取 CM6 选区；未开 → 打开），
-        // 事件冒泡到 window 时 defaultPrevented 为 true，此处跳过；非 CM6
-        // 聚焦状态（预览区 / 无焦点）由此触发：预览区有单行选区则填入
-        // 关键词框；面板已开时仅聚焦。
-        if (e.defaultPrevented) return;
-        e.preventDefault();
-        openSearchPanelFloating({ pull: getPreviewSelectionText() });
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return installGlobalShortcuts({
+      new: () => void spawnInstance(), // 新实例：未命名空文档
+      open: () => void openFile(),
+      quit: () => void closeWindow(),
+      undo: () => get(editorApi)?.undo(),
+      redo: () => get(editorApi)?.redo(),
+      saveAs: () => void saveFileAs(),
+      save: () => void save(),
+      find: () => openSearchPanelFloating({ pull: getPreviewSelectionText() }),
+    });
   });
 
   async function save(force = false): Promise<void> {

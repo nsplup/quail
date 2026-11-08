@@ -39,8 +39,7 @@
   } from "../lib/types";
   import { tick } from "svelte";
   import { get } from "svelte/store";
-
-  let pressedOnOverlay = false;
+  import Overlay from "./Overlay.svelte";
 
   const themeList = [...THEMES].sort((a, b) => {
     if (a.dark !== b.dark) return a.dark ? 1 : -1;
@@ -172,20 +171,13 @@
 <svelte:window onkeydowncapture={onWindowKeydown} />
 
 {#if $settingsOpen}
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <div
-    class="fixed inset-0 z-50 grid place-items-center bg-black/45"
+  <Overlay
+    zIndex={50}
     role="dialog"
-    aria-modal="true"
-    aria-label={$t("settings.title")}
-    tabindex="-1"
-    onpointerdown={(e) => {
-      pressedOnOverlay = e.target === e.currentTarget;
-    }}
-    onpointerup={(e) => {
-      if (pressedOnOverlay && e.target === e.currentTarget) closeSettings();
-      pressedOnOverlay = false;
-    }}
+    ariaModal={true}
+    ariaLabel={$t("settings.title")}
+    tabindex={-1}
+    onOverlayClick={closeSettings}
   >
     <!--
       卡片改为 flex-col + 固定高度：
@@ -521,7 +513,7 @@
         </div>
       </div>
     </div>
-  </div>
+  </Overlay>
 {/if}
 
 <style>

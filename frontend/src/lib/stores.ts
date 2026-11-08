@@ -154,6 +154,10 @@ export const fontSizePv$ = persistedNumber("md.fontSizePv", 15.5);
 export const settingsOpen$ = writable(false);
 /** 设置面板二级页面：null = 一级页面；"theme" = 主题；"licenses" = 开源许可 */
 export const settingsSubPage$ = writable<null | "theme" | "licenses">(null);
+
+/* 弹层遮罩状态见 lib/overlay.ts（轻量独立模块：快捷键安装器 / CM6
+   editable 同步 / Overlay 组件只依赖遮罩状态，不经 stores.ts 的重导入链） */
+
 export const outlineOpen$ = writable(false);
 /** 大纲追踪激活项：滚动同步（自动切换）时为 true；点击跳转后为 false */
 export const outlineAutoTrack$ = writable(true);
