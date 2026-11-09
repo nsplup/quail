@@ -4,7 +4,7 @@
   import TextInput from "./TextInput.svelte";
   import VirtualList from "../lib/virtual/VirtualList.svelte";
   import { focusTrap } from "../lib/focusTrap";
-  import { confirm$ } from "../lib/confirm";
+  import { confirm$ } from "../lib/dialog";
   import { t, locale, langSetting, setLang } from "../lib/i18n.svelte";
   import {
     THEMES,

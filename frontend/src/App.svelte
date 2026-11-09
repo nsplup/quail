@@ -13,7 +13,7 @@
   } from "./lib/themes";
   import Toast from "./components/Toast.svelte";
   import ContextMenu from "./components/ContextMenu.svelte";
-  import ConfirmDialog from "./components/ConfirmDialog.svelte";
+  import DialogComponent from "./components/Dialog.svelte";
   import Banner from "./components/Banner.svelte";
   import {
     saveDocument,
@@ -24,8 +24,12 @@
     newInstance,
     closeWindow,
     setTitle,
+    classifyFiles,
+    type FileKindInfo,
   } from "./lib/bridge";
-  import { confirmDialog } from "./lib/confirm";
+  import { insertImageFiles } from "./lib/imageInsert";
+  import { installAppPasteHandler } from "./lib/editor/paste";
+  import { Dialog } from "./lib/dialog";
   import { installGlobalShortcuts } from "./lib/shortcuts";
   import { overlayOpen$ as overlayOpen } from "./lib/overlay";
   import {
@@ -133,6 +137,10 @@
   /* ---------------- 启动 ---------------- */
   onMount(async () => {
     setLang(currentLang());
+    /* 粘贴行为覆盖：CM6 paste 域事件经 pasteHandler 注册表路由到应用层
+       （lib/editor/paste.ts）。App 与编辑器同为单实例，随窗口生命周期
+       存续，无需在卸载钩子中注销。 */
+    installAppPasteHandler();
     // 关闭请求 → 前端全权判定：后端不再保存/询问脏状态，所有关闭路径
     // （窗口关闭按钮 / Ctrl+Q / Cmd+Q）都会先取消关闭并转发 close:request
     // 到这里。
@@ -161,7 +169,15 @@
           await confirmQuit(); // 干净（含单元格提交后无改动）：直接退出
           return;
         }
-        const res = await confirmDialog(get(t)("confirm.quitDirty"), "dirty");
+        const tr = get(t);
+        const res = await Dialog.confirm({
+          msg: get(t)("confirm.quitDirty"),
+          buttons: [
+            { value: "save", label: tr("confirm.save"), icon: "floppy" },
+            { value: "discard", label: tr("confirm.discard"), icon: "trash" },
+            { value: "cancel", label: tr("common.cancel"), icon: "close" },
+          ],
+        });
         if (res === "cancel") return; // 中止关闭
         if (res === "save") {
           await save(); // 先保存当前文档（未命名走另存为；deleted 走确认重建）
@@ -172,18 +188,42 @@
         closeDialogOpen = false;
       }
     });
-    // 拖拽打开（Wails File Drop 官方通道）：根元素已标 data-file-drop-target，
-    // 后端 WindowFilesDropped 转发文件绝对路径 → 与对话框打开同一分流：
-    // 当前实例为未命名空白文档且无编辑记录 → 原地装载；否则新实例装载。
-    // 支持文件列表：首个文件走该分流，其余文件逐个拉起新实例装载。
+    // 拖拽（Wails File Drop 官方通道）：根元素已标 data-file-drop-target，
+    // 后端 WindowFilesDropped 转发文件绝对路径。先经后端魔数分类分流：
+    //   - 含图片 → 只保留图片走插入图片通道（混杂列表中的非图片文件——
+    //     含文本文档——静默丢弃），blank-open 时经 confirm 引导保存，
+    //     引导取消则整个拖拽行为中断；
+    //   - 不含图片 → 仅保留文本文件走文档打开分流（其余静默丢弃，与
+    //     Open 的二进制丢弃口径一致），仍按原地 / 新实例规则装载。
+    // 分类调用失败时保守回落旧行为（全部交给 openPaths，二进制由 Open
+    // 静默丢弃），不因新模块异常吞掉拖拽打开。
     void onBackendEvent("file:dropped", async (d: { files?: string[] }) => {
-      // 弹层开启期间（任一遮罩：设置面板 / confirm 弹窗，与快捷键守卫
+      // 弹层开启期间（任一遮罩：设置面板 / Dialog 弹窗，与快捷键守卫
       // 同一状态源 overlayOpen$）：停止响应拖拽打开，避免弹层交互流程
       // 未结束时装载新文档、弹层结果与拖拽装载相互覆盖
       if (get(overlayOpen)) {
         return;
       }
-      await openPaths(d?.files ?? []);
+      const files = (d?.files ?? []).filter((p) => !!p);
+      if (!files.length) return;
+      let kinds: FileKindInfo[];
+      try {
+        kinds = await classifyFiles(files);
+      } catch {
+        await openPaths(files);
+        return;
+      }
+      const images = kinds
+        .filter((k) => k.kind === "image")
+        .map((k) => k.path);
+      if (images.length > 0) {
+        await insertImageFiles(images);
+        return;
+      }
+      const texts = kinds
+        .filter((k) => k.kind === "text")
+        .map((k) => k.path);
+      await openPaths(texts);
     });
     await bootApp();
   });
@@ -250,8 +290,14 @@
       if (res.ok) {
         get(editorApi)?.markClean();
       } else if (res.conflict) {
-        // 磁盘已被外部修改：确认后以当前编辑内容覆盖（confirm 模式）
-        const res2 = await confirmDialog(get(t)("confirm.conflict"), "confirm");
+        // 磁盘已被外部修改：确认后以当前编辑内容覆盖（确定/取消两按钮）
+        const res2 = await Dialog.confirm({
+          msg: get(t)("confirm.conflict"),
+          buttons: [
+            { value: "ok", label: get(t)("confirm.ok") },
+            { value: "cancel", label: get(t)("common.cancel"), icon: "close" },
+          ],
+        });
         if (res2 === "ok") await save(true);
       }
     } catch {
@@ -267,10 +313,17 @@
   async function saveDeletedDoc(): Promise<void> {
     const st = get(docState);
     if (!st?.path) return;
-    const res = await confirmDialog(
-      get(t)("confirm.deletedSave", { values: { path: st.path } }),
-      "deletedSave",
-    );
+    const res = await Dialog.confirm({
+      msg: get(t)("confirm.deletedSave", { values: { path: st.path } }),
+      buttons: [
+        {
+          value: "save",
+          label: get(t)("confirm.saveStill"),
+          icon: "floppy",
+        },
+        { value: "cancel", label: get(t)("common.cancel"), icon: "close" },
+      ],
+    });
     if (res !== "save") return; // 取消：不写盘
     try {
       const r = await saveDocument(get(doc), true); // force：文件已不在磁盘，跳过冲突检测重建
@@ -798,7 +851,7 @@
 
   <SettingsModal />
 
-  <ConfirmDialog />
+  <DialogComponent />
 
   <Toast />
 

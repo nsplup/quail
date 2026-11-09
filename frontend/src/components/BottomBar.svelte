@@ -6,6 +6,8 @@
   import type { Mode } from "../lib/types";
   import { mode$ as mode, outlineOpen$ as outlineOpen, settingsOpen$ as settingsOpen, countLabel$ as countLabel, editorApi$ as editorApi } from "../lib/stores";
   import { emptyMarkdownTable } from "../lib/markdown/table-source";
+  import { pickImagePaths } from "../lib/bridge";
+  import { insertImageFiles } from "../lib/imageInsert";
 
   const modes: { id: Mode; icon: string; label: string }[] = [
     { id: "source", icon: "code", label: "mode.source" },
@@ -19,6 +21,15 @@
 
   /* 表格插入浮窗开关 */
   let tableInsertOpen = $state(false);
+
+  /* 插入图片：系统对话框多选 → 路径守卫（blank-open 先引导保存）→
+     后端魔数校验落盘伴生资源目录 → 引用式 markdown 插入光标处。
+     非图片 / SVG 由后端静默丢弃，全部无效时不提示。 */
+  async function pickAndInsertImages(): Promise<void> {
+    const paths = await pickImagePaths();
+    if (!paths.length) return; // 用户取消
+    await insertImageFiles(paths);
+  }
 
   $effect(() => {
     // 依赖 mode 与语言（标签宽度随 i18n 文本变化；读 $t 文本建立追踪）
@@ -110,6 +121,15 @@
         />
       {/if}
     </div>
+    <!-- 插入图片：表格插入按钮右侧。多选系统对话框 → 引用式 markdown 插入 -->
+    <button
+      class="icon-btn"
+      title={$t("image.insert")}
+      aria-label={$t("image.insert")}
+      onclick={() => void pickAndInsertImages()}
+    >
+      <Icon name="image" size={15} />
+    </button>
   </div>
   <!-- 右侧：字数统计 + 解析状态指示器（固定宽度，统计右侧） -->
   <div class="flex flex-none items-center gap-2 pr-1">

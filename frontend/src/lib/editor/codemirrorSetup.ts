@@ -40,6 +40,7 @@ import {
 import { markdownEmphasis } from "./emphasis"
 import { dirty$, setImeComposing } from "../stores";
 import { overlayOpen$ } from "../overlay";
+import { runPasteHandler } from "./pasteHandler";
 import { get } from "svelte/store";
 /* 行前缀语义单一源（markdown/table-source）：replaceLines 的
    preservePrefix 与表格源码解析共用同一前缀提取规则 */
@@ -421,6 +422,14 @@ export function createEditorApi(
               dirty$.set(!cleanDoc.eq(u.state.doc));
             }
           }
+        }),
+        EditorView.domEventHandlers({
+          /* 粘贴行为覆盖：路由到 App 注册的应用层处理器（lib/editor/paste.ts，
+             经 pasteHandler 注册表解耦——CM 模块不引入 bridge / store 依赖）。
+             image/* → 后端落盘（长耗时 Dialog.progress）；text/html → markdown
+             转换（SHIFT 丢弃样式保留图片）；text/plain → 返回 false 走默认。
+             处理器返回 true 时 preventDefault，false 保持 CM6 默认粘贴。 */
+          paste: (event, view) => runPasteHandler(event, view),
         }),
         /* 查找面板统计（当前项下标随选区/文档变化刷新） */
         EditorView.updateListener.of((u) => notifyEditorUpdate(u)),

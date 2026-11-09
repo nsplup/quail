@@ -29,6 +29,9 @@ const {
   CloseDoc,
   StartupFiles,
   OpenFileWithExternal,
+  ClassifyFiles,
+  ImportImageFiles,
+  SaveImageData,
 } = FileService;
 
 const { Get: ConfigGet, SaveFields: ConfigSaveFields } = ConfigService;
@@ -253,6 +256,63 @@ export async function saveImageViaDialog(
 /** 关闭当前文档 */
 export async function closeDocument(): Promise<void> {
   await CloseDoc();
+}
+
+/* ---------------- 插入图片（按钮 / 拖拽 / 粘贴 三入口共用后端通道） ---------------- */
+
+/** 拖拽文件分类（后端按文件头魔数嗅探）：kind = image | text | other。
+ *  SVG 归类为 other（三入口统一丢弃口径）。 */
+export type FileKindInfo = { path: string; kind: "image" | "text" | "other" };
+
+/** 保存成功的图片资源：relPath 为相对文档目录的正斜杠路径（markdown
+ *  引用定义与 imgproxy p= 参数直用），name 为落盘文件名。 */
+export type ImportedImage = { relPath: string; name: string };
+
+/** 拖拽分流：魔数嗅探拖入文件（image / text / other） */
+export async function classifyFiles(paths: string[]): Promise<FileKindInfo[]> {
+  return (await ClassifyFiles(paths)) as unknown as FileKindInfo[];
+}
+
+/** 导入图片文件（按钮多选 / 拖拽）：后端逐个魔数校验（仅放行真实图片，
+ *  SVG 拒绝），存入文档伴生资源目录，失败项静默跳过。 */
+export async function importImageFiles(paths: string[]): Promise<ImportedImage[]> {
+  return (await ImportImageFiles(paths)) as unknown as ImportedImage[];
+}
+
+/** Uint8Array → base64（Wails 绑定层 []byte 以 base64 JSON 字符串传输，
+ *  显式编码，与 encoding/json 的 []byte 反序列化口径一致）。 */
+function bytesToBase64(data: Uint8Array): string {
+  let bin = "";
+  const CHUNK = 0x8000;
+  for (let i = 0; i < data.length; i += CHUNK) {
+    bin += String.fromCharCode(...data.subarray(i, i + CHUNK));
+  }
+  return btoa(bin);
+}
+
+/** 保存粘贴图片字节（后端魔数二次校验，SVG 与非图片一律拒绝并抛错）。
+ *  data 为图片原始字节（绑定层以 base64 序列化传输）。 */
+export async function saveImageData(data: Uint8Array): Promise<ImportedImage> {
+  const call = SaveImageData as unknown as (
+    base64: string
+  ) => Promise<ImportedImage>;
+  return await call(bytesToBase64(data));
+}
+
+/** 弹系统打开对话框多选图片（插入图片按钮用，取消返回空数组） */
+export async function pickImagePaths(): Promise<string[]> {
+  const picked = await Dialogs.OpenFile({
+    Title: get(t)("image.pickTitle"),
+    AllowsMultipleSelection: true,
+    Filters: [
+      {
+        DisplayName: "Image",
+        Pattern: "*.png;*.jpg;*.jpeg;*.gif;*.webp;*.bmp;*.ico;*.avif",
+      },
+    ],
+  });
+  const paths = Array.isArray(picked) ? picked : picked ? [picked] : [];
+  return paths.filter((p) => !!p);
 }
 
 /* ---------------- ConfigService ---------------- */

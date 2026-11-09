@@ -99,6 +99,18 @@ export const zhMessages = {
     openFailed: "打开失败",
     newInstanceFailed: "无法启动新实例",
     parseFailed: "预览解析出错，已自动恢复",
+    imageDroppedFormat: "不支持的图片格式（SVG 不受支持），已丢弃",
+    imageDroppedSize: "图片超过 20MB 大小限制，已丢弃",
+    imageSaveFailed: "图片保存失败",
+    imageImportFailed: "图片导入失败",
+  },
+  image: {
+    insert: "插入图片",
+    pickTitle: "选择图片",
+    saveFirst: "插入图片前需要先把当前文档保存到磁盘，是否立即保存？",
+  },
+  progress: {
+    savingImage: "正在保存图片…",
   },
   banner: {
     modified: "文件“{path}”已在存储设备中修改。",
@@ -256,6 +268,19 @@ export const enMessages = {
     openFailed: "Failed to open file",
     newInstanceFailed: "Failed to launch new instance",
     parseFailed: "Preview parsing failed; recovered automatically",
+    imageDroppedFormat: "Unsupported image format (SVG not supported), discarded",
+    imageDroppedSize: "Image exceeds the 20MB size limit, discarded",
+    imageSaveFailed: "Failed to save image",
+    imageImportFailed: "Failed to import images",
+  },
+  image: {
+    insert: "Insert image",
+    pickTitle: "Select images",
+    saveFirst:
+      "The current document must be saved to disk before inserting images. Save it now?",
+  },
+  progress: {
+    savingImage: "Saving image…",
   },
   banner: {
     modified: 'The file "{path}" has been modified on disk.',

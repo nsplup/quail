@@ -37,7 +37,7 @@ import type { EditorView, ViewUpdate } from "@codemirror/view";
 import { writable, get } from "svelte/store";
 import { locale } from "svelte-i18n";
 import { mode$, previewApi$, segments$, topIndex$ } from "../stores";
-import { confirm$ } from "../confirm";
+import { confirm$ } from "../dialog";
 import type { Mode } from "../types";
 import { t } from "../i18n.svelte";
 import {
