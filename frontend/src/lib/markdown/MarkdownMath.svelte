@@ -327,16 +327,21 @@
   .md-math-inline {
     display: inline-block;
     line-height: 1;
+    min-height: 1em; /* ← 与占位行盒高度对齐 */
+    vertical-align: middle;
   }
 
-  /* 独立块：不再占满宽度，改用相对字号（1.5em）与行内（1em）区分。
-     MathJax SVG 的 width/height 为 ex 单位 → 随 font-size 等比缩放，
-     放大不变形；块级独占一行 + 居中。 */
+  /* 独立块：容器统一最小高度，占位/错误/就绪态不再跳变 */
   .md-math-display {
     display: block;
     font-size: 1.5em;
     text-align: center;
     margin: 0.6em 0;
+    min-height: 1.5em; /* ← 新增：原来只加在 .md-skel 上 */
+    /* 垂直居中，避免占位文字与 SVG 基线错位 */
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
 
   .md-math-display :global(svg) {
@@ -373,7 +378,6 @@
      避免块更新时尺寸跳变。 */
   .md-math-display .md-skel {
     display: block;
-    min-height: 1.5em;
     text-align: center;
   }
 </style>
