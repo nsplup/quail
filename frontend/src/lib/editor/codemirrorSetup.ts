@@ -1029,6 +1029,12 @@ export function createCellEditor(
         historyCompartment.of(history({ newGroupDelay: HISTORY_NEW_GROUP_DELAY })),
         indentUnit.of(indentUnitValue),
         cellEditorTheme,
+        /* 粘贴事件与主编辑器同通道：经 pasteHandler 注册表路由到应用层
+           处理器（插入逻辑完全幂等——图片引用块/HTML 转换插入收到粘贴
+           事件的视图，单元格解析管线自行放弃块级内容） */
+        EditorView.domEventHandlers({
+          paste: (event, view) => runPasteHandler(event, view),
+        }),
         keymap.of([
           { key: "Mod-Enter", preventDefault: true, run: () => (handlers.oncommit(), true) },
           { key: "Escape", preventDefault: true, run: () => (handlers.oncancel(), true) },

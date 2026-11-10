@@ -6,8 +6,7 @@
   import type { Mode } from "../lib/types";
   import { mode$ as mode, outlineOpen$ as outlineOpen, settingsOpen$ as settingsOpen, countLabel$ as countLabel, editorApi$ as editorApi } from "../lib/stores";
   import { emptyMarkdownTable } from "../lib/markdown/table-source";
-  import { pickImagePaths } from "../lib/bridge";
-  import { insertImageFiles } from "../lib/imageInsert";
+  import { pickAndInsertImages } from "../lib/imageInsert";
 
   const modes: { id: Mode; icon: string; label: string }[] = [
     { id: "source", icon: "code", label: "mode.source" },
@@ -22,14 +21,10 @@
   /* 表格插入浮窗开关 */
   let tableInsertOpen = $state(false);
 
-  /* 插入图片：系统对话框多选 → 路径守卫（blank-open 先引导保存）→
-     后端魔数校验落盘伴生资源目录 → 引用式 markdown 插入光标处。
-     非图片 / SVG 由后端静默丢弃，全部无效时不提示。 */
-  async function pickAndInsertImages(): Promise<void> {
-    const paths = await pickImagePaths();
-    if (!paths.length) return; // 用户取消
-    await insertImageFiles(paths);
-  }
+  /* 插入图片：入口收口到 imageInsert.pickAndInsertImages——路径守卫
+     （blank-open 先引导保存 / 已删除文档三按钮确认）最先执行，再弹
+     系统多选对话框，后端魔数校验落盘伴生资源目录 → 引用式 markdown
+     插入光标处。非图片 / SVG 由后端静默丢弃，全部无效时不提示。 */
 
   $effect(() => {
     // 依赖 mode 与语言（标签宽度随 i18n 文本变化；读 $t 文本建立追踪）

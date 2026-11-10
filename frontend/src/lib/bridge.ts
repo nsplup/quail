@@ -31,7 +31,8 @@ const {
   OpenFileWithExternal,
   ClassifyFiles,
   ImportImageFiles,
-  SaveImageData,
+  ReadClipboard,
+  CommitClipboardImage,
 } = FileService;
 
 const { Get: ConfigGet, SaveFields: ConfigSaveFields } = ConfigService;
@@ -143,24 +144,15 @@ export async function openFileWithSystem(path: string): Promise<void> {
 
 /* ---------------- FileService ---------------- */
 
-/** 启动文件列表装载结果：首个文件装载为当前实例文档，其余文件路径由
- *  前端逐个拉起新实例装载（每文件一窗口）。 */
 export interface QuailStartupFiles {
-  /** 首个有效文件装载的文档状态（无有效路径 → 空文档，Name 为空串） */
   doc: QuailDocState;
-  /** 命令行中除首个文档外的其余有效文件路径（已按出现顺序排列） */
   extraFiles: string[];
 }
 
-/** 启动文件列表：后端按命令行参数装载首个文件并返回其余文件路径，
- * 无路径则空文档 + 空列表（untitled），不弹对话框 */
 export async function startupFiles(): Promise<QuailStartupFiles> {
   return (await StartupFiles()) as unknown as QuailStartupFiles;
 }
 
-/** 弹系统打开对话框（可多选），返回所选路径列表（取消返回空数组）。
- * 经运行时 Dialogs 模块弹出，对话框自动附属当前窗口（窗口模态），
- * 弹窗期间 webview 不可交互，无需前端遮罩。 */
 export async function pickOpenPaths(): Promise<string[]> {
   const picked = await Dialogs.OpenFile({
     Title: get(t)("dialogs.open"),
@@ -174,28 +166,18 @@ export async function pickOpenPaths(): Promise<string[]> {
   return paths.filter((p) => !!p);
 }
 
-/**
- * 原地打开指定路径文档（当前实例为未命名空白文档且无编辑记录时的打开通道）；
- * 二进制文件返回 null（静默丢弃，与启动装载口径一致）。
- */
 export async function openDocument(path: string): Promise<QuailDocState | null> {
   return (await Open(path)) as unknown as QuailDocState | null;
 }
 
-/** 保存当前文档（force=true 跳过磁盘基线校验强制覆盖） */
 export async function saveDocument(content: string, force = false): Promise<QuailSaveResult> {
   return (await Save(content, force)) as unknown as QuailSaveResult;
 }
 
-/** 保存到指定路径 */
 export async function saveDocumentAs(path: string, content: string): Promise<QuailSaveResult> {
   return (await SaveAs(path, content)) as unknown as QuailSaveResult;
 }
 
-/** 弹系统另存对话框并保存（取消返回 null；defaultName 由调用方按界面语言传入；
- * kind 决定对话框标题语义：保存路线（无路径文档 Ctrl+S）传 "save"，显式另存为
- * 传 "saveAs"（默认））。经运行时 Dialogs 模块弹出，对话框自动附属当前窗口
- * （窗口模态），弹窗期间 webview 不可交互，无需前端遮罩。 */
 export async function saveAsViaDialog(
   content: string,
   defaultName = "untitled.md",
@@ -210,30 +192,17 @@ export async function saveAsViaDialog(
   return (await SaveAs(path, content)) as unknown as QuailSaveResult;
 }
 
-/** 确认退出（close:request 确认后调用） */
 export async function confirmQuit(): Promise<void> {
   await ConfirmQuit();
 }
 
 /* ---------------- 图片右键菜单（imgproxy 资源操作） ---------------- */
 
-/**
- * 解析 imgproxy 代理 URL 为磁盘文件路径（图片右键菜单「使用外部程序打开」用）。
- * local：文档目录白名单内资源的目标绝对路径；remote：代理缓存文件路径
- * （未命中缓存时后端先下载缓存再返回，确保路径在文件系统上可用）。
- * 返回 null 表示解析失败（越权 / 不存在 / 下载失败等，由调用方提示）。
- */
 export async function imageFilePath(proxySrc: string): Promise<string | null> {
   const p = (await ImageFilePath(proxySrc)) as unknown as string;
   return p || null;
 }
 
-/**
- * 图片另存为：弹系统「保存图片」对话框（取消返回 null），选定路径后由
- * 后端读取源文件（本地资源 / 远程缓存）原子写入，字节不经前端往返。
- * 经运行时 Dialogs 模块弹出，对话框自动附属当前窗口（窗口模态），
- * 与文档另存为同口径。
- */
 export async function saveImageViaDialog(
   proxySrc: string,
   defaultName: string
@@ -253,50 +222,57 @@ export async function saveImageViaDialog(
   return path;
 }
 
-/** 关闭当前文档 */
 export async function closeDocument(): Promise<void> {
   await CloseDoc();
 }
 
 /* ---------------- 插入图片（按钮 / 拖拽 / 粘贴 三入口共用后端通道） ---------------- */
 
-/** 拖拽文件分类（后端按文件头魔数嗅探）：kind = image | text | other。
- *  SVG 归类为 other（三入口统一丢弃口径）。 */
 export type FileKindInfo = { path: string; kind: "image" | "text" | "other" };
 
-/** 保存成功的图片资源：relPath 为相对文档目录的正斜杠路径（markdown
- *  引用定义与 imgproxy p= 参数直用），name 为落盘文件名。 */
 export type ImportedImage = { relPath: string; name: string };
 
-/** 拖拽分流：魔数嗅探拖入文件（image / text / other） */
 export async function classifyFiles(paths: string[]): Promise<FileKindInfo[]> {
   return (await ClassifyFiles(paths)) as unknown as FileKindInfo[];
 }
 
-/** 导入图片文件（按钮多选 / 拖拽）：后端逐个魔数校验（仅放行真实图片，
- *  SVG 拒绝），存入文档伴生资源目录，失败项静默跳过。 */
 export async function importImageFiles(paths: string[]): Promise<ImportedImage[]> {
   return (await ImportImageFiles(paths)) as unknown as ImportedImage[];
 }
 
-/** Uint8Array → base64（Wails 绑定层 []byte 以 base64 JSON 字符串传输，
- *  显式编码，与 encoding/json 的 []byte 反序列化口径一致）。 */
-function bytesToBase64(data: Uint8Array): string {
-  let bin = "";
-  const CHUNK = 0x8000;
-  for (let i = 0; i < data.length; i += CHUNK) {
-    bin += String.fromCharCode(...data.subarray(i, i + CHUNK));
-  }
-  return btoa(bin);
+/* ---------------- 粘贴链路剪贴板（后端读取，前端不碰 ClipboardEvent 数据） ---------------- */
+
+/** ReadClipboard 返回的统一 payload：
+ *  - kind=image & ok=true：携带 pendingId，需路径守卫通过后调用
+ *    commitClipboardImage 落盘；
+ *  - kind=image & ok=false：reason 为 format（SVG/非图片）或 size（超 20MB）；
+ *  - kind=html：html（text/html）与 text（text/plain）同时携带；
+ *  - kind=text：仅纯文本；kind=empty：无可消费内容。 */
+export type ClipboardPayload = {
+  kind: "image" | "html" | "text" | "empty";
+  ok: boolean;
+  pendingId?: number;
+  html?: string;
+  text?: string;
+  reason?: "format" | "size" | "";
+};
+
+/** 粘贴链路：读取系统剪贴板（图片只做校验 + 内存暂存，不落盘） */
+export async function readClipboard(): Promise<ClipboardPayload> {
+  return (await ReadClipboard()) as unknown as ClipboardPayload;
 }
 
-/** 保存粘贴图片字节（后端魔数二次校验，SVG 与非图片一律拒绝并抛错）。
- *  data 为图片原始字节（绑定层以 base64 序列化传输）。 */
-export async function saveImageData(data: Uint8Array): Promise<ImportedImage> {
-  const call = SaveImageData as unknown as (
-    base64: string
-  ) => Promise<ImportedImage>;
-  return await call(bytesToBase64(data));
+/** 落盘 readClipboard 暂存的粘贴图片（路径守卫通过后调用）。
+ *  返回 null 表示槽位被后续粘贴覆盖 / TTL 过期 / 落盘失败。 */
+export async function commitClipboardImage(
+  pendingId: number
+): Promise<ImportedImage | null> {
+  try {
+    const img = (await CommitClipboardImage(pendingId)) as unknown as ImportedImage;
+    return img ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /** 弹系统打开对话框多选图片（插入图片按钮用，取消返回空数组） */
@@ -317,12 +293,10 @@ export async function pickImagePaths(): Promise<string[]> {
 
 /* ---------------- ConfigService ---------------- */
 
-/** 读取配置 */
 export async function loadConfig(): Promise<QuailConfig | null> {
   return (await ConfigGet()) as unknown as QuailConfig;
 }
 
-/** 增量保存配置：仅提交脏字段，后端与磁盘最新配置按字段合并（多窗口互不覆盖） */
 export async function persistConfigFields(fields: Record<string, unknown>): Promise<void> {
   await ConfigSaveFields(fields);
 }
@@ -333,7 +307,6 @@ export type FileEventName = "file:changed" | "file:deleted" | "file:dropped";
 export type ConfigEventName = "config:changed";
 export type CloseEventName = "close:request";
 
-/** 订阅后端事件（返回取消函数） */
 export function onBackendEvent(
   name: FileEventName | ConfigEventName | CloseEventName,
   handler: (data: any) => void

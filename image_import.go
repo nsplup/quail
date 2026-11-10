@@ -7,8 +7,10 @@ package main
 //     image / text / other，由前端决定走"打开文档"还是"插入图片"；
 //   - ImportImageFiles：按钮多选 / 拖拽的图片导入——逐个魔数校验，
 //     仅放行真实图片（SVG 一律拒绝，三入口口径统一），失败静默跳过；
-//   - SaveImageData：粘贴 image/* 的字节落盘——后端对前端传来的字节
-//     再次做魔数校验（双保险），SVG 与非图片一律拒绝。
+//   - ReadClipboard + CommitClipboardImage（clipboard_read.go）：粘贴链路——
+//     ReadClipboard 完成剪贴板探测与图片魔数/大小校验并内存暂存（不落盘），
+//     前端在路径守卫通过后调用 CommitClipboardImage 将暂存图片写入资产目录；
+//     SVG 与非图片一律拒绝，前端不再中转字节。
 //
 // 存储位置（imgproxy 本地代理白名单内，前端 <md-image> 可直接渲染）：
 //   - markdown 文档：<docDir>/<BASE>.assets/（伴生资源目录，见
@@ -25,6 +27,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"os"
 	"path/filepath"
@@ -105,21 +108,6 @@ func (f *FileService) ImportImageFiles(paths []string) ([]*ImportedImage, error)
 	return out, nil
 }
 
-// SaveImageData 粘贴链路落盘：前端剪贴板 image/* 的原始字节写入资产
-// 目录并返回引用信息。后端魔数二次校验（SVG / 非图片拒绝），ext 由
-// 内容魔数推导，不信任前端提供的扩展名。
-func (f *FileService) SaveImageData(data []byte) (*ImportedImage, error) {
-	assetsDir, err := f.assetsDirForInsert()
-	if err != nil {
-		return nil, err
-	}
-	img, ok := saveImageBytes(assetsDir, data, "")
-	if !ok {
-		return nil, errors.New("unsupported image data")
-	}
-	return img, nil
-}
-
 // assetsDirForInsert 当前文档的图片落盘目录（伴生资源目录优先，非
 // markdown 文档回落 assets/），目录不存在时创建。
 func (f *FileService) assetsDirForInsert() (string, error) {
@@ -145,25 +133,53 @@ func (f *FileService) assetsDirForInsert() (string, error) {
 	return dir, nil
 }
 
-// saveImageBytes 魔数校验 + 唯一化命名 + 原子写入。
-// baseName 为空表示无文件名来源（粘贴），使用 img-<时间戳>；
+// saveImageBytes 魔数校验 + 命名 + 原子写入。
+//   - baseName 为空（粘贴）：内容短哈希命名 img-<hash>，文件已存在则直接复用
+//     （不写盘、不追加后缀）——哈希幂等，重复粘贴同一图片不产生副本；
+//   - baseName 非空（按钮 / 拖拽）：沿用原名，冲突时追加 -n 后缀
+//     （同名不同图是常见场景，必须区分）。
+//
 // 非图片内容（含 SVG）返回 (nil, false)，调用方按丢弃/拒绝处理。
 func saveImageBytes(assetsDir string, data []byte, baseName string) (*ImportedImage, bool) {
 	ct, ok := imageMagic(data)
 	if !ok || ct == "image/svg+xml" {
-		return nil, false // 非图片 / SVG：三入口统一拒绝
+		return nil, false
 	}
 	ext := extFromImageContentType(ct)
 	if ext == "" {
 		return nil, false
 	}
+
+	// 粘贴入口：内容哈希命名 + 存在即复用
+	if baseName == "" {
+		name := "img-" + shortHash(data) + ext
+		path := filepath.Join(assetsDir, name)
+		if _, err := os.Stat(path); err == nil {
+			// 已存在同名文件：哈希相同即内容相同，直接复用
+			return &ImportedImage{RelPath: pathRelativeToDoc(assetsDir, name), Name: name}, true
+		}
+		if err := writeFileAtomic(path, data, 0o644); err != nil {
+			return nil, false
+		}
+		return &ImportedImage{RelPath: pathRelativeToDoc(assetsDir, name), Name: name}, true
+	}
+
+	// 按钮 / 拖拽入口：原名 + 冲突递增后缀
 	name := uniqueAssetName(assetsDir, baseName, ext)
 	path := filepath.Join(assetsDir, name)
 	if err := writeFileAtomic(path, data, 0o644); err != nil {
 		return nil, false
 	}
-	rel := pathRelativeToDoc(assetsDir, name)
-	return &ImportedImage{RelPath: rel, Name: name}, true
+	return &ImportedImage{RelPath: pathRelativeToDoc(assetsDir, name), Name: name}, true
+}
+
+// shortHash 图片内容短哈希（FNV-1a 32 位，8 位十六进制）。
+// 用于粘贴图片的落盘命名：性能优先，不做加密强度承诺；
+// 冲突概率足够低，uniqueAssetName 仍会在极端冲突时追加 -n 后缀。
+func shortHash(data []byte) string {
+	h := fnv.New32a()
+	_, _ = h.Write(data)
+	return fmt.Sprintf("%08x", h.Sum32())
 }
 
 // extFromImageContentType imageMagic 命中的 Content-Type → 标准扩展名。
@@ -191,7 +207,8 @@ func extFromImageContentType(ct string) string {
 // uniqueAssetName 资产文件名唯一化：
 //   - 有原文件名：沿用 stem（去扩展名），换成本次校验出的真实扩展名；
 //     与现有文件冲突时追加 -1/-2… 递增后缀；
-//   - 无原文件名：img-<YYYYMMDD-HHMMSSmmm> 时间戳命名，冲突同样递增。
+//   - 无原文件名：内部兜底用 img-<时间戳>；正常调用方（saveImageBytes）
+//     会先注入 img-<hash> 再调用本函数，故实际生产不走该分支。
 //
 // 命名竞争窗口仅限并发插入（同实例内插入操作由前端串行触发），不做
 // 文件锁，最后一步 write 失败由调用方按丢弃处理。

@@ -94,23 +94,28 @@ export const zhMessages = {
     chars: "字",
   },
   toast: {
-    saved: "已保存（本地暂存，后端待接入）",
+    saved: "已保存",
     saveFailed: "保存失败",
     openFailed: "打开失败",
     newInstanceFailed: "无法启动新实例",
     parseFailed: "预览解析出错，已自动恢复",
-    imageDroppedFormat: "不支持的图片格式（SVG 不受支持），已丢弃",
+    imageDroppedFormat: "不支持的图片格式，已丢弃",
     imageDroppedSize: "图片超过 20MB 大小限制，已丢弃",
     imageSaveFailed: "图片保存失败",
+    imageReadFailed: "读取剪贴板失败",
     imageImportFailed: "图片导入失败",
   },
   image: {
     insert: "插入图片",
     pickTitle: "选择图片",
     saveFirst: "插入图片前需要先把当前文档保存到磁盘，是否立即保存？",
+    stillInsert: "仍然插入",
+    deletedInsert:
+      "文件“{path}”已在存储设备中移动或者删除。\n\n仍要在此文档中插入图片吗？",
   },
   progress: {
     savingImage: "正在保存图片…",
+    readingClipboard: "正在读取剪贴板…",
   },
   banner: {
     modified: "文件“{path}”已在存储设备中修改。",
@@ -263,14 +268,15 @@ export const enMessages = {
     chars: "chars",
   },
   toast: {
-    saved: "Saved (local stub, backend pending)",
+    saved: "Saved",
     saveFailed: "Save failed",
     openFailed: "Failed to open file",
     newInstanceFailed: "Failed to launch new instance",
     parseFailed: "Preview parsing failed; recovered automatically",
-    imageDroppedFormat: "Unsupported image format (SVG not supported), discarded",
+    imageDroppedFormat: "Unsupported image format, discarded",
     imageDroppedSize: "Image exceeds the 20MB size limit, discarded",
     imageSaveFailed: "Failed to save image",
+    imageReadFailed: "Failed to read clipboard",
     imageImportFailed: "Failed to import images",
   },
   image: {
@@ -278,9 +284,13 @@ export const enMessages = {
     pickTitle: "Select images",
     saveFirst:
       "The current document must be saved to disk before inserting images. Save it now?",
+    stillInsert: "Insert anyway",
+    deletedInsert:
+      'The file "{path}" has been moved or removed from the storage device.\n\nDo you still want to insert the image into this document?',
   },
   progress: {
     savingImage: "Saving image…",
+    readingClipboard: "Reading clipboard…",
   },
   banner: {
     modified: 'The file "{path}" has been modified on disk.',

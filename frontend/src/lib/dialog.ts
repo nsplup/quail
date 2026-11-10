@@ -33,7 +33,7 @@ import { t } from "./i18n.svelte";
 export type DialogButton = {
   value: string;
   label: string;
-  icon?: "floppy" | "trash" | "close";
+  icon?: string;
 };
 
 export interface ConfirmState {
