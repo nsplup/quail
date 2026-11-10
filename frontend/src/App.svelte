@@ -30,7 +30,13 @@
   import { insertImageFiles } from "./lib/imageInsert";
   import { installAppPasteHandler } from "./lib/editor/paste";
   import { Dialog } from "./lib/dialog";
-  import { installGlobalShortcuts } from "./lib/shortcuts";
+  import { installGlobalShortcuts, type ShortcutActions } from "./lib/shortcuts";
+  import {
+    commandPaletteOpen$,
+    openCommandPalette,
+    closeCommandPalette,
+  } from "./lib/commandPalette";
+  import CommandPalette from "./components/CommandPalette.svelte";
   import { overlayOpen$ as overlayOpen } from "./lib/overlay";
   import {
     mode$ as mode,
@@ -252,22 +258,50 @@
     void setTitle($guardDirty ? `* ${name}` : name);
   });
 
-  // 全局快捷键：声明式配置 GLOBAL_SHORTCUTS 与安装器在 lib/shortcuts.ts
-  // （可被其他模块复用 / 扩展），App 只注入装配函数作为 action 处理器。
+  // 全局快捷键 / 命令面板共用的 action 处理器（依赖注入）：GLOBAL_SHORTCUTS
+  // 安装器与命令面板（CommandPalette 的 buildCommands 转换）消费同一映射，
+  // 命令面板执行命令与快捷键触发行为完全一致。
   // 弹层守卫（overlayOpen$）与 preventDefault 在安装器内统一处理；
   // undo/redo 的 CM6 / 原生输入控件焦点守卫、save/find 的
   // defaultPrevented 守卫分别挂在各 spec 的 when 上（见 shortcuts.ts）。
+  const appActions: ShortcutActions = {
+    new: () => void spawnInstance(), // 新实例：未命名空文档
+    open: () => void openFile(),
+    quit: () => void closeWindow(),
+    undo: () => get(editorApi)?.undo(),
+    redo: () => get(editorApi)?.redo(),
+    saveAs: () => void saveFileAs(),
+    save: () => void save(),
+    find: () => openSearchPanelFloating({ pull: getPreviewSelectionText() }),
+  };
+
   $effect(() => {
-    return installGlobalShortcuts({
-      new: () => void spawnInstance(), // 新实例：未命名空文档
-      open: () => void openFile(),
-      quit: () => void closeWindow(),
-      undo: () => get(editorApi)?.undo(),
-      redo: () => get(editorApi)?.redo(),
-      saveAs: () => void saveFileAs(),
-      save: () => void save(),
-      find: () => openSearchPanelFloating({ pull: getPreviewSelectionText() }),
-    });
+    return installGlobalShortcuts(appActions);
+  });
+
+  // 命令面板开关：Ctrl+Shift+P（不进 GLOBAL_SHORTCUTS——「调出面板」是
+  // 面板开关而非面板命令）。toggle 语义：面板已开 → 关闭（可重复按
+  // Ctrl+Shift+P 收起）；其他遮罩（设置面板 / confirm 弹窗 / progress）
+  // 开启期间不叠加打开；否则打开。
+  $effect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (
+        !(e.ctrlKey || e.metaKey) ||
+        !e.shiftKey ||
+        e.key.toLowerCase() !== "p"
+      ) {
+        return;
+      }
+      e.preventDefault();
+      if ($commandPaletteOpen$) {
+        closeCommandPalette();
+        return;
+      }
+      if (get(overlayOpen)) return;
+      openCommandPalette();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
   });
 
   async function save(force = false): Promise<void> {
@@ -850,6 +884,8 @@
   {/if}
 
   <SettingsModal />
+
+  <CommandPalette actions={appActions} />
 
   <DialogComponent />
 

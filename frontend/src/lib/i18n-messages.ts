@@ -56,6 +56,23 @@ export const zhMessages = {
   task: {
     toggle: "切换任务状态",
   },
+  palette: {
+    title: "命令面板",
+    placeholder: "输入以筛选命令",
+    empty: "无匹配命令",
+    new: "新建实例",
+    open: "打开文档",
+    quit: "退出",
+    undo: "撤销",
+    redo: "重做",
+    saveAs: "另存为",
+    save: "保存",
+    find: "查找替换",
+    archiveImages: "归档图片文件到伴生资源目录",
+  },
+  archive: {
+    progress: "正在归档图片文件",
+  },
   accordion: {
     details: "详细信息",
   },
@@ -104,6 +121,11 @@ export const zhMessages = {
     imageSaveFailed: "图片保存失败",
     imageReadFailed: "读取剪贴板失败",
     imageImportFailed: "图片导入失败",
+    archiveDone: "已归档 {n} 张图片到伴生资源目录",
+    archivePartial: "已归档 {n} 张图片，{m} 张失败",
+    archiveAllFailed: "图片归档失败（共 {n} 张）",
+    archiveNone: "未发现可归档的图片引用",
+    archiveFailed: "图片归档失败",
   },
   image: {
     insert: "插入图片",
@@ -114,8 +136,8 @@ export const zhMessages = {
       "文件“{path}”已在存储设备中移动或者删除。\n\n仍要在此文档中插入图片吗？",
   },
   progress: {
-    savingImage: "正在保存图片…",
-    readingClipboard: "正在读取剪贴板…",
+    savingImage: "正在保存图片",
+    readingClipboard: "正在读取剪贴板",
   },
   banner: {
     modified: "文件“{path}”已在存储设备中修改。",
@@ -230,6 +252,23 @@ export const enMessages = {
   task: {
     toggle: "Toggle task state",
   },
+  palette: {
+    title: "Command Palette",
+    placeholder: "Type to filter commands",
+    empty: "No matching commands",
+    new: "New Instance",
+    open: "Open Document",
+    quit: "Quit",
+    undo: "Undo",
+    redo: "Redo",
+    saveAs: "Save As",
+    save: "Save",
+    find: "Find & Replace",
+    archiveImages: "Archive Image Files to Companion Assets Directory",
+  },
+  archive: {
+    progress: "Archiving image files",
+  },
   accordion: {
     details: "Details",
   },
@@ -278,6 +317,11 @@ export const enMessages = {
     imageSaveFailed: "Failed to save image",
     imageReadFailed: "Failed to read clipboard",
     imageImportFailed: "Failed to import images",
+    archiveDone: "Archived {n} image(s) to the companion assets directory",
+    archivePartial: "Archived {n} image(s), {m} failed",
+    archiveAllFailed: "Failed to archive images ({n} total)",
+    archiveNone: "No archivable image references found",
+    archiveFailed: "Failed to archive images",
   },
   image: {
     insert: "Insert image",
@@ -289,8 +333,8 @@ export const enMessages = {
       'The file "{path}" has been moved or removed from the storage device.\n\nDo you still want to insert the image into this document?',
   },
   progress: {
-    savingImage: "Saving image…",
-    readingClipboard: "Reading clipboard…",
+    savingImage: "Saving image",
+    readingClipboard: "Reading clipboard",
   },
   banner: {
     modified: 'The file "{path}" has been modified on disk.',

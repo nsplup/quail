@@ -18,7 +18,14 @@
 import { get } from "svelte/store";
 import { EditorView } from "@codemirror/view";
 import { Dialog } from "./dialog";
-import { docState$, editorApi$, saveFileAs, toast$ } from "./stores";
+import {
+  docState$,
+  editorApi$,
+  saveFileAs,
+  toast$,
+  isDeletedInsertConfirmed,
+  markDeletedInsertConfirmed,
+} from "./stores";
 import { importImageFiles, pickImagePaths, type ImportedImage } from "./bridge";
 import { t } from "./i18n.svelte";
 
@@ -114,8 +121,16 @@ export async function ensureDocSaved(): Promise<boolean> {
 }
 
 /** 删除标记确认（三按钮）：仍插入 → 继续；另存为 → 落盘后复查路径；
- *  取消 → 中断当前行为。 */
+ *  取消 → 中断当前行为。
+ *
+ *  「仍然插入」分支带会话级标记（stores.ts）：同一文档会话窗口内
+ *  只提醒一次——确认过一次后，本轮会话内再次插入直接放行；标记在
+ *  resetDocRuntime（文档会话重置）时复位。 */
 async function confirmDeletedDoc(path: string): Promise<boolean> {
+  const st = get(docState$);
+  if (st?.deleted !== true) return true;
+  // 本会话已确认过「仍然插入」→ 不再提醒，图片照常进入伴生资源目录
+  if (isDeletedInsertConfirmed()) return true;
   const tr = get(t);
   const res = await Dialog.confirm({
     msg: tr("image.deletedInsert", { values: { path } }),
@@ -125,7 +140,10 @@ async function confirmDeletedDoc(path: string): Promise<boolean> {
       { value: "cancel", label: tr("common.cancel"), icon: "close" },
     ],
   });
-  if (res === "insert") return true; // 仍插入：图片照常进入伴生资源目录
+  if (res === "insert") {
+    markDeletedInsertConfirmed(); // 标记：本会话内不再重复提醒
+    return true; // 仍插入：图片照常进入伴生资源目录
+  }
   if (res === "saveas") {
     await saveFileAs("save"); // 另存为：新路径解除删除标记（stores.ts 统一入口）
     return get(docState$)?.deleted !== true; // 另存对话框被取消 → 状态无更新 → 中断

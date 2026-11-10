@@ -33,6 +33,7 @@ const {
   ImportImageFiles,
   ReadClipboard,
   CommitClipboardImage,
+  ArchiveImages,
 } = FileService;
 
 const { Get: ConfigGet, SaveFields: ConfigSaveFields } = ConfigService;
@@ -190,6 +191,46 @@ export async function saveAsViaDialog(
   });
   if (!path) return null;
   return (await SaveAs(path, content)) as unknown as QuailSaveResult;
+}
+
+/** 系统保存对话框：只取输出路径不落盘（归档图片命令先拿伴生资源目录
+ *  的宿主路径）。titleKey 透传对话框标题语义（保存 / 另存为）。 */
+export async function pickSavePath(
+  defaultName = "untitled.md",
+  titleKey: "save" | "saveAs" = "save"
+): Promise<string | null> {
+  const path = await Dialogs.SaveFile({
+    Title: get(t)(titleKey === "save" ? "dialogs.save" : "dialogs.saveAs"),
+    Filename: defaultName || "untitled.md",
+    Filters: [{ DisplayName: "Markdown", Pattern: "*.md;*.markdown" }],
+  });
+  return path || null;
+}
+
+/* ---------------- 图片归档（命令面板「归档图片文件到伴生资源目录」） ---------------- */
+
+export interface QuailArchiveResult {
+  ok: boolean;
+  path: string;
+  /** 发现的可归档图片引用数（按解析结果去重） */
+  found: number;
+  /** 成功复制/下载到伴生资源目录的数量 */
+  archived: number;
+  /** 读取/下载/校验失败的数量（对应引用保持原样不动） */
+  failed: number;
+  /** 是否已将替换后的内容落盘（无引用 / 全部失败 / 内容无变化时不写） */
+  written: boolean;
+}
+
+/** 归档文档内容中的图片引用到目标路径的伴生资源目录：后端解析三种引用
+ *  （内联式 / 引用式定义 / HTML img）、本地复制远程下载、替换引用路径、
+ *  落盘文档。写入【不携带自身写入抑制】——目标为当前文档时 watch 放行
+ *  file:changed 广播，前端由此感知文档被修改；文档会话状态不变。 */
+export async function archiveImagesToPath(
+  content: string,
+  path: string
+): Promise<QuailArchiveResult> {
+  return (await ArchiveImages(content, path)) as unknown as QuailArchiveResult;
 }
 
 export async function confirmQuit(): Promise<void> {

@@ -563,6 +563,26 @@ export const docState$ = writable<QuailDocState | null>(null);
  */
 export const guardDirty$ = derived(dirty$, (d) => d);
 
+/* ------------- 「已删除文档仍插入图片」会话级提醒标记 ------------- */
+
+/**
+ * confirmDeletedDoc（imageInsert.ts）的「仍然插入」分支确认后置位：
+ * 同一文档会话窗口内不再重复提醒（图片照常进入伴生资源目录）。
+ * 会话重置（resetDocRuntime）时复位——文档会话更换后下次进入已删除
+ * 文档时重新提醒一次。
+ */
+let deletedInsertConfirmed = false;
+
+/** 「仍然插入」是否已在本会话确认过（imageInsert.ts 的守卫入口） */
+export function isDeletedInsertConfirmed(): boolean {
+  return deletedInsertConfirmed;
+}
+
+/** 「仍然插入」确认后标记本会话不再提醒 */
+export function markDeletedInsertConfirmed(): void {
+  deletedInsertConfirmed = true;
+}
+
 /* ------------- 打开 / 另存 / 横幅重新加载（App 与横幅事件共用） ------------- */
 
 /**
@@ -614,6 +634,9 @@ function resetDocRuntime(): void {
   // 文档状态清零（打开操作重新装载），脏/编辑记录复位
   docState$.set(null);
   dirty$.set(false);
+  // 「已删除文档仍插入图片」的会话级提醒标记复位：文档会话更换后
+  // 下次进入已删除文档时重新提醒一次（见 confirmDeletedDoc）
+  deletedInsertConfirmed = false;
   // 预览区：滚动位置与滚动同步状态归零（新内容从顶部开始）；
   // 解析产物即时落空（不等防抖：重新加载应立刻清掉旧文档的预览）
   topIndex$.set(0);
