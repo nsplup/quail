@@ -126,6 +126,7 @@ export const zhMessages = {
     archiveAllFailed: "图片归档失败（共 {n} 张）",
     archiveNone: "未发现可归档的图片引用",
     archiveFailed: "图片归档失败",
+    archiveCancelled: "图片归档已取消",
   },
   image: {
     insert: "插入图片",
@@ -322,6 +323,7 @@ export const enMessages = {
     archiveAllFailed: "Failed to archive images ({n} total)",
     archiveNone: "No archivable image references found",
     archiveFailed: "Failed to archive images",
+    archiveCancelled: "Image archiving cancelled",
   },
   image: {
     insert: "Insert image",

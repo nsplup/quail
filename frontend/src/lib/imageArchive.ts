@@ -4,10 +4,14 @@
  * - 输出路径：先经系统保存对话框（title = 保存）拿到目标文档路径，本步
  *   不落盘（pickSavePath 只取路径）；
  * - 进度：后端归档（下载远程 / 复制本地 + 替换引用路径 + 落盘）期间展示
- *   Dialog.progress（不可交互关闭），结束后至少停留 1s 再放行；
- * - 通知：落盘结果由前端发出 TOAST（按 无引用 / 全部成功 / 部分失败 /
- *   全部失败 四种口径），当前文档会话状态不变——后端写入不携带自身写入
- *   抑制，覆盖当前文档时 file:changed 事件照常到达（横幅流程接管）；
+ *   Dialog.progress（带取消按钮），结束后至少停留 1s 再放行；用户点取消
+ *   → call.cancel() 取消后端 context.Context（Wails v3 取消通道），
+ *   归档全程可被打断——已归档部分保留在资产目录，内容不替换不落盘；
+ * - 通知：落盘结果由前端发出 TOAST（按 已取消 / 无引用 / 全部成功 /
+ *   部分失败 / 全部失败 五种口径），当前文档会话状态不变——后端写入不
+ *   携带自身写入抑制，覆盖当前文档时 file:changed 事件照常到达（横幅
+ *   流程接管）；后端无引用时直接返回状态（不创建资产目录），由本函数
+ *   发出「未发现可归档的图片引用」通知；
  * - 内容：编辑器持有的缓存区（doc$）整体传给后端。
  */
 import { get } from "svelte/store";
@@ -28,15 +32,21 @@ export async function archiveImagesToCompanion(): Promise<void> {
   );
   if (!path) return;
 
-  // 2) 进度框：至少停留 1s；期间遮罩不可交互关闭
+  // 2) 可取消的后端调用 + 进度框：取消按钮点击 → call.cancel() 打断后端
+  const call = archiveImagesToPath(get(doc$), path);
   const handle = Dialog.progress({
     msg: tr("archive.progress"),
+    buttons: [{ value: "cancel", label: tr("common.cancel"), icon: "close" }],
     minDurationMs: ARCHIVE_PROGRESS_MIN_MS,
   });
+  void handle.promise.then((value) => {
+    if (value === "cancel") call.cancel();
+  });
+
   let failed = false;
   let res: Awaited<ReturnType<typeof archiveImagesToPath>> | null = null;
   try {
-    res = await archiveImagesToPath(get(doc$), path);
+    res = await call;
   } catch {
     failed = true;
   }
@@ -45,6 +55,10 @@ export async function archiveImagesToCompanion(): Promise<void> {
 
   // 3) TOAST 通知（当前文档会话状态不变：doc$ / docState$ 均不动，
   //    覆盖当前文档时的变更感知由 file:changed 横幅流程接管）
+  if (res?.cancelled) {
+    toast$.set({ id: Date.now(), msg: tr("toast.archiveCancelled") });
+    return;
+  }
   if (failed || !res?.ok) {
     toast$.set({ id: Date.now(), msg: tr("toast.archiveFailed") });
     return;

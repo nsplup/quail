@@ -16,12 +16,12 @@ package main
 // （可携带 cb/refresh 穿透参数，解析时忽略 query 中多余键值）。
 
 import (
+        "context"
         "errors"
         "fmt"
         "net/url"
         "os"
         "path/filepath"
-        "runtime"
         "strings"
 
         "github.com/wailsapp/wails/v3/pkg/application"
@@ -85,41 +85,14 @@ func resolveProxyTarget(f *FileService, proxySrc string) (string, error) {
         }
 }
 
-// resolveLocalTarget 本地资源解析（白名单与软链接逃逸校验同 serveLocal）。
-// 白名单之外另有内容魔数校验（与 serveLocal 同口径）：仅放行真实图片
-// 文件，右键"外部打开 / 另存为"不会触达目录内非图片资源。
+// resolveLocalTarget 本地资源解析：路径解析与白名单统一走
+// resolveLocalDocAsset（image_common.go，与 serveLocal 完全同口径——
+// 含 assets/ 伴生资源目录白名单与软链接逃逸兜底）。白名单之外另有
+// 内容魔数校验（与 serveLocal 同口径）：仅放行真实图片文件，右键
+// "外部打开 / 另存为"不会触达目录内非图片资源。
 func resolveLocalTarget(f *FileService, raw string) (string, error) {
-        docPath := f.CurrentPath()
-        if docPath == "" {
-                return "", errors.New("document not saved")
-        }
-        docDir := filepath.Dir(docPath)
-
-        raw = strings.TrimSpace(raw)
-        if raw == "" {
-                return "", errors.New("missing p")
-        }
-        var target string
-        if filepath.IsAbs(raw) {
-                target = filepath.Clean(raw)
-        } else {
-                target = filepath.Clean(filepath.Join(docDir, raw))
-        }
-
-        // 白名单：与 serveLocal 一致（语义化包含判定，防 ../ 逃逸）
-        if !pathWithinDirOn(runtime.GOOS, docDir, target) {
-                return "", errors.New("access restricted")
-        }
-        // 软链接逃逸兜底：真实路径解析后仍须在白名单内
-        if resolved, err := filepath.EvalSymlinks(target); err == nil && resolved != target {
-                if !pathWithinDirOn(runtime.GOOS, docDir, resolved) {
-                        return "", errors.New("access restricted")
-                }
-        }
-        if _, err := os.Stat(target); err != nil {
-                if os.IsNotExist(err) {
-                        return "", errors.New("file not found")
-                }
+        target, err := resolveLocalDocAsset(f, raw)
+        if err != nil {
                 return "", err
         }
         // 内容魔数校验：与 serveLocal 同口径，非图片文件一律拒绝
@@ -138,8 +111,8 @@ func resolveRemoteTarget(rawURL string) (string, error) {
         if rawURL == "" {
                 return "", errors.New("missing url")
         }
-        u, err := url.Parse(rawURL)
-        if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+        u, ok := parseRemoteImageURL(rawURL) // http/https + Host 校验（共享出口）
+        if !ok {
                 return "", errors.New("invalid url")
         }
         // 缓存键与 serveRemote 一致：sha256(url)（不带扩展名）
@@ -147,8 +120,8 @@ func resolveRemoteTarget(rawURL string) (string, error) {
         if _, err := os.Stat(cachePath); err == nil {
                 return cachePath, nil
         }
-        _, err, _ = imgFlight.Do(rawURL, func() (any, error) {
-                return downloadToCache(u, cachePath)
+        _, err, _ := imgFlight.Do(rawURL, func() (any, error) {
+                return downloadToCache(context.Background(), u, cachePath)
         })
         if err != nil {
                 return "", err

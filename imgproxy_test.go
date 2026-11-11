@@ -13,43 +13,8 @@ import (
 	"testing"
 )
 
-func TestPathWithinDirOn_Linux(t *testing.T) {
-	cases := []struct {
-		dir, target string
-		want        bool
-	}{
-		{"/docs", "/docs", true},                   // 目录本身
-		{"/docs", "/docs/a.png", true},             // 目录内
-		{"/docs", "/docs/assets/a.png", true},      // assets 子目录
-		{"/docs", "/docs/a..b.png", true},          // 文件名含 ".." 不误杀
-		{"/docs", "/etc/passwd", false},            // 越权
-		{"/docs", "/docs/../secret.txt", false},    // Clean 后逃逸（调用方已 Clean）
-		{"/docs", "/docsSub/a.png", false},         // 前缀撞车目录
-		{"/docs", "/docs/../../etc/passwd", false}, // 多级逃逸
-	}
-	for _, c := range cases {
-		if got := pathWithinDirOn("linux", c.dir, c.target); got != c.want {
-			t.Errorf("pathWithinDirOn(linux, %q, %q) = %v, want %v", c.dir, c.target, got, c.want)
-		}
-	}
-}
-
-func TestPathWithinDirOn_CaseFold(t *testing.T) {
-	// windows / darwin：默认文件系统大小写不敏感，盘符与目录大小写差异不应 403
-	if !pathWithinDirOn("windows", "C:/Docs", "c:/docs/img.png") {
-		t.Error("windows 大小写差异应放行")
-	}
-	if !pathWithinDirOn("darwin", "/Users/doc", "/users/doc/img.png") {
-		t.Error("darwin 大小写差异应放行")
-	}
-	// 折叠不放宽越权判定
-	if pathWithinDirOn("windows", "C:/Docs", "C:/Other/img.png") {
-		t.Error("折叠后越权仍应拒绝")
-	}
-	if pathWithinDirOn("windows", "C:/Docs", "C:/Docs/../secret.txt") {
-		t.Error("折叠后逃逸仍应拒绝")
-	}
-}
+// TestPathWithinDirOn_* 已随 pathWithinDirOn 并入 resolveLocalDocAsset
+// 删除：白名单包含判定与大小写折叠由 TestIsAllowedLocalTarget_* 覆盖。
 
 func TestSniffImageContentType(t *testing.T) {
 	cases := []struct {
@@ -308,8 +273,8 @@ func TestIsAllowedLocalTarget_CaseFoldMarkdown(t *testing.T) {
 	if !isAllowedLocalTarget("windows", "C:/Docs", "Note.MD", "C:/Docs/note.md.assets/a.png") {
 		t.Error("windows 下 .md.assets 候选大小写差异应放行")
 	}
-	if !isAllowedLocalTarget("darwin", "/Users/doc", "Note.MARKDOWN", "/users/doc/note.markdown.assets/a.png") {
-		t.Error("darwin 下 .markdown.assets 候选大小写差异应放行")
+	if !isAllowedLocalTarget("darwin", "/Users/doc", "Note.MARKDOWN", "/Users/doc/note.markdown.assets/a.png") {
+		t.Error("darwin 下 .markdown.assets 子目录名大小写差异应放行")
 	}
 	// linux 区分大小写：不同大小写应拒绝
 	if isAllowedLocalTarget("linux", "/docs", "Note.MD", "/docs/note.assets/a.png") {

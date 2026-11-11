@@ -75,14 +75,16 @@ func initClipboard() error {
 }
 
 // ReadClipboard 粘贴链路统一入口：探测剪贴板内容并按种类返回 payload。
+// ctx 由 Wails 注入（前端取消按钮 → promise.cancel()）：取消时底层剪贴板
+// 读取被中断，payload 归为 empty（前端按取消口径忽略结果）。
 // 图片只做校验 + 暂存（不落盘，不依赖文档路径）；落盘由前端路径守卫通过后
 // 调用 CommitClipboardImage 完成。
-func (f *FileService) ReadClipboard() (*ClipboardPayload, error) {
+func (f *FileService) ReadClipboard(ctx context.Context) (*ClipboardPayload, error) {
 	if err := initClipboard(); err != nil {
 		log.Printf("clipboard init: %v", err)
 		return &ClipboardPayload{Kind: "empty"}, nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), clipboardReadTimeout)
+	ctx, cancel := context.WithTimeout(ctx, clipboardReadTimeout)
 	defer cancel()
 
 	// 1. 图片：FmtImage 恒为 PNG 编码字节；命中即校验 + 内存暂存
@@ -109,9 +111,14 @@ func (f *FileService) ReadClipboard() (*ClipboardPayload, error) {
 }
 
 // CommitClipboardImage 将 ReadClipboard 暂存的图片落盘到当前文档资产目录。
-// 无暂存 / ID 不匹配（已被后续粘贴覆盖）/ 超过 TTL → error；
-// 无文档路径 → assetsDirForInsert 的 error（前端已先过路径守卫，此为兜底）。
-func (f *FileService) CommitClipboardImage(pendingID uint64) (*ImportedImage, error) {
+// ctx 由 Wails 注入（前端取消按钮 → promise.cancel()）：取消时直接返回，
+// 暂存槽位保留（用户可重新粘贴复用）。无暂存 / ID 不匹配（已被后续粘贴
+// 覆盖）/ 超过 TTL → error；无文档路径 → assetsDirForInsert 的 error
+// （前端已先过路径守卫，此为兜底）。
+func (f *FileService) CommitClipboardImage(ctx context.Context, pendingID uint64) (*ImportedImage, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err // 已取消：不消费暂存槽位
+	}
 	data, err := takePendingClipboardImage(pendingID)
 	if err != nil {
 		return nil, err
@@ -167,7 +174,7 @@ func readClipboardString(ctx context.Context, format clipboard.Format) string {
 	data, err := clipboard.Read(ctx, format)
 	if err != nil || len(data) == 0 {
 		if err != nil && format != clipboard.FmtText {
-			log.Printf("clipboard read %s: %v", format, err)
+			log.Printf("clipboard read %v: %v", format, err)
 		}
 		return ""
 	}

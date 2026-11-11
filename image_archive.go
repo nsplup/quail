@@ -33,16 +33,19 @@ package main
 //     冲突 -n 后缀），无文件名 img-<内容短哈希>（存在即复用）；统一
 //     魔数校验（仅放行真实图片，SVG 拒绝，与三入口口径一致）；
 //   - 同一图片（同解析结果）多引用只落盘一份；已位于目标伴生资源
-//     目录内的本地图片不重复复制，直接换算引用路径。
+//     目录内的本地图片不重复复制，直接换算引用路径（仅当既有文件名
+//     已是安全 destination，否则照常复制为 sanitize 后的新名）。
 //
-// 替换规则：内联式与引用定义的 destination 含空白/括号/尖括号时用
-// <...> 包裹并做最小转义（与前端 escapeAngleDest 同口径），否则保持
-// 裸路径；HTML src 直接写带引号属性值；alt 与标题原样保留。
+// 替换规则：引用路径统一经 markdownDest（image_common.go）构建——不做
+// 尖括号包裹与反斜杠转义，不安全字符直接替换为 '-'（落盘命名已先经
+// sanitizeDestSegment 替换，生成的引用路径天然安全）；HTML src 直接写带
+// 引号属性值；alt 与标题原样保留。
 //
 // 已知局限：引用识别为正则口径（非 markdown AST），围栏代码块内的
 // 示例语法同样参与识别与替换；与「引用样式宽松子集」的取舍记录于此。
 
 import (
+        "context"
         "errors"
         "net/url"
         "os"
@@ -63,6 +66,9 @@ type ArchiveResult struct {
         Failed int `json:"failed"`
         // Written 是否已将替换后的内容落盘（无引用/全部失败/内容无变化时不写）。
         Written bool `json:"written"`
+        // Cancelled 用户经前端取消按钮中断归档：已归档部分保留在资产目录，
+        // 内容不替换不落盘；Found/Archived/Failed 为中断时刻的计数。
+        Cancelled bool `json:"cancelled"`
 }
 
 var (
@@ -93,8 +99,9 @@ var htmlEntityRepl = strings.NewReplacer(
 
 // ArchiveImages 归档内容中的图片引用到目标路径的伴生资源目录。
 // content 由前端整体传入（编辑器缓冲区）；targetPath 为保存对话框
-// 选定的输出路径。写入不带自身写入抑制（见文件头注释）。
-func (f *FileService) ArchiveImages(content string, targetPath string) (*ArchiveResult, error) {
+// 选定的输出路径。ctx 由 Wails 注入（前端取消按钮 → promise.cancel()），
+// 归档全程可被打断。写入不带自身写入抑制（见文件头注释）。
+func (f *FileService) ArchiveImages(ctx context.Context, content string, targetPath string) (*ArchiveResult, error) {
         if strings.TrimSpace(targetPath) == "" {
                 return nil, errors.New("target path is empty")
         }
@@ -117,12 +124,9 @@ func (f *FileService) ArchiveImages(content string, targetPath string) (*Archive
         }
         f.mu.Unlock()
 
-        assetsDir, err := assetsDirForPath(abs)
-        if err != nil {
-                return nil, err
-        }
-
-        // 1) 收集引用：key = 原样 dest；canonical = 解析结果（同图去重）
+        // 1) 收集引用：key = 原样 dest；canonical = 解析结果（同图去重）。
+        // 归档前置判断：无任何可操作图片对象时直接返回状态——不创建资产
+        // 目录、不写任何文件（通知由前端按 found=0 发出）。
         usedIDs := collectUsedRefIDs(content)
         keyToCanon := map[string]string{}
         jobs := map[string]*archiveRef{}
@@ -166,24 +170,56 @@ func (f *FileService) ArchiveImages(content string, targetPath string) (*Archive
                 addRef(g[2][1:len(g[2])-1], true) // 去引号
         }
 
+        if found == 0 {
+                return &ArchiveResult{Ok: true, Path: abs, Found: 0}, nil
+        }
+
+        // 取消前置检查：ctx 已取消（前端取消按钮早于归档开始）→ 不创建
+        // 资产目录、不做任何写入
+        if err := ctx.Err(); err != nil {
+                return &ArchiveResult{Ok: true, Path: abs, Found: found, Cancelled: true}, nil
+        }
+
+        assetsDir, err := assetsDirForPath(abs)
+        if err != nil {
+                return nil, err
+        }
+
         // 2) 归档：本地复制 / 远程下载（saveImageBytes 统一魔数校验与命名）
         archived, failed := 0, 0
         relByCanon := map[string]string{}
         for canon, job := range jobs {
+                // 取消检查：ctx 由 Wails 注入（前端取消按钮 → promise.cancel()）。
+                // 取消时已归档部分保留在资产目录，内容不替换不落盘。
+                if err := ctx.Err(); err != nil {
+                        return &ArchiveResult{
+                                Ok:        true,
+                                Path:      abs,
+                                Found:     found,
+                                Archived:  archived,
+                                Failed:    failed,
+                                Cancelled: true,
+                        }, nil
+                }
                 if !job.remote {
                         // 已位于目标伴生资源目录内（典型：目标即当前文档）：不复制，
-                        // 直接换算引用路径
+                        // 直接换算引用路径。仅当既有文件名已是安全 destination
+                        // （markdownDest 恒等）才复用；否则照常复制为 sanitize 后
+                        // 的新名，保证替换出的引用路径无需包裹/转义。
                         if rel, rerr := filepath.Rel(assetsDir, job.localAbs); rerr == nil &&
                                 rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-                                relByCanon[canon] = filepath.ToSlash(rel)
-                                archived++
-                                continue
+                                relSlash := filepath.ToSlash(rel)
+                                if markdownDest(relSlash) == relSlash {
+                                        relByCanon[canon] = relSlash
+                                        archived++
+                                        continue
+                                }
                         }
                 }
                 var data []byte
                 var err error
                 if job.remote {
-                        data, err = fetchRemoteImage(job.url)
+                        data, err = fetchRemoteImage(ctx, job.url)
                 } else {
                         data, err = os.ReadFile(job.localAbs)
                 }
@@ -291,12 +327,8 @@ func resolveArchiveRef(key string, sourceDir string, html bool) *archiveRef {
         if s == "" || strings.HasPrefix(s, "data:") {
                 return nil
         }
-        if strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://") {
-                u, err := url.Parse(s)
-                if err != nil || u.Host == "" {
-                        return nil
-                }
-                return &archiveRef{raw: key, remote: true, url: u, baseName: sanitizeRemoteName(remoteImageBaseName(u))}
+        if u, ok := parseRemoteImageURL(s); ok {
+                return &archiveRef{raw: key, remote: true, url: u, baseName: sanitizeDestSegment(remoteImageBaseName(u))}
         }
         // 本地：file:// 前缀剥离 + 百分号解码（前端插入时编码空格/括号等）
         p := strings.TrimPrefix(s, "file://")
@@ -335,33 +367,11 @@ func remoteImageBaseName(u *url.URL) string {
         return name
 }
 
-// sanitizeRemoteName 远程文件名清洗：Windows 保留字符与路径分隔符 → '_'。
-// 本地文件名天然合法，无需清洗；远程 URL 文件名可能含 ? * : 等解码产物。
-func sanitizeRemoteName(name string) string {
-        return strings.Map(func(r rune) rune {
-                switch r {
-                case '/', '\\', ':', '*', '?', '"', '<', '>', '|':
-                        return '_'
-                }
-                if r < 0x20 {
-                        return '_'
-                }
-                return r
-        }, name)
-}
+// sanitizeRemoteName / markdownDest / assetsDirForPath 已并入共享模块
+// image_common.go（三图片模块统一口径）：远程文件名清洗 = sanitizeDestSegment，
+// 替换后引用路径 = markdownDest，落盘目录 = assetsDirForPath。
 
 /* ---------------- 替换 ---------------- */
-
-// markdownDest 替换后引用路径的 markdown destination 形态：含空白/括号/
-// 尖括号时用 <...> 包裹并做最小转义（\、<、>，与前端 escapeAngleDest 同
-// 口径），否则保持裸路径。
-func markdownDest(rel string) string {
-        if strings.ContainsAny(rel, " \t\n()<>") {
-                escaped := strings.NewReplacer("\\", "\\\\", "<", "\\<", ">", "\\>").Replace(rel)
-                return "<" + escaped + ">"
-        }
-        return rel
-}
 
 // replaceRefDefs 替换被图片引用的定义行 URL（alt/indent/title 原样保留，
 // 分隔符归一为单空格）。
@@ -403,18 +413,4 @@ func replaceHtmlImgs(content string, relByKey func(string) (string, bool)) strin
 
 /* ---------------- 资源目录 ---------------- */
 
-// assetsDirForPath 任意文档路径对应的图片落盘目录：markdown 文档用
-// 伴生资源目录候选首项（<BASE>.md.assets），非 markdown 回落 assets/
-// （imgproxy 白名单固定放行的资产子目录）。目录不存在时创建。
-func assetsDirForPath(path string) (string, error) {
-        dir := filepath.Dir(path)
-        sub := "assets"
-        if names := companionAssetsNames(filepath.Base(path)); len(names) > 0 {
-                sub = names[0]
-        }
-        assetsDir := filepath.Join(dir, sub)
-        if err := os.MkdirAll(assetsDir, 0o755); err != nil {
-                return "", err
-        }
-        return assetsDir, nil
-}
+// assetsDirForPath 已并入共享模块 image_common.go（插入 / 归档统一口径）。

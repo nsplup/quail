@@ -4,6 +4,7 @@ package main
 // 分类与命名推导；落盘链路由 saveImageBytes 既有测试覆盖）。
 
 import (
+        "context"
         "os"
         "path/filepath"
         "strings"
@@ -25,11 +26,13 @@ func TestNormalizeRefID(t *testing.T) {
 }
 
 func TestMarkdownDest(t *testing.T) {
+        // 替换式 sanitize：不安全字符 → '-'，无尖括号包裹、无反斜杠转义
         cases := map[string]string{
-                "note.md.assets/pic.png":      "note.md.assets/pic.png",
-                "note.md.assets/pic 1.png":    "<note.md.assets/pic 1.png>",
-                "a(b).png":                    "<a(b).png>",
-                "x.png":                       "x.png",
+                "note.md.assets/pic.png":   "note.md.assets/pic.png",
+                "note.md.assets/pic 1.png": "note.md.assets/pic-1.png",
+                "a(b).png":                 "a-b-.png",
+                "a<b>.png":                 "a-b-.png",
+                "x.png":                    "x.png",
         }
         for in, want := range cases {
                 if got := markdownDest(in); got != want {
@@ -55,7 +58,7 @@ func TestCollectUsedRefIDs(t *testing.T) {
 func TestResolveArchiveRef(t *testing.T) {
         // 远程
         ref := resolveArchiveRef("https://e.com/a/pic%20x.png?v=2", "", false)
-        if ref == nil || !ref.remote || ref.baseName != "pic x.png" {
+        if ref == nil || !ref.remote || ref.baseName != "pic-x.png" {
                 t.Fatalf("remote resolve failed: %+v", ref)
         }
         // 相对路径解析基准 = sourceDir；百分号解码
@@ -75,10 +78,10 @@ func TestResolveArchiveRef(t *testing.T) {
         if resolveArchiveRef("", "", false) != nil {
                 t.Errorf("empty dest should be skipped")
         }
-        // 远程文件名清洗：非法字符 → _（扩展名来自查询串的部分不参与；
-        // 真实扩展名由落盘时的魔数校验补齐）
+        // 远程文件名清洗：非法字符 → -（替换式 sanitize，无转义；扩展名
+        // 来自查询串的部分不参与，真实扩展名由落盘时的魔数校验补齐）
         ref = resolveArchiveRef("https://e.com/a%3Fb?c.png", "", false)
-        if ref == nil || ref.baseName != "a_b" {
+        if ref == nil || ref.baseName != "a-b" {
                 t.Fatalf("sanitize failed: %+v", ref)
         }
 }
@@ -134,7 +137,7 @@ func TestInlineAndHtmlReplacement(t *testing.T) {
                 return "![" + g[1] + "](" + markdownDest(rel) + g[4] + ")"
         })
         got = replaceHtmlImgs(got, relByKey)
-        want := "![a](note.md.assets/pic.png) ![b](<note.md.assets/pic 2.png>) ![c](<note.md.assets/d e.png> \"t\")\n\n" +
+        want := "![a](note.md.assets/pic.png) ![b](note.md.assets/pic-2.png) ![c](note.md.assets/d-e.png \"t\")\n\n" +
                 "<img src=\"note.md.assets/h.png\" alt=\"x\">\n<img class='k' src=\"note.md.assets/single.png\">\n"
         if got != want {
                 t.Fatalf("inline/html replace:\n got %q\nwant %q", got, want)
@@ -161,5 +164,58 @@ func TestAssetsDirForPath(t *testing.T) {
         }
         if want := filepath.Join(dir, "assets"); assetsDir2 != want {
                 t.Fatalf("fallback assetsDir = %q, want %q", assetsDir2, want)
+        }
+}
+
+func TestArchiveImagesNoImages(t *testing.T) {
+        // 归档前置判断：无任何可操作图片对象 → 直接返回状态，不创建资产
+        // 目录、不写目标文档
+        dir := t.TempDir()
+        target := filepath.Join(dir, "out.md")
+        svc := &FileService{}
+        res, err := svc.ArchiveImages(context.Background(), "no images here", target)
+        if err != nil || !res.Ok || res.Found != 0 || res.Written {
+                t.Fatalf("no-images result: %+v, err=%v", res, err)
+        }
+        if _, err := os.Stat(filepath.Join(dir, "assets")); !os.IsNotExist(err) {
+                t.Errorf("assets dir should not be created for empty content")
+        }
+        if _, err := os.Stat(target); !os.IsNotExist(err) {
+                t.Errorf("target doc should not be written for empty content")
+        }
+}
+
+func TestArchiveImagesCancelled(t *testing.T) {
+        // ctx 已取消：归档立即中断，返回 Cancelled=true，无落盘
+        dir := t.TempDir()
+        img := writeTemp(t, dir, "pic.png", pngMagic)
+        target := filepath.Join(dir, "out.md")
+        svc := &FileService{}
+        ctx, cancel := context.WithCancel(context.Background())
+        cancel()
+        res, err := svc.ArchiveImages(ctx, "![p]("+img+")", target)
+        if err != nil || !res.Cancelled || res.Ok != true {
+                t.Fatalf("cancelled result: %+v, err=%v", res, err)
+        }
+        if res.Written {
+                t.Errorf("cancelled archive must not write document")
+        }
+        if _, err := os.Stat(filepath.Join(dir, "out.md.assets")); !os.IsNotExist(err) {
+                t.Errorf("assets dir should not be created before first job")
+        }
+}
+
+func TestSanitizeDestSegment(t *testing.T) {
+        cases := map[string]string{
+                "photo.png":        "photo.png",
+                "my photo.png":     "my-photo.png",
+                "截图 (1).png":      "截图--1-.png",
+                `a\b:c?d"e|f*.png`: "a-b-c-d-e-f-.png",
+                "中文#名字.png":       "中文-名字.png",
+        }
+        for in, want := range cases {
+                if got := sanitizeDestSegment(in); got != want {
+                        t.Errorf("sanitizeDestSegment(%q) = %q, want %q", in, got, want)
+                }
         }
 }

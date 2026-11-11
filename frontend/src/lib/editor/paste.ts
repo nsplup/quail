@@ -16,8 +16,10 @@
  *       均经 insertHtmlAsMarkdown 作用于传入的 cmView；
  *     - kind=text：纯文本替换当前选区；
  *     - kind=empty：无消费内容，动作结束。
- *  2. 后端读取超时进入 Dialog.progress（取消按钮 + 最小停留 500ms）；
- *     用户点取消 → 整条操作链路被打断，后续返回结果被忽略。
+ *  2. 后端读取 / 落盘超阈值进入 Dialog.progress（取消按钮 + 最小停留
+ *     500ms）；用户点取消 → call.cancel() 取消后端 context.Context，
+ *     整条操作链路被打断（取消后结果静默丢弃；落盘取消时暂存槽位保留）。
+ *     落盘段仅在实际超阈值时弹框（快路径无感）。
  *
  * SHIFT 业务语义：SHIFT 粘贴 = "无样式纯文本"（仅对 html 分支生效）；
  * SHIFT 状态由独立的键盘事件（keydown/keyup + blur 重置）跟踪，不依赖
@@ -34,11 +36,15 @@ import {
   readClipboard,
   commitClipboardImage,
   type ClipboardPayload,
+  type ImportedImage,
 } from "../bridge";
 import { t } from "../i18n.svelte";
 
 /** 后端读取响应等待阈值：超过则进入长耗时任务状态 */
 const READ_TIMEOUT_MS = 300;
+
+/** 落盘响应等待阈值：超过则进入长耗时任务状态（同读取口径，快路径无感） */
+const SAVE_PROGRESS_DELAY_MS = 300;
 
 /** SHIFT 物理按键状态：独立键盘事件跟踪（菜单/程序化粘贴时 shiftKey 不可靠） */
 let shiftPressed = false;
@@ -94,6 +100,7 @@ async function handlePaste(view: EditorView, shift: boolean): Promise<void> {
   const progressRef: { current: DialogProgressHandle | null } = { current: null };
   const abortedRef = { current: false };
 
+  const call = readClipboard();
   const timer = setTimeout(() => {
     if (progressRef.current) return;
     const handle = Dialog.progress({
@@ -105,14 +112,19 @@ async function handlePaste(view: EditorView, shift: boolean): Promise<void> {
     });
     progressRef.current = handle;
     void handle.promise.then((value) => {
-      if (value === "cancel") abortedRef.current = true;
+      if (value === "cancel") {
+        abortedRef.current = true;
+        call.cancel(); // 取消后端读取（context.Context），任务可被打断
+      }
     });
   }, READ_TIMEOUT_MS);
 
   try {
-    payload = await readClipboard();
+    payload = await call;
   } catch {
-    toast$.set({ id: Date.now(), msg: tr("toast.imageReadFailed") });
+    if (!abortedRef.current) {
+      toast$.set({ id: Date.now(), msg: tr("toast.imageReadFailed") });
+    }
     return;
   } finally {
     clearTimeout(timer);
@@ -169,7 +181,45 @@ async function handleImagePayload(
   /* 路径守卫：在落盘前介入；取消 → 干净退出（不产生任何文件） */
   if (!(await ensureDocSaved())) return;
 
-  const img = await commitClipboardImage(payload.pendingId);
+  /* 落盘（可取消）：沿用归档命令的取消实现——超时阈值后展示进度框，
+     用户点取消 → call.cancel() 取消后端写入（context.Context；暂存
+     槽位保留，可重新粘贴）；取消后结果静默丢弃。 */
+  const saveRef: { current: DialogProgressHandle | null } = { current: null };
+  const saveAborted = { current: false };
+  const saveCall = commitClipboardImage(payload.pendingId);
+  const saveTimer = setTimeout(() => {
+    if (saveRef.current) return;
+    const handle = Dialog.progress({
+      msg: tr("progress.savingImage"),
+      buttons: [
+        { value: "cancel", label: tr("common.cancel"), icon: "close" },
+      ],
+      minDurationMs: 500,
+    });
+    saveRef.current = handle;
+    void handle.promise.then((value) => {
+      if (value === "cancel") {
+        saveAborted.current = true;
+        saveCall.cancel();
+      }
+    });
+  }, SAVE_PROGRESS_DELAY_MS);
+
+  let img: ImportedImage | null = null;
+  try {
+    img = await saveCall;
+  } catch {
+    img = null; // 取消 / 落盘异常 → 统一走下方分支
+  } finally {
+    clearTimeout(saveTimer);
+    const handle = saveRef.current;
+    if (handle) {
+      handle.finish();
+      await handle.promise;
+    }
+  }
+
+  if (saveAborted.current) return; // 用户取消：静默结束，无文件产生
   if (!img) {
     /* 槽位被覆盖 / TTL 过期 / 落盘失败 */
     toast$.set({ id: Date.now(), msg: tr("toast.imageSaveFailed") });

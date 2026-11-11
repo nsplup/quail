@@ -28,7 +28,6 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -51,6 +50,13 @@ type ImportedImage struct {
 	RelPath string `json:"relPath"`
 	// Name 落盘文件名（含扩展名，冲突时带 -n 后缀）。
 	Name string `json:"name"`
+	// RefDest markdown 内联 destination（markdownDest 构建结果：不安全
+	// 字符已由落盘命名阶段替换为 '-'，无需尖括号包裹或转义），前端直接
+	// 插入 `![alt](refDest)`。三插入入口与归档替换共用同一构建函数。
+	RefDest string `json:"refDest"`
+	// Alt sanitize 后的 alt 文本（sanitizeAltText：[ ] \ 换行替换为
+	// 安全字符，不再用反斜杠转义），前端直接插入。
+	Alt string `json:"alt"`
 }
 
 // ClassifyFiles 拖拽分流：对文件列表逐个魔数嗅探归类。
@@ -116,21 +122,10 @@ func (f *FileService) assetsDirForInsert() (string, error) {
 	if f.doc == nil || f.doc.path == "" {
 		return "", errors.New("no document open")
 	}
-	docDir := filepath.Dir(f.doc.path)
-	docName := filepath.Base(f.doc.path)
-	dir := docDir // 默认直接落文档目录的 assets/ 子目录
-	if names := companionAssetsNames(docName); len(names) > 0 {
-		// markdown 文档：伴生资源目录。companionAssetsNames 首候选
-		// [BASE].md.assets 即 <docName>.assets 形态（note.md →
-		// note.md.assets），与 imgproxy 白名单同口径
-		dir = filepath.Join(docDir, names[0])
-	} else {
-		dir = filepath.Join(docDir, "assets")
-	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", err
-	}
-	return dir, nil
+	// 目录计算与创建统一走 assetsDirForPath（image_common.go，与归档/
+	// imgproxy 白名单同口径）：markdown 伴生资源目录 <BASE>.md.assets，
+	// 非 markdown 回落 assets/
+	return assetsDirForPath(f.doc.path)
 }
 
 // saveImageBytes 魔数校验 + 命名 + 原子写入。
@@ -150,27 +145,37 @@ func saveImageBytes(assetsDir string, data []byte, baseName string) (*ImportedIm
 		return nil, false
 	}
 
-	// 粘贴入口：内容哈希命名 + 存在即复用
+	// 粘贴入口：内容哈希命名（天然安全）+ 存在即复用
 	if baseName == "" {
 		name := "img-" + shortHash(data) + ext
 		path := filepath.Join(assetsDir, name)
 		if _, err := os.Stat(path); err == nil {
 			// 已存在同名文件：哈希相同即内容相同，直接复用
-			return &ImportedImage{RelPath: pathRelativeToDoc(assetsDir, name), Name: name}, true
+			return newImportedImage(assetsDir, name), true
 		}
 		if err := writeFileAtomic(path, data, 0o644); err != nil {
 			return nil, false
 		}
-		return &ImportedImage{RelPath: pathRelativeToDoc(assetsDir, name), Name: name}, true
+		return newImportedImage(assetsDir, name), true
 	}
 
-	// 按钮 / 拖拽入口：原名 + 冲突递增后缀
-	name := uniqueAssetName(assetsDir, baseName, ext)
+	// 按钮 / 拖拽 / 归档入口：原名 sanitize（不安全字符替换为 '-'，
+	// 见 image_common.go 统一口径）+ 冲突递增后缀
+	name := uniqueAssetName(assetsDir, sanitizeDestSegment(baseName), ext)
 	path := filepath.Join(assetsDir, name)
 	if err := writeFileAtomic(path, data, 0o644); err != nil {
 		return nil, false
 	}
-	return &ImportedImage{RelPath: pathRelativeToDoc(assetsDir, name), Name: name}, true
+	return newImportedImage(assetsDir, name), true
+}
+
+// newImportedImage 组装落盘结果：RelPath + 统一构建的 RefDest / Alt
+// （路径生成与 alt sanitize 的唯一出口，见 image_common.go）。
+func newImportedImage(assetsDir, name string) *ImportedImage {
+	img := &ImportedImage{RelPath: pathRelativeToDoc(assetsDir, name), Name: name}
+	img.RefDest = markdownDest(img.RelPath)
+	img.Alt = sanitizeAltText(name)
+	return img
 }
 
 // shortHash 图片内容短哈希（FNV-1a 32 位，8 位十六进制）。
@@ -232,16 +237,9 @@ func uniqueAssetName(assetsDir, baseName, ext string) string {
 	}
 }
 
-// pathRelativeToDoc 资产文件相对文档目录的引用路径（正斜杠）。
-// assetsDir 由 assetsDirForInsert 在文档目录下创建，Rel 必然不含 ".."。
-func pathRelativeToDoc(assetsDir, name string) string {
-	docDir := filepath.Dir(assetsDir)
-	rel, err := filepath.Rel(docDir, filepath.Join(assetsDir, name))
-	if err != nil {
-		return name // 理论不可达：回落裸文件名
-	}
-	return filepath.ToSlash(rel)
-}
+// pathRelativeToDoc 已并入共享模块 image_common.go（与归档统一口径）。
+// isSVGFile / isTextFileHead / readFileHead 留守本文件（插入模块专用
+// 嗅探）；readFileHead 同时供 imgproxy.go 的 isImageFile 复用。
 
 // isSVGFile 磁盘文件是否为 SVG（只读文件头嗅探，与 isSVGData 同口径）。
 func isSVGFile(path string) bool {
@@ -260,19 +258,4 @@ func isTextFileHead(path string) bool {
 		return false
 	}
 	return isTextFile(data)
-}
-
-// readFileHead 读取文件前 4KB（魔数嗅探用；不足 4KB 返回实际长度）。
-func readFileHead(path string) ([]byte, error) {
-	fh, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer fh.Close()
-	head := make([]byte, 4096)
-	n, err := io.ReadFull(fh, head)
-	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
-		return nil, err
-	}
-	return head[:n], nil
 }

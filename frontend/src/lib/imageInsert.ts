@@ -6,14 +6,8 @@
  *   引导用户保存（保存 = 走另存为落盘），用户点击取消、或另存对话框被
  *   取消（仍无路径）时返回 false，调用方【中断当前行为】（不只是跳过
  *   图片：粘贴入口被取消时整个粘贴动作不继续）；
- * - 引用式插入：插入文本使用定义引用格式（伪代码
- *   `insert([...pics, def.join('\n')].join('\n\n'))`）——引用行
- *   `![alt][id]` 与定义块 `[id]: <relPath>` 一起经 CM6 insertBlock 作为
- *   块级内容落在光标处（预览管线经 reference-store 收集后渲染）；
- * - 引用标识符（normalizeImageRefId）：按 micromark normalizeIdentifier
- *   口径（折叠空白为单空格、trim、小写）生成，批内查重 + 追加 -2/-3…
- *   后缀；与现有文档中的引用定义撞名时同样追加后缀（CommonMark 首定义
- *   优先，撞名会让新图引用解析到旧定义）。
+ * - 插入文本为内联式 `![alt](refDest)`：alt 与 destination 均由后端
+ *   sanitize 后直接返回（见 ImportedImage.RefDest / Alt），前端零转义。
  */
 import { get } from "svelte/store";
 import { EditorView } from "@codemirror/view";
@@ -37,8 +31,9 @@ import { t } from "./i18n.svelte";
  *   视图——主编辑器与单元格编辑器共用同一插入逻辑（幂等）。
  *
  * 语法为内联式 `![alt](path)`：不再生成引用定义块（无 `[ref]: path` 追加），
- * 每张图片一行（多图以换行分隔，形成独立块）。路径经百分号编码（空格、
- * 括号等），alt 文本转义 `[` `]`。
+ * 每张图片一行（多图以换行分隔，形成独立块）。alt 与路径（refDest）均由
+ * 后端统一 sanitize 构建（替换不安全字符为 '-'，不做包裹/转义），前端
+ * 原样拼接即可。
  */
 export function insertImages(
   images: ImportedImage[],
@@ -73,25 +68,11 @@ export function insertImages(
 }
 
 
+/** 插入文本构建：alt / destination 均为后端 sanitize 产物，原样拼接。
+ *  （原前端 escapeAltText / escapeAngleDest 已删除——sanitize 由后端
+ *  image_common.go 统一处理：不安全字符替换为安全字符，无包裹无转义。） */
 function buildImageInsertText(images: ImportedImage[]): string {
-  return images
-    .map(
-      ({ relPath, name }) =>
-        `![${escapeAltText(name)}](<${escapeAngleDest(relPath)}>)`
-    )
-    .join("\n");
-}
-
-/** alt 文本中的 `[` / `]` 会破坏内联语法，用反斜杠转义。 */
-function escapeAltText(alt: string): string {
-  return alt.replace(/[[\]]/g, "\\$&");
-}
-
-/** 尖括号 destination 内的最小转义：`\`、`<`、`>`。
- *  本地文件名在 Windows 上禁止 `<>`，POSIX 上极罕见；relPath 已由后端
- *  ToSlash 保证正斜杠。保留转义仅作极端健壮性兜底，正常路径零命中。 */
-function escapeAngleDest(path: string): string {
-  return path.replace(/[\\<>]/g, "\\$&");
+  return images.map(({ alt, refDest }) => `![${alt}](${refDest})`).join("\n");
 }
 
 /**

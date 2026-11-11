@@ -209,6 +209,12 @@ export async function pickSavePath(
 
 /* ---------------- 图片归档（命令面板「归档图片文件到伴生资源目录」） ---------------- */
 
+/**
+ * Wails 绑定调用的可取消 Promise：`cancel()` 取消后端绑定的
+ * context.Context（Wails v3 官方取消通道），长耗时任务可被打断。
+ */
+export type CancellablePromise<T> = Promise<T> & { cancel(): void };
+
 export interface QuailArchiveResult {
   ok: boolean;
   path: string;
@@ -220,17 +226,20 @@ export interface QuailArchiveResult {
   failed: number;
   /** 是否已将替换后的内容落盘（无引用 / 全部失败 / 内容无变化时不写） */
   written: boolean;
+  /** 用户经取消按钮中断：已归档部分保留，内容不替换不落盘 */
+  cancelled?: boolean;
 }
 
 /** 归档文档内容中的图片引用到目标路径的伴生资源目录：后端解析三种引用
  *  （内联式 / 引用式定义 / HTML img）、本地复制远程下载、替换引用路径、
  *  落盘文档。写入【不携带自身写入抑制】——目标为当前文档时 watch 放行
- *  file:changed 广播，前端由此感知文档被修改；文档会话状态不变。 */
-export async function archiveImagesToPath(
+ *  file:changed 广播，前端由此感知文档被修改；文档会话状态不变。
+ *  返回可取消 Promise：调用方据 cancel() 打断后端归档。 */
+export function archiveImagesToPath(
   content: string,
   path: string
-): Promise<QuailArchiveResult> {
-  return (await ArchiveImages(content, path)) as unknown as QuailArchiveResult;
+): CancellablePromise<QuailArchiveResult> {
+  return ArchiveImages(content, path) as unknown as CancellablePromise<QuailArchiveResult>;
 }
 
 export async function confirmQuit(): Promise<void> {
@@ -271,7 +280,14 @@ export async function closeDocument(): Promise<void> {
 
 export type FileKindInfo = { path: string; kind: "image" | "text" | "other" };
 
-export type ImportedImage = { relPath: string; name: string };
+export type ImportedImage = {
+  relPath: string;
+  name: string;
+  /** markdown destination（后端 markdownDest 构建，无需前端转义/包裹） */
+  refDest: string;
+  /** sanitize 后的 alt 文本（后端 sanitizeAltText 构建） */
+  alt: string;
+};
 
 export async function classifyFiles(paths: string[]): Promise<FileKindInfo[]> {
   return (await ClassifyFiles(paths)) as unknown as FileKindInfo[];
@@ -298,22 +314,19 @@ export type ClipboardPayload = {
   reason?: "format" | "size" | "";
 };
 
-/** 粘贴链路：读取系统剪贴板（图片只做校验 + 内存暂存，不落盘） */
-export async function readClipboard(): Promise<ClipboardPayload> {
-  return (await ReadClipboard()) as unknown as ClipboardPayload;
+/** 粘贴链路：读取系统剪贴板（图片只做校验 + 内存暂存，不落盘）。
+ *  返回可取消 Promise：调用方据 cancel() 打断后端读取。 */
+export function readClipboard(): CancellablePromise<ClipboardPayload> {
+  return ReadClipboard() as unknown as CancellablePromise<ClipboardPayload>;
 }
 
 /** 落盘 readClipboard 暂存的粘贴图片（路径守卫通过后调用）。
- *  返回 null 表示槽位被后续粘贴覆盖 / TTL 过期 / 落盘失败。 */
-export async function commitClipboardImage(
+ *  返回可取消 Promise：调用方据 cancel() 打断后端写入（暂存槽位保留）。
+ *  resolve null = 槽位被后续粘贴覆盖 / TTL 过期；reject = 取消或失败。 */
+export function commitClipboardImage(
   pendingId: number
-): Promise<ImportedImage | null> {
-  try {
-    const img = (await CommitClipboardImage(pendingId)) as unknown as ImportedImage;
-    return img ?? null;
-  } catch {
-    return null;
-  }
+): CancellablePromise<ImportedImage | null> {
+  return CommitClipboardImage(pendingId) as unknown as CancellablePromise<ImportedImage | null>;
 }
 
 /** 弹系统打开对话框多选图片（插入图片按钮用，取消返回空数组） */

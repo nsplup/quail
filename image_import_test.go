@@ -10,6 +10,7 @@ package main
 // - uniqueAssetName：冲突递增后缀与时间戳兜底命名。
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -38,8 +39,8 @@ func TestClassifyFiles(t *testing.T) {
 	missing := filepath.Join(dir, "not-exists.png")
 
 	kinds, err := (&FileService{}).ClassifyFiles([]string{png, gif, svg, txt, bin, missing})
-	if err != nil {
-		t.Fatalf("ClassifyFiles: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "not-exists.png") {
+		t.Errorf("期望聚合 missing 文件错误，got %v", err)
 	}
 	if len(kinds) != 6 {
 		t.Fatalf("expect 6 kinds, got %d", len(kinds))
@@ -129,7 +130,7 @@ func TestCommitClipboardImage(t *testing.T) {
 
 	// 正常：stash + commit 落盘，命名 img-<hash>.png
 	stashed := stashClipboardImage([]byte(pngMagic))
-	img, err := svc.CommitClipboardImage(stashed.PendingID)
+	img, err := svc.CommitClipboardImage(context.Background(), stashed.PendingID)
 	if err != nil {
 		t.Fatalf("CommitClipboardImage: %v", err)
 	}
@@ -145,33 +146,32 @@ func TestCommitClipboardImage(t *testing.T) {
 	}
 
 	// 重复消费同一 PendingID：error（槽位已空）
-	if _, err := svc.CommitClipboardImage(stashed.PendingID); err == nil {
+	if _, err := svc.CommitClipboardImage(context.Background(), stashed.PendingID); err == nil {
 		t.Error("CommitClipboardImage(reuse): expect error, got nil")
 	}
 	// 无暂存 / ID 不存在：error
-	if _, err := svc.CommitClipboardImage(999999); err == nil {
+	if _, err := svc.CommitClipboardImage(context.Background(), 999999); err == nil {
 		t.Error("CommitClipboardImage(unknown id): expect error, got nil")
 	}
-	// 无文档：stash 成功但 commit 时 assetsDirForInsert 报错
-	svc.doc = nil
-	stashed = stashClipboardImage([]byte(pngMagic))
-	if _, err := svc.CommitClipboardImage(stashed.PendingID); err == nil {
-		t.Error("CommitClipboardImage(no doc): expect error, got nil")
-	}
-
 	// 端到端幂等：同一内容两次 stash + commit → 复用同一文件
 	s1 := stashClipboardImage([]byte(pngMagic))
-	i1, err := svc.CommitClipboardImage(s1.PendingID)
+	i1, err := svc.CommitClipboardImage(context.Background(), s1.PendingID)
 	if err != nil {
 		t.Fatalf("commit#1: %v", err)
 	}
 	s2 := stashClipboardImage([]byte(pngMagic))
-	i2, err := svc.CommitClipboardImage(s2.PendingID)
+	i2, err := svc.CommitClipboardImage(context.Background(), s2.PendingID)
 	if err != nil {
 		t.Fatalf("commit#2: %v", err)
 	}
 	if i1.Name != i2.Name {
 		t.Errorf("two pastes: names differ %q vs %q, want reuse", i1.Name, i2.Name)
+	}
+	// 无文档：stash 成功但 commit 时 assetsDirForInsert 报错
+	svc.doc = nil
+	stashed = stashClipboardImage([]byte(pngMagic))
+	if _, err := svc.CommitClipboardImage(context.Background(), stashed.PendingID); err == nil {
+		t.Error("CommitClipboardImage(no doc): expect error, got nil")
 	}
 }
 
