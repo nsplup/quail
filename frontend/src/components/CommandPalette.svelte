@@ -21,6 +21,7 @@
     type CommandItem,
   } from "../lib/commandPalette";
   import type { ShortcutActions } from "../lib/shortcuts";
+  import { focusTrap } from "../lib/focusTrap";
   import Overlay from "./Overlay.svelte";
 
   let { actions }: { actions: ShortcutActions } = $props();
@@ -35,7 +36,7 @@
     const q = query.trim().toLowerCase();
     if (!q) return commands;
     return commands.filter(
-      (c) => c.id.includes(q) || $t(c.titleKey).toLowerCase().includes(q)
+      (c) => c.id.includes(q) || $t(c.titleKey).toLowerCase().includes(q),
     );
   });
 
@@ -85,6 +86,12 @@
       if (item) runItem(item);
     }
   }
+
+  const trap = focusTrap({
+    allowOutsideClick: true,
+    escapeDeactivates: false,
+    preventScroll: true, /** 拉回焦点时不再隐式滚动 */
+  });
 </script>
 
 {#if $commandPaletteOpen$}
@@ -101,6 +108,7 @@
     <div
       class="flex w-[440px] max-w-[calc(100vw-48px)] flex-col overflow-hidden rounded-xl border border-line bg-app shadow-2xl"
       onkeydown={onKeydown}
+      {@attach trap}
     >
       <input
         bind:this={inputEl}
@@ -111,13 +119,13 @@
       />
       <ul
         bind:this={listEl}
-        class="max-h-[320px] overflow-y-auto py-1"
+        class="qcmd-list flex h-[320px] flex-col gap-0.5 overflow-y-auto p-1.5"
       >
         {#each filtered as item, i (item.id)}
-          <li>
+          <li class="shrink-0">
             <button
               type="button"
-              class="qcmd-item flex w-full items-center justify-between gap-4 px-3.5 py-2 text-left text-sm"
+              class="qcmd-item flex w-full items-center justify-between gap-4 rounded-lg px-2.5 py-2 text-left text-sm"
               class:qcmd-active={i === active}
               data-active={i === active}
               onpointerenter={() => (active = i)}
@@ -130,7 +138,9 @@
             </button>
           </li>
         {:else}
-          <li class="px-3.5 py-2 text-sm text-muted">
+          <li
+            class="flex flex-1 items-center justify-center text-sm text-muted"
+          >
             {$t("palette.empty")}
           </li>
         {/each}
@@ -140,21 +150,29 @@
 {/if}
 
 <style>
+  /* 列表：固定高度 + 内边距，滚动内容与边缘留出呼吸感 */
+  .qcmd-list {
+    scrollbar-gutter: stable;
+  }
+
   .qcmd-item {
     color: var(--ui-fg);
+    transition: background-color 80ms ease;
   }
   .qcmd-item.qcmd-active {
     background: var(--ui-active-bg);
   }
+
   /* 快捷键徽标：inset 底 + 描边圆角，与 confirm 按钮描边风格一致 */
   .qcmd-key {
     flex: none;
     font-family: inherit;
     font-size: 11px;
+    font-weight: 500;
     line-height: 1;
-    padding: 3px 7px;
+    padding: 4px 6px;
     border: 1px solid var(--ui-border);
-    border-radius: 6px;
+    border-radius: 5px;
     background: var(--ui-inset);
     color: var(--ui-muted);
     letter-spacing: 0.3px;
