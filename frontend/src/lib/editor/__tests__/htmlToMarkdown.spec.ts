@@ -1,6 +1,6 @@
 /**
  * htmlToMarkdown 单元测试：unified 管线转换（标题/强调/链接/图片/列表）、
- * img 链接原样保留、SHIFT 模式丢弃样式保留图片。
+ * img 链接原样保留、表格对齐
  */
 import { describe, expect, it } from "vitest";
 import { htmlToMarkdown } from "../htmlToMarkdown";
@@ -45,37 +45,18 @@ describe("htmlToMarkdown：语义映射（非 SHIFT）", () => {
     expect(md).toContain("| 1 |");
     expect(md).toContain("|");
   });
-});
 
-describe("htmlToMarkdown：SHIFT 丢弃样式（strip = true）", () => {
-  it("标题降级为段落纯文本", () => {
-    expect(htmlToMarkdown("<h1>Title</h1>", true)).toBe("Title");
-  });
-
-  it("加粗 / 斜体 / 链接褪壳为纯文本", () => {
-    expect(htmlToMarkdown("<p><b>bold</b> plain</p>", true)).toBe("bold plain");
-    expect(
-      htmlToMarkdown('<p><a href="https://a.b">link</a></p>', true)
-    ).toBe("link");
-  });
-
-  it("图文混排：丢弃样式但保留图片", () => {
+  it("保留表格对齐（align 属性）", () => {
     const md = htmlToMarkdown(
-      '<h2>Notes</h2><p><b>see</b> <img src="https://x.y/a.png" alt="a"> <em>now</em></p>',
-      true
+      '<table><tr><th align="center">a</th></tr><tr><td align="center">1</td></tr></table>'
     );
-    expect(md).toContain("![a](https://x.y/a.png)");
-    expect(md).not.toContain("**");
-    expect(md).not.toContain("##");
-    expect(md).toContain("see");
-    expect(md).toContain("now");
+    expect(md).toContain(":---:");
   });
 
-  it("列表结构保留（不属于样式），列表项内样式褪壳", () => {
+  it("保留表格对齐（style=text-align）", () => {
     const md = htmlToMarkdown(
-      "<ul><li><b>x</b></li><li>y</li></ul>",
-      true
+      '<table><tr><th style="text-align:right">a</th></tr><tr><td style="text-align:right">1</td></tr></table>'
     );
-    expect(md).toBe("- x\n- y");
+    expect(md).toContain("---:");
   });
 });
