@@ -14,7 +14,6 @@ import { get, writable } from "svelte/store";
 import { kvGet, kvSet } from "./settings";
 import { zhMessages, enMessages } from "./i18n-messages";
 
-export { cmPhrases } from "./i18n-messages";
 import type { Lang, LangSetting } from "./types";
 
 const LANG_KEY = "md.lang";

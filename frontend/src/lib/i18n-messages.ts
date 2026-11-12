@@ -2,8 +2,6 @@
  * i18n 消息定义（集中模块）。
  *
  * - zhMessages / enMessages：界面消息（svelte-i18n 消费，分组嵌套）；
- * - cmPhrases：CM6 EditorState.phrases 的中文映射（键为英文原文，phrase() 找不到时回落原文，
- *   因此英文界面无需映射）。查找面板的全部文案均由此经 view.state.phrase() 读取。
  */
 export const zhMessages = {
   common: {
@@ -60,7 +58,7 @@ export const zhMessages = {
     title: "命令面板",
     placeholder: "输入以筛选命令",
     empty: "无匹配命令",
-    new: "新建实例",
+    new: "新建窗口",
     open: "打开文档",
     quit: "退出",
     undo: "撤销",
@@ -257,7 +255,7 @@ export const enMessages = {
     title: "Command Palette",
     placeholder: "Type to filter commands",
     empty: "No matching commands",
-    new: "New Instance",
+    new: "New Window",
     open: "Open Document",
     quit: "Quit",
     undo: "Undo",
@@ -399,18 +397,3 @@ export const enMessages = {
     overflow: "999+",
   },
 } as const;
-
-/** CM6 phrases：查找面板文案的中文映射（英文原文 → 中文） */
-export const cmPhrases: Record<string, string> = {
-  "Find": "查找",
-  "Replace": "替换",
-  "Replace all": "全部替换",
-  "Previous (Shift+Enter)": "上一个 (Shift+Enter)",
-  "Next (Enter)": "下一个 (Enter)",
-  "Close (Esc)": "关闭 (Esc)",
-  "Match case": "区分大小写",
-  "Regular expression": "正则表达式",
-  "No results": "无结果",
-  "Bad regex": "正则无效",
-  "999+": "999+",
-};

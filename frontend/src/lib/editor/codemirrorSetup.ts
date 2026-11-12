@@ -7,7 +7,6 @@
  * 切换预览主题时编辑器配色同步变化，无需重新 configure。
  */
 import { Annotation, EditorState, EditorSelection, Compartment, type Extension, type Text } from "@codemirror/state";
-import { cmPhrases } from "../i18n-messages";
 import {
   EditorView,
   ViewPlugin,
@@ -25,7 +24,7 @@ import {
   indentMore,
   indentLess,
 } from "@codemirror/commands";
-import { search, searchKeymap, highlightSelectionMatches } from "@codemirror/search";
+import { search, highlightSelectionMatches } from "@codemirror/search";
 import { markdown } from "@codemirror/lang-markdown";
 import { syntaxHighlighting, HighlightStyle, bracketMatching, indentUnit } from "@codemirror/language";
 import { tags } from "@lezer/highlight";
@@ -125,8 +124,6 @@ export interface EditorApi {
   measure(): void;
   /** 切换缩进单位（设置里选择制表符 / 空格），动态重配置无需重建编辑器 */
   setIndentUnit(unit: string): void;
-  /** 切换界面语言后重配 CM6 phrases（查找面板文案随语言更新） */
-  setPhrases(lang: string): void;
   /** 字号变化后请求重新测量布局（CSS 变量变化不会自动触发 CM 测量） */
   requestMeasure(): void;
   /** 全局 Ctrl+F 入口已由独立悬浮面板接管（searchPanel.ts），此处仅提供
@@ -361,7 +358,6 @@ export function createEditorApi(
   sharedIndentUnit = initialIndent;
   /* 历史独立 Compartment：打开文档时卸载再重装 = 清空撤销历史 */
   const historyCompartment = new Compartment();
-  const phrasesCompartment = new Compartment();
   /* 可编辑性 Compartment：任一弹层遮罩（设置面板 / confirm 弹窗，未来
      可扩展）开启期间切换为不可编辑，全部关闭后恢复
      （响应 overlayOpen$ —— 全局遮罩状态，见 stores.ts） */
@@ -371,8 +367,6 @@ export function createEditorApi(
   const searchMarginCompartment = new Compartment();
   /* 干净文档引用：初始化或保存后记录 state.doc，用 Text.eq 判定脏状态 */
   let cleanDoc: Text | null = null;
-  const phrasesFor = (lang: string) =>
-    EditorState.phrases.of(lang === "zh" ? cmPhrases : {});
   let indent = initialIndent;
 
   const view = new EditorView({
@@ -383,7 +377,6 @@ export function createEditorApi(
         ...commonMarkdownExtensions(),
         historyCompartment.of(history({ newGroupDelay: HISTORY_NEW_GROUP_DELAY })),
         indentCompartment.of(indentUnit.of(initialIndent)),
-        phrasesCompartment.of(phrasesFor(initialLang)),
         editableCompartment.of([
           EditorView.editable.of(true),
           EditorState.readOnly.of(false),
@@ -892,11 +885,6 @@ export function createEditorApi(
     },
     redo() {
       cmRedo(view);
-    },
-    setPhrases(lang: string) {
-      view.dispatch({
-        effects: phrasesCompartment.reconfigure(phrasesFor(lang)),
-      });
     },
   };
 }

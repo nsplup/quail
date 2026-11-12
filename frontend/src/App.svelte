@@ -134,12 +134,6 @@
     }
   });
 
-  // 语言变化 → 重配 CM6 phrases
-  $effect(() => {
-    const api = $editorApi;
-    if (api) api.setPhrases(currentLang());
-  });
-
   /* ---------------- 启动 ---------------- */
   onMount(async () => {
     setLang(currentLang());
