@@ -679,6 +679,16 @@
   let menuToken = 0;
 
   function openCellMenu(ev: MouseEvent, r: number, c: number): void {
+    /* 编辑中的单元格：右键落在 CM6 单元格编辑器宿主内时直接放行，
+     * 不 preventDefault / stopPropagation，也不打开表格行/列菜单——
+     * 右键语义（原生菜单 / CM6 扩展菜单）由单元格编辑器自身处理，
+     * 避免表格菜单与编辑器右键链路抢同一个事件。 */
+    if (
+      editing &&
+      editorHost &&
+      ev.target instanceof Node &&
+      editorHost.contains(ev.target)
+    ) return;
     ev.preventDefault();
     ev.stopPropagation();
     const s = ensureSource();
