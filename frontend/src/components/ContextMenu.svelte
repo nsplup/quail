@@ -5,8 +5,10 @@
    * - 状态由 lib/contextmenu 的 contextMenu$ 持有，App 层单实例挂载；
    * - 定位：以光标坐标为基准，渲染后按实测尺寸向视口内收敛（右/下边缘
    *   8px 安全边距），避免长菜单溢出视口；
-   * - 关闭时机：选中项、菜单外按下、Esc、任意容器滚动（capture 捕获预览
-   *   面板滚动）、窗口 resize / blur——滚动后菜单与目标脱节，直接关闭；
+   * - 关闭时机：选中项、菜单外按下、Esc、容器滚动、窗口 resize / blur——
+   *   滚动后菜单与目标脱节，直接关闭；提供锚点（anchor）时按锚点作用域
+   *   过滤：仅锚点子树内的滚动才关闭，无关面板滚动（如编辑器光标同步
+   *   驱动的预览滚动）不关闭；
    * - 菜单内 contextmenu 事件就地拦截：菜单上再右键不闪出系统菜单、
    *   也不重建菜单（避免关闭→重开抖动）；
    * - 菜单项图标：始终渲染固定尺寸的图标槽位，无 icon 时留空占位，
@@ -14,6 +16,7 @@
    *   MENU_ICON_SIZE 单一来源驱动）。
    */
   import { tick } from "svelte";
+  import { get } from "svelte/store";
   import Icon from "./Icon.svelte";
   import {
     contextMenu$,
@@ -62,7 +65,20 @@
       if (el && ev.target instanceof Node && el.contains(ev.target)) return;
       closeContextMenu();
     };
-    const onScroll = () => closeContextMenu();
+    const onScroll = (ev: Event) => {
+      // 滚动关闭按锚点作用域过滤：提供 anchor 时仅当滚动目标在锚点子树内
+      // （锚点随滚动移动，菜单与目标脱节）才关闭；无关面板的滚动（如光标
+      // 同步驱动的预览面板滚动）忽略，避免编辑器右键菜单被联动滚动误关。
+      // 无锚点菜单（图片/表格等）保持旧行为：任何滚动即关。
+      const anchor = get(contextMenu$)?.anchor;
+      if (!anchor) {
+        closeContextMenu();
+        return;
+      }
+      if (ev.target instanceof Node && anchor.contains(ev.target)) {
+        closeContextMenu();
+      }
+    };
     const onResize = () => closeContextMenu();
     const onBlur = () => closeContextMenu();
     window.addEventListener("keydown", onKeydown);

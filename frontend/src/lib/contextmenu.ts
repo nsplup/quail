@@ -28,6 +28,13 @@ interface ContextMenuState {
   x: number;
   y: number;
   items: ContextMenuItem[];
+  /**
+   * 菜单锚点元素（可选）。
+   * 提供后，滚动关闭按锚点作用域过滤：仅当滚动目标位于锚点子树内
+   * （锚点随滚动移动，菜单与目标脱节）才关闭；无关面板（如光标同步
+   * 驱动的预览面板滚动）不关闭菜单。缺省时保持旧行为：任意滚动即关。
+   */
+  anchor?: Element;
   /** 菜单收起时回调（选中/外点/Esc/滚动/失焦/被新菜单覆盖） */
   onClosed?: () => void;
 }
@@ -49,7 +56,7 @@ export function openContextMenu(
   x: number,
   y: number,
   items: ContextMenuItem[],
-  options?: { onClosed?: () => void },
+  options?: { onClosed?: () => void; anchor?: Element },
 ): void {
   const prev = get(contextMenu$);           // 1. 取出旧状态（同步）
 
@@ -57,6 +64,7 @@ export function openContextMenu(
     x,
     y,
     items,
+    anchor: options?.anchor,
     onClosed: options?.onClosed,
   });
 

@@ -112,7 +112,11 @@ export function registerEditorContextMenu(
         },
       },
     ];
-    openContextMenu(ev.clientX, ev.clientY, items);
+    // anchor = 编辑器根节点：滚动关闭按锚点作用域过滤——编辑器自身滚动
+    // （滚动目标 view.scrollDOM 在锚点子树内）仍会关闭菜单；光标行上报
+    // 触发的预览面板联动滚动（editor→preview 滚动同步）与编辑器无关，
+    // 不再误关菜单。主编辑器与单元格编辑器共用本注册函数，一处覆盖。
+    openContextMenu(ev.clientX, ev.clientY, items, { anchor: view.dom });
   };
   view.dom.addEventListener("contextmenu", onContextMenu);
   return () => view.dom.removeEventListener("contextmenu", onContextMenu);
