@@ -40,6 +40,7 @@ import { markdownEmphasis } from "./emphasis"
 import { dirty$, setImeComposing } from "../stores";
 import { overlayOpen$ } from "../overlay";
 import { runPasteHandler } from "./pasteHandler";
+import { registerEditorContextMenu } from "./editorContextMenu";
 import { get } from "svelte/store";
 /* 行前缀语义单一源（markdown/table-source）：replaceLines 的
    preservePrefix 与表格源码解析共用同一前缀提取规则 */
@@ -320,6 +321,33 @@ function commonKeymap(): KeyBinding[] {
   ];
 }
 
+/**
+ * 粘贴快捷键扩展（主编辑器与单元格编辑器共用）：
+ * 不再监听 paste 事件，改为拦截粘贴快捷键 Mod-v——
+ * - event.shiftKey 为真：直接跳出（返回 false），走浏览器原生默认
+ *   粘贴，不做任何额外转换；
+ * - 否则 preventDefault 并经 pasteHandler 注册表转发到应用层链路
+ *   （后端读剪贴板 → 图片 / HTML / 纯文本分派）；
+ * - 其余按键一律放行。
+ */
+function pasteShortcutExtension(): Extension {
+  return EditorView.domEventHandlers({
+    keydown: (event: KeyboardEvent, view) => {
+      if (
+        (event.ctrlKey || event.metaKey) &&
+        !event.altKey &&
+        (event.key === "v" || event.key === "V")
+      ) {
+        /* SHIFT+Mod-v：原生默认粘贴（不拦截、不转换） */
+        if (event.shiftKey) return false;
+        event.preventDefault();
+        return runPasteHandler(event, view);
+      }
+      return false;
+    },
+  });
+}
+
 /* ---------------- 创建编辑器 ---------------- */
 
 export function createEditorApi(
@@ -416,14 +444,13 @@ export function createEditorApi(
             }
           }
         }),
-        EditorView.domEventHandlers({
-          /* 粘贴行为覆盖：路由到 App 注册的应用层处理器（lib/editor/paste.ts，
-             经 pasteHandler 注册表解耦——CM 模块不引入 bridge / store 依赖）。
-             image/* → 后端落盘（长耗时 Dialog.progress）；text/html → markdown
-             转换（SHIFT 丢弃样式保留图片）；text/plain → 返回 false 走默认。
-             处理器返回 true 时 preventDefault，false 保持 CM6 默认粘贴。 */
-          paste: (event, view) => runPasteHandler(event, view),
-        }),
+        /* 粘贴入口：keydown 拦截 Mod-v（SHIFT 按下时放行原生粘贴），
+           经 pasteHandler 注册表路由到应用层处理器（lib/editor/paste.ts，
+           CM 模块不引入 bridge / store 依赖）。
+           image → 后端落盘（长耗时 Dialog.progress）；text/html → markdown
+           转换（无可转换标签回退纯文本）；text/plain → 纯文本替换。
+           SHIFT+Mod-v = 原生默认粘贴，"粘贴为纯文本"由右键菜单承担。 */
+        pasteShortcutExtension(),
         /* 查找面板统计（当前项下标随选区/文档变化刷新） */
         EditorView.updateListener.of((u) => notifyEditorUpdate(u)),
         /* 光标行上报（编辑器→预览 光标行同步的信号源）：
@@ -593,8 +620,16 @@ export function createEditorApi(
   /* 视图注册到查找悬浮面板（面板通过它驱动 CM6 搜索管线） */
   registerSearchView(view);
 
+  /* 右键菜单（剪切/复制/粘贴/粘贴为纯文本/全选）：主编辑器用抑制
+     光标同步的剪切与全选命令（见 selectAllNoCursorSync 注释） */
+  const detachContextMenu = registerEditorContextMenu(view, {
+    cut: cutLinewise(markProgrammaticScroll),
+    selectAll: selectAllSuppressCursorSync,
+  });
+
   return {
     destroy() {
+      detachContextMenu();
       unregisterSearchView();
       for (const unsub of unsubOverlays) unsub();
       if (topLineRaf) cancelAnimationFrame(topLineRaf);
@@ -1017,12 +1052,11 @@ export function createCellEditor(
         historyCompartment.of(history({ newGroupDelay: HISTORY_NEW_GROUP_DELAY })),
         indentUnit.of(indentUnitValue),
         cellEditorTheme,
-        /* 粘贴事件与主编辑器同通道：经 pasteHandler 注册表路由到应用层
-           处理器（插入逻辑完全幂等——图片引用块/HTML 转换插入收到粘贴
-           事件的视图，单元格解析管线自行放弃块级内容） */
-        EditorView.domEventHandlers({
-          paste: (event, view) => runPasteHandler(event, view),
-        }),
+        /* 粘贴入口与主编辑器同通道：keydown 拦截 Mod-v（SHIFT 按下时
+           放行原生粘贴），经 pasteHandler 注册表路由到应用层处理器
+           （插入逻辑完全幂等——图片引用块/HTML 转换插入收到粘贴指令的
+           视图，单元格解析管线自行放弃块级内容） */
+        pasteShortcutExtension(),
         keymap.of([
           { key: "Mod-Enter", preventDefault: true, run: () => (handlers.oncommit(), true) },
           { key: "Escape", preventDefault: true, run: () => (handlers.oncancel(), true) },
@@ -1051,6 +1085,19 @@ export function createCellEditor(
     }),
   });
 
+  /* 右键菜单（剪切/复制/粘贴/粘贴为纯文本/全选）：单元格编辑器无光标
+     同步，全选用普通选区命令（与 CM6 默认 Mod-a 行为一致） */
+  const detachContextMenu = registerEditorContextMenu(view, {
+    cut: cutLinewise(),
+    selectAll: (v) => {
+      v.dispatch({
+        selection: EditorSelection.range(0, v.state.doc.length),
+        userEvent: "select",
+      });
+      return true;
+    },
+  });
+
   return {
     dom: view.dom,
     setDoc(text: string) {
@@ -1076,6 +1123,7 @@ export function createCellEditor(
       handlers.oncommit();
     },
     destroy() {
+      detachContextMenu();
       cancelAnimationFrame(scrollRaf);
       view.destroy();
     },

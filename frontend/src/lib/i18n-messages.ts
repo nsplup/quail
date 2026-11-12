@@ -54,6 +54,13 @@ export const zhMessages = {
   task: {
     toggle: "切换任务状态",
   },
+  edit: {
+    cut: "剪切",
+    copy: "复制",
+    paste: "粘贴",
+    pastePlain: "粘贴为纯文本",
+    selectAll: "全选",
+  },
   palette: {
     title: "命令面板",
     placeholder: "输入以筛选命令",
@@ -250,6 +257,13 @@ export const enMessages = {
   },
   task: {
     toggle: "Toggle task state",
+  },
+  edit: {
+    cut: "Cut",
+    copy: "Copy",
+    paste: "Paste",
+    pastePlain: "Paste as Plain Text",
+    selectAll: "Select All",
   },
   palette: {
     title: "Command Palette",

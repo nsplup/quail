@@ -1,7 +1,8 @@
 /**
  * 应用层粘贴处理器（App.svelte 启动时经 installAppPasteHandler 注册，
- * CM6 paste 域事件经 pasteHandler 注册表路由至此；主编辑器与单元格
- * 编辑器共用同一处理器，插入一律作用于收到粘贴事件的视图）。
+ * CM6 侧的 Mod-v keydown 拦截与右键菜单 pasteFromMenu 经 pasteHandler
+ * 注册表 / pasteFromMenu 路由至此；主编辑器与单元格编辑器共用同一处理
+ * 器，插入一律作用于触发粘贴的视图）。
  *
  * 剪贴板数据不经前端 ClipboardEvent 读取：统一交由后端完成"探测 + 校验"，
  * 图片字节的落盘延迟到路径守卫通过后由 commitClipboardImage 二次调用后端完成。
@@ -12,8 +13,9 @@
  *     - kind=image & ok=true：先 ensureDocSaved 触发路径守卫（取消 → 中断
  *       本次图片插入，无文件产生），再 commitClipboardImage 落盘，最后
  *       insertImages 插入收件视图；
- *     - kind=html：SHIFT 按下 → 丢弃样式；无 SHIFT → 保留语义映射——两者
- *       均经 insertHtmlAsMarkdown 作用于传入的 cmView；
+ *     - kind=html：plain（菜单"粘贴为纯文本"）→ 直接插入自带 text/plain；
+ *       否则经 htmlToMarkdown 转换（含可转换检测，无可转换标签回退纯
+ *       文本）——均作用于传入的 cmView；
  *     - kind=text：纯文本替换当前选区；
  *     - kind=empty：无消费内容，动作结束。
  *  2. 后端读取 / 落盘超阈值进入 Dialog.progress（取消按钮 + 最小停留
@@ -21,11 +23,17 @@
  *     整条操作链路被打断（取消后结果静默丢弃；落盘取消时暂存槽位保留）。
  *     落盘段仅在实际超阈值时弹框（快路径无感）。
  *
- * SHIFT 业务语义：SHIFT 粘贴 = "无样式纯文本"（仅对 html 分支生效）；
- * SHIFT 状态由独立的键盘事件（keydown/keyup + blur 重置）跟踪，不依赖
- * ClipboardEvent.shiftKey，以覆盖菜单粘贴、程序化触发 paste 等场景。
+ * 粘贴入口：不再是 paste 事件——快捷键层（codemirrorSetup 的 Mod-v
+ * keydown）与右键菜单（pasteFromMenu）显式触发本链路。SHIFT+Mod-v 直接
+ * 走原生默认粘贴（快捷键层放行，不进入本模块）；"粘贴为纯文本"由右键
+ * 菜单承担（plain 模式，html payload 直接取自带 text/plain 插入）。
+ *
+ * HTML 分支：先经 htmlToMarkdown 的可转换检测——剪贴板 HTML 完全不含
+ * 可映射 Markdown 语义（标准 + GFM）的标签时跳过转换输出，回退插入
+ * 纯文本（payload.text），避免"什么都不发生"。
  */
-import type { EditorView } from "@codemirror/view";
+import { EditorSelection } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
 import { get } from "svelte/store";
 import { registerPasteHandler } from "./pasteHandler";
 import { htmlToMarkdown } from "./htmlToMarkdown";
@@ -46,52 +54,25 @@ const READ_TIMEOUT_MS = 300;
 /** 落盘响应等待阈值：超过则进入长耗时任务状态（同读取口径，快路径无感） */
 const SAVE_PROGRESS_DELAY_MS = 300;
 
-/** SHIFT 物理按键状态：独立键盘事件跟踪（菜单/程序化粘贴时 shiftKey 不可靠） */
-let shiftPressed = false;
-let detachKeyboard: (() => void) | null = null;
-
-/** 注册应用层粘贴处理器；返回注销函数（同时清理键盘监听） */
+/** 注册应用层粘贴处理器；返回注销函数 */
 export function installAppPasteHandler(): () => void {
-  detachKeyboard?.();
-
-  const onKeyDown = (e: KeyboardEvent) => {
-    if (e.key === "Shift") shiftPressed = true;
-  };
-  const onKeyUp = (e: KeyboardEvent) => {
-    if (e.key === "Shift") shiftPressed = false;
-  };
-  const onBlur = () => {
-    shiftPressed = false;
-  };
-  window.addEventListener("keydown", onKeyDown, true);
-  window.addEventListener("keyup", onKeyUp, true);
-  window.addEventListener("blur", onBlur);
-
-  const detach = () => {
-    window.removeEventListener("keydown", onKeyDown, true);
-    window.removeEventListener("keyup", onKeyUp, true);
-    window.removeEventListener("blur", onBlur);
-  };
-  detachKeyboard = detach;
-
-  const unregister = registerPasteHandler((event, view) => {
+  return registerPasteHandler((event, view) => {
     const cmView = view as EditorView | null;
     if (!cmView) return false;
-    /* 决策依赖后端往返：同步阶段一律拦截默认粘贴，异步按 payload 行为化 */
+    /* 快捷键层已 preventDefault（原生 paste 事件不再触发）；此处幂等兜底 */
     event.preventDefault();
-    void handlePaste(cmView, shiftPressed);
+    void handlePaste(cmView, false);
     return true;
   });
+}
 
-  return () => {
-    unregister();
-    detach();
-    if (detachKeyboard === detach) detachKeyboard = null;
-  };
+/** 右键菜单粘贴入口：复用 Mod-v 同一条链路（plain=true → 粘贴为纯文本） */
+export function pasteFromMenu(view: EditorView, plain = false): void {
+  void handlePaste(view, plain);
 }
 
 /** 粘贴链路主体：后端读取 → 按 payload 分派（调用方已 preventDefault） */
-async function handlePaste(view: EditorView, shift: boolean): Promise<void> {
+async function handlePaste(view: EditorView, plain: boolean): Promise<void> {
   const tr = get(t);
 
   let payload: ClipboardPayload;
@@ -142,7 +123,7 @@ async function handlePaste(view: EditorView, shift: boolean): Promise<void> {
       await handleImagePayload(payload, view);
       return;
     case "html":
-      insertHtmlAsMarkdown(view, payload.html ?? "", shift);
+      insertHtmlPayload(view, payload.html ?? "", payload.text ?? "", plain);
       return;
     case "text":
       insertPlain(view, payload.text ?? "");
@@ -228,27 +209,60 @@ async function handleImagePayload(
   insertImages([img], view);
 }
 
-/** HTML 转换后替换当前选区（CM6 事务入撤销历史，可整体回退） */
-function insertHtmlAsMarkdown(
-  view: EditorView,
-  html: string,
-  stripStyles: boolean
-): void {
-  const md = htmlToMarkdown(html, stripStyles);
-  if (!md) return;
+/**
+ * 粘贴插入的公共原语：以给定文本替换主选区，光标落到插入文本末尾并
+ * 滚动可见（纯文本 / HTML→Markdown 转换结果共用）。
+ *
+ * CM6 默认的选区映射会把旧选区锚点留在插入文本起点附近，导致"粘贴后
+ * 光标不在末尾"；此处显式设置 selection，并用 scrollIntoView 保证光标
+ * 可见（yMargin 6px 避免贴边）。userEvent 固定为 input.paste，保持撤销
+ * 历史与命令识别的语义。
+ *
+ * 空文本守卫由调用方负责（insertPlain / insertHtmlPayload 各自保留），
+ * 本函数不做空内容短路——空串的 changes 等价于纯删除选区。
+ */
+function replaceSelectionAndMoveCursor(view: EditorView, text: string): void {
   const sel = view.state.selection.main;
+  const pos = sel.from + text.length;
   view.dispatch({
-    changes: { from: sel.from, to: sel.to, insert: md },
+    changes: { from: sel.from, to: sel.to, insert: text },
+    selection: EditorSelection.cursor(pos),
+    effects: EditorView.scrollIntoView(pos, { y: "nearest", yMargin: 6 }),
     userEvent: "input.paste",
   });
+}
+
+/**
+ * HTML payload 插入：
+ * - plain（菜单"粘贴为纯文本"）：直接插入剪贴板自带的 text/plain；
+ * - 否则经 htmlToMarkdown 转换（含可转换检测）；无可转换标签时跳过
+ *   转换输出，回退插入纯文本，避免"什么都不发生"；
+ * - 两条插入路径均走 replaceSelectionAndMoveCursor：光标落到插入文本
+ *   末尾并滚动可见。
+ */
+function insertHtmlPayload(
+  view: EditorView,
+  html: string,
+  plainText: string,
+  plain: boolean
+): void {
+  if (plain) {
+    insertPlain(view, plainText);
+    return;
+  }
+  const res = htmlToMarkdown(html);
+  if (!res.convertible) {
+    /* 无任何可映射 Markdown 语义的标签：跳过输出管线，回退纯文本 */
+    insertPlain(view, plainText);
+    return;
+  }
+  const md = res.markdown;
+  if (!md) return;
+  replaceSelectionAndMoveCursor(view, md);
 }
 
 /** 纯文本替换当前选区（与默认粘贴同位语义；事务入撤销历史） */
 function insertPlain(view: EditorView, text: string): void {
   if (!text) return;
-  const sel = view.state.selection.main;
-  view.dispatch({
-    changes: { from: sel.from, to: sel.to, insert: text },
-    userEvent: "input.paste",
-  });
+  replaceSelectionAndMoveCursor(view, text);
 }

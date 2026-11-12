@@ -87,6 +87,13 @@
     /* 删除列 */
     "table-column-remove":
       '<rect x="3" y="3" width="11" height="18" rx="1.5"></rect><line x1="8.5" y1="3" x2="8.5" y2="21"></line><line x1="16" y1="9" x2="22" y2="15"></line><line x1="22" y1="9" x2="16" y2="15"></line>',
+    /* ---------- 编辑器右键菜单 ---------- */
+    /* 剪切（feather scissors） */
+    scissors:
+      '<circle cx="6" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><line x1="20" y1="4" x2="8.12" y2="15.88"></line><line x1="14.47" y1="14.48" x2="20" y2="20"></line><line x1="8.12" y1="8.12" x2="12" y2="12"></line>',
+    /* 粘贴（feather clipboard） */
+    clipboard:
+      '<path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path><rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>',
   };
 
   /**

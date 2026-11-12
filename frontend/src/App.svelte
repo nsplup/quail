@@ -137,7 +137,8 @@
   /* ---------------- 启动 ---------------- */
   onMount(async () => {
     setLang(currentLang());
-    /* 粘贴行为覆盖：CM6 paste 域事件经 pasteHandler 注册表路由到应用层
+    /* 粘贴行为覆盖：不再监听 paste 事件——CM6 侧 keydown 拦截 Mod-v
+       （SHIFT 按下放行原生粘贴）经 pasteHandler 注册表路由到应用层
        （lib/editor/paste.ts）。App 与编辑器同为单实例，随窗口生命周期
        存续，无需在卸载钩子中注销。 */
     installAppPasteHandler();

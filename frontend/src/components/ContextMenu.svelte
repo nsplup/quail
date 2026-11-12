@@ -8,7 +8,10 @@
    * - 关闭时机：选中项、菜单外按下、Esc、任意容器滚动（capture 捕获预览
    *   面板滚动）、窗口 resize / blur——滚动后菜单与目标脱节，直接关闭；
    * - 菜单内 contextmenu 事件就地拦截：菜单上再右键不闪出系统菜单、
-   *   也不重建菜单（避免关闭→重开抖动）。
+   *   也不重建菜单（避免关闭→重开抖动）；
+   * - 菜单项图标：始终渲染固定尺寸的图标槽位，无 icon 时留空占位，
+   *   保证有/无图标项的 label 起始位置一致（槽位宽 = 图标尺寸，由
+   *   MENU_ICON_SIZE 单一来源驱动）。
    */
   import { tick } from "svelte";
   import Icon from "./Icon.svelte";
@@ -17,6 +20,9 @@
     closeContextMenu,
     type ContextMenuItem,
   } from "../lib/contextmenu";
+
+  /** 菜单图标边长（px）。图标槽位与 Icon 共用此值，避免两处硬编码错位。 */
+  const MENU_ICON_SIZE = 14;
 
   const contextMenuState = $derived($contextMenu$);
 
@@ -120,12 +126,24 @@
           tabindex="-1"
           disabled={item.disabled ?? false}
           onclick={() => itemClick(item)}
+          onmousedown={(ev) => {
+            // mousedown 不转移焦点：编辑器右键菜单的菜单项动作（粘贴/
+            // 剪切/全选）依赖编辑器保持焦点——单元格编辑器失焦即提交，
+            // 焦点一旦移到菜单上，动作将作用于已提交卸载的视图而丢失
+            ev.preventDefault();
+          }}
         >
-          {#if item.icon}
-            <span class="flex-none text-muted"
-              ><Icon name={item.icon} size={14} /></span
-            >
-          {/if}
+          <!-- 图标槽位：始终渲染、固定宽高（= 图标尺寸），无 icon 时留空
+               占位，使有/无图标项的 label 起始位置一致；宽度不因空内容
+               被 flex 收缩，故 flex-none。 -->
+          <span
+            class="flex-none inline-flex items-center justify-center text-muted"
+            style="width: {MENU_ICON_SIZE}px; height: {MENU_ICON_SIZE}px;"
+          >
+            {#if item.icon}
+              <Icon name={item.icon} size={MENU_ICON_SIZE} />
+            {/if}
+          </span>
           <span class="truncate">{item.label}</span>
         </button>
       {/if}
