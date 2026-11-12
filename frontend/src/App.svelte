@@ -30,6 +30,7 @@
   import { insertImageFiles } from "./lib/imageInsert";
   import { installAppPasteHandler } from "./lib/editor/paste";
   import { Dialog } from "./lib/dialog";
+  import { closeBanner } from "./lib/banner";
   import { installGlobalShortcuts, type ShortcutActions } from "./lib/shortcuts";
   import {
     commandPaletteOpen$,
@@ -359,6 +360,9 @@
       if (r.ok) {
         get(editorApi)?.markClean();
         docState.set({ ...st, deleted: false }); // 重建完成：解除删除标记
+        // 绕过横幅的保存重建成功后，deleted 横幅报告的磁盘事实已消解，
+        // 收起可能残留的横幅
+        closeBanner();
       }
     } catch {
       toast.set({ id: Date.now(), msg: get(t)("toast.saveFailed") });

@@ -32,7 +32,7 @@ import { t, locale, setLang } from "./i18n.svelte";
 import { kvGet, kvSet, onConfigReplay, initSettings } from "./settings";
 import { onBackendEvent, newInstance, openDocument, ready as bridgeReady, saveAsViaDialog, startupFiles, type QuailDocState } from "./bridge";
 import { splitSavePath, isValidMode } from "./docpath";
-import { banner$ } from "./banner";
+import { banner$, closeBanner } from "./banner";
 import { resetHighlightWorker } from "./highlight/hl-client";
 
 /* ---------------- 持久化工厂 ---------------- */
@@ -621,6 +621,9 @@ export async function saveFileAs(kind: "save" | "saveAs" = "saveAs"): Promise<vo
       modTime: 0,
     });
     get(editorApi$)?.markClean();
+    // 绕过横幅的直接保存/另存为成功后，横幅报告的磁盘事实已消解
+    // （deleted 标记随 docState$ 更新解除），收起可能残留的横幅
+    closeBanner();
   }
 }
 
@@ -689,11 +692,19 @@ function subscribeFileEvents(): void {
       s && s.path === d.path ? { ...s, content: d.content!, deleted: false } : s
     );
     // 外部修改 → 横幅提示：不再静默重载（会丢弃本地未保存修改），也
-    // 不再按脏状态区分 TOAST——统一由用户显式选择「重新加载 / 忽略」
+    // 不再按脏状态区分 TOAST——统一由用户显式选择「重新加载 / 忽略」。
+    // 文案与按钮组可配置化注入（对齐 Dialog 按钮组口径）
     banner$.set({
-      kind: "modified",
-      path: d.path,
-      onPrimary: () => void reloadDocumentFromDisk(d.path),
+      messageKey: "banner.modified",
+      messageParams: { path: d.path },
+      buttons: [
+        {
+          value: "reload",
+          label: get(t)("banner.reload"),
+          icon: "refresh",
+          run: () => void reloadDocumentFromDisk(d.path),
+        },
+      ],
     });
   });
   void onBackendEvent("file:deleted", (d: { path: string }) => {
@@ -701,11 +712,19 @@ function subscribeFileEvents(): void {
     // 删除前的值（未编辑则仍可直接退出/另存；保存路由到确认重建流程）。
     // 当前未命名文档（无路径）时删除事件不适用，保持原状。
     docState$.update((s) => (s && s.path === d.path ? { ...s, deleted: true } : s));
-    // 原 TOAST 响应取消：改为横幅提示（另存为 / 忽略）
+    // 原 TOAST 响应取消：改为横幅提示（另存为 / 忽略）。
+    // 文案与按钮组可配置化注入（对齐 Dialog 按钮组口径）
     banner$.set({
-      kind: "deleted",
-      path: d.path,
-      onPrimary: () => void saveFileAs(),
+      messageKey: "banner.deleted",
+      messageParams: { path: d.path },
+      buttons: [
+        {
+          value: "saveAs",
+          label: get(t)("common.saveAs"),
+          icon: "floppy",
+          run: () => void saveFileAs(),
+        },
+      ],
     });
   });
 }
