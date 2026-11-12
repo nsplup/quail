@@ -342,11 +342,13 @@
   }
 
   async function copyCode(): Promise<void> {
-    const ok = await writeClipboard(code);
-    if (!ok) return;
-    copied = true;
-    clearTimeout(copiedTimer);
-    copiedTimer = setTimeout(() => (copied = false), 1500);
+    const text = code.endsWith('\n') ? code.slice(0, -1) : code;
+    try {
+      await navigator.clipboard.writeText(text);
+      copied = true;
+      if (copiedTimer !== undefined) clearTimeout(copiedTimer);
+      copiedTimer = setTimeout(() => (copied = false), 1500);
+    } catch {}
   }
 </script>
 

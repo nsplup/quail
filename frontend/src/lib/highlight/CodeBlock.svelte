@@ -38,53 +38,30 @@
   } from "../preview/previewSearch";
 
   let { node }: { node: Element } = $props();
-
-  /* ---------- 复制按钮（默认隐藏，悬停代码块时显示；显隐用 visibility，不用 opacity） ---------- */
-  let copied = $state(false);
-  let copiedTimer: ReturnType<typeof setTimeout> | undefined;
-
-  async function copyCode(): Promise<void> {
-    const ok = await writeClipboard(plain);
-    if (!ok) return;
-    copied = true;
-    if (copiedTimer !== undefined) clearTimeout(copiedTimer);
-    copiedTimer = setTimeout(() => (copied = false), 1500);
-  }
-
-  /** 剪贴板写入：优先 Clipboard API，不可用（如 webkitgtk 旧版）时回退 execCommand */
-  function writeClipboard(text: string): Promise<boolean> {
-    if (navigator.clipboard?.writeText) {
-      return navigator.clipboard.writeText(text).then(
-        () => true,
-        () => writeClipboardFallback(text),
-      );
-    }
-    return Promise.resolve(writeClipboardFallback(text));
-  }
-
-  function writeClipboardFallback(text: string): boolean {
-    try {
-      const ta = document.createElement("textarea");
-      ta.value = text;
-      ta.setAttribute("readonly", "");
-      ta.style.position = "fixed";
-      ta.style.left = "-9999px"; // 移出视口而非 visibility/opacity 隐藏（需可选中）
-      document.body.appendChild(ta);
-      ta.select();
-      const ok = document.execCommand("copy");
-      ta.remove();
-      return ok;
-    } catch {
-      return false;
-    }
-  }
-
   /** pre 的直接子 code 元素（分派方保证存在） */
   const codeEl = $derived(
     node.children.find(
       (c): c is Element => c.type === "element" && c.tagName === "code",
     ),
   );
+  /** 代码原文（code 元素文本；空串不发请求） */
+  const plain = $derived(collectText(codeEl));
+  /** code 元素原有 class（保留 language-x 标注，叠加 hljs） */
+  const codeClass = $derived(["hljs", ...classList(codeEl)].join(" "));
+
+  /* ---------- 复制按钮（默认隐藏，悬停代码块时显示；显隐用 visibility，不用 opacity） ---------- */
+  let copied = $state(false);
+  let copiedTimer: ReturnType<typeof setTimeout> | undefined;
+
+  async function copyCode(): Promise<void> {
+    const text = plain.endsWith('\n') ? plain.slice(0, -1) : plain;
+    try {
+      await navigator.clipboard.writeText(text);
+      copied = true;
+      if (copiedTimer !== undefined) clearTimeout(copiedTimer);
+      copiedTimer = setTimeout(() => (copied = false), 1500);
+    } catch {}
+  }
 
   function classList(el: Element | undefined): string[] {
     const cls = el?.properties?.className;
@@ -111,12 +88,6 @@
     }
     return out;
   }
-
-  /** 代码原文（code 元素文本；空串不发请求） */
-  const plain = $derived(collectText(codeEl));
-
-  /** code 元素原有 class（保留 language-x 标注，叠加 hljs） */
-  const codeClass = $derived(["hljs", ...classList(codeEl)].join(" "));
 
   /* ---------- 模块级同步缓存（虚拟滚动卸载/重挂载避免闪烁） ----------
    * 组件实例状态在重挂载时丢失；异步高亮至少一帧延迟 → 首帧纯文本 → 闪烁。
