@@ -38,7 +38,12 @@
     type CellEditorHandle,
   } from "../editor/codemirrorSetup";
   import { compileMarkdown } from "./markdown-core";
-  import { openContextMenu } from "../contextmenu";
+  import { type ContextMenuItem } from "../contextmenu";
+  import {
+    registerContextMenuTarget,
+    CONTEXT_MENU_PASSTHROUGH,
+    type ResolverResult,
+  } from "../contextmenuRegistry";
   import { t } from "../i18n.svelte";
   import {
     emptyCell,
@@ -678,21 +683,34 @@
   let menuCell = $state<{ r: number; c: number } | null>(null);
   let menuToken = 0;
 
-  function openCellMenu(ev: MouseEvent, r: number, c: number): void {
-    /* 编辑中的单元格：右键落在 CM6 单元格编辑器宿主内时直接放行，
-     * 不 preventDefault / stopPropagation，也不打开表格行/列菜单——
-     * 右键语义（原生菜单 / CM6 扩展菜单）由单元格编辑器自身处理，
-     * 避免表格菜单与编辑器右键链路抢同一个事件。 */
+  /**
+   * 表格右键菜单 resolver（事件由文档根的全局分发器路由，本组件不再
+   * 在模板上监听 contextmenu；preventDefault 与坐标由分发器统一处理）：
+   * - 从事件目标就近定位 th/td（data-cell-r/c 标注行列下标）；
+   * - 编辑中的单元格：右键落在 CM6 单元格编辑器宿主内时返回 null——
+   *   编辑器自身已注册全局菜单且注册目标更内层，分发器会优先路由到
+   *   编辑器菜单；此处兜底防御。
+   */
+  function resolveCellMenu(
+    ev: MouseEvent,
+    r: number,
+    c: number,
+  ): ResolverResult {
     if (
       editing &&
       editorHost &&
       ev.target instanceof Node &&
       editorHost.contains(ev.target)
-    ) return;
-    ev.preventDefault();
-    ev.stopPropagation();
+    )
+      return null; // 编辑中单元格：交给更内层的 CM6 编辑器菜单
+
     const s = ensureSource();
-    if (!s) return;
+    if (!s) {
+      /* 静态表格（span / nested / popover / attrs）：本表格不处理，
+       交还外层（预览区）菜单；非静态但定位失败（dirty / 漂移）：
+       保持阻止，避免误落到外层菜单。 */
+      return isStatic(node).static ? CONTEXT_MENU_PASSTHROUGH : null;
+    }
     const rows = s.rows;
     /* 当前列数快照（$derived 在事件处理器中读取为当前值）；
      * 行列操作统一用这份快照，保证一次菜单动作内 cols 不变 */
@@ -714,101 +732,117 @@
     };
 
     const token = ++menuToken;
-    openContextMenu(
-      ev.clientX,
-      ev.clientY,
-      [
-        { kind: "header", label: $t("table.row") },
-        {
-          icon: "table-row-plus-before",
-          label: $t("table.rowAbove"),
-          action: apply((t) => insertRow(t.rows, r, cols)),
-        },
-        {
-          icon: "table-row-plus-after",
-          label: $t("table.rowBelow"),
-          action: apply((t) => insertRow(t.rows, r + 1, cols)),
-        },
-        {
-          icon: "table-arrow-up",
-          label: $t("table.rowMoveUp"),
-          disabled: r === 0,
-          action: apply((t) => moveRow(t.rows, r, -1)),
-        },
-        {
-          icon: "table-arrow-down",
-          label: $t("table.rowMoveDown"),
-          disabled: r === rows.length - 1,
-          action: apply((t) => moveRow(t.rows, r, 1)),
-        },
-        {
-          icon: "table-row-copy",
-          label: $t("table.rowCopy"),
-          action: apply((t) => copyRow(t.rows, r)),
-        },
-        {
-          icon: "table-row-remove",
-          label: $t("table.rowDelete"),
-          disabled: !canDelRow,
-          action: apply((t) => deleteRow(t.rows, r)),
-        },
-        { kind: "separator", label: "" },
-        { kind: "header", label: $t("table.col") },
-        {
-          icon: "table-column-plus-before",
-          label: $t("table.colLeft"),
-          action: apply((t) =>
-            insertCol(t.rows, t.aligns as (TableAlign | null)[], c),
-          ),
-        },
-        {
-          icon: "table-column-plus-after",
-          label: $t("table.colRight"),
-          action: apply((t) =>
-            insertCol(t.rows, t.aligns as (TableAlign | null)[], c + 1),
-          ),
-        },
-        {
-          icon: "table-arrow-left",
-          label: $t("table.colMoveLeft"),
-          disabled: c === 0,
-          action: apply((t) =>
-            moveCol(t.rows, t.aligns as (TableAlign | null)[], c, -1),
-          ),
-        },
-        {
-          icon: "table-arrow-right",
-          label: $t("table.colMoveRight"),
-          disabled: c === cols - 1,
-          action: apply((t) =>
-            moveCol(t.rows, t.aligns as (TableAlign | null)[], c, 1),
-          ),
-        },
-        {
-          icon: "table-column-copy",
-          label: $t("table.colCopy"),
-          action: apply((t) =>
-            copyCol(t.rows, t.aligns as (TableAlign | null)[], c),
-          ),
-        },
-        {
-          icon: "table-column-remove",
-          label: $t("table.colDelete"),
-          disabled: !canDelCol,
-          action: apply((t) =>
-            deleteCol(t.rows, t.aligns as (TableAlign | null)[], c),
-          ),
-        },
-      ],
+    const items: ContextMenuItem[] = [
+      { kind: "header", label: $t("table.row") },
       {
+        icon: "table-row-plus-before",
+        label: $t("table.rowAbove"),
+        action: apply((t) => insertRow(t.rows, r, cols)),
+      },
+      {
+        icon: "table-row-plus-after",
+        label: $t("table.rowBelow"),
+        action: apply((t) => insertRow(t.rows, r + 1, cols)),
+      },
+      {
+        icon: "table-arrow-up",
+        label: $t("table.rowMoveUp"),
+        disabled: r === 0,
+        action: apply((t) => moveRow(t.rows, r, -1)),
+      },
+      {
+        icon: "table-arrow-down",
+        label: $t("table.rowMoveDown"),
+        disabled: r === rows.length - 1,
+        action: apply((t) => moveRow(t.rows, r, 1)),
+      },
+      {
+        icon: "table-row-copy",
+        label: $t("table.rowCopy"),
+        action: apply((t) => copyRow(t.rows, r)),
+      },
+      {
+        icon: "table-row-remove",
+        label: $t("table.rowDelete"),
+        disabled: !canDelRow,
+        action: apply((t) => deleteRow(t.rows, r)),
+      },
+      { kind: "separator", label: "" },
+      { kind: "header", label: $t("table.col") },
+      {
+        icon: "table-column-plus-before",
+        label: $t("table.colLeft"),
+        action: apply((t) =>
+          insertCol(t.rows, t.aligns as (TableAlign | null)[], c),
+        ),
+      },
+      {
+        icon: "table-column-plus-after",
+        label: $t("table.colRight"),
+        action: apply((t) =>
+          insertCol(t.rows, t.aligns as (TableAlign | null)[], c + 1),
+        ),
+      },
+      {
+        icon: "table-arrow-left",
+        label: $t("table.colMoveLeft"),
+        disabled: c === 0,
+        action: apply((t) =>
+          moveCol(t.rows, t.aligns as (TableAlign | null)[], c, -1),
+        ),
+      },
+      {
+        icon: "table-arrow-right",
+        label: $t("table.colMoveRight"),
+        disabled: c === cols - 1,
+        action: apply((t) =>
+          moveCol(t.rows, t.aligns as (TableAlign | null)[], c, 1),
+        ),
+      },
+      {
+        icon: "table-column-copy",
+        label: $t("table.colCopy"),
+        action: apply((t) =>
+          copyCol(t.rows, t.aligns as (TableAlign | null)[], c),
+        ),
+      },
+      {
+        icon: "table-column-remove",
+        label: $t("table.colDelete"),
+        disabled: !canDelCol,
+        action: apply((t) =>
+          deleteCol(t.rows, t.aligns as (TableAlign | null)[], c),
+        ),
+      },
+    ];
+    menuCell = { r, c };
+    return {
+      items,
+      options: {
         onClosed: () => {
           if (menuToken === token) menuCell = null;
         },
       },
-    );
-
-    menuCell = { r, c };
+    };
   }
+
+  /* 表格元素整体注册一次（行列下标从事件目标的 data-cell-r/c 解析）；
+   * 编辑中的单元格由更内层的 CM6 编辑器注册接管（见 resolveCellMenu） */
+  $effect(() => {
+    const el = tableEl;
+    if (!el) return;
+    return registerContextMenuTarget(el, (ev) => {
+      const cell =
+        ev.target instanceof Element
+          ? ev.target.closest<HTMLElement>("th[data-cell-r], td[data-cell-r]")
+          : null;
+      if (!cell || !el.contains(cell)) return CONTEXT_MENU_PASSTHROUGH;
+      const r = Number(cell.getAttribute("data-cell-r"));
+      const c = Number(cell.getAttribute("data-cell-c"));
+      if (!Number.isInteger(r) || !Number.isInteger(c)) return null;
+      return resolveCellMenu(ev, r, c);
+    });
+  });
 
   /* ---------------- 模板辅助 ---------------- */
 
@@ -832,8 +866,9 @@
               style={alignStyle(cell)}
               class:md-hl-col={menuCell?.c === ci}
               class:md-cell-active={editing?.r === row.idx && editing?.c === ci}
+              data-cell-r={row.idx}
+              data-cell-c={ci}
               onclick={(ev) => startEdit(row.idx, ci, ev)}
-              oncontextmenu={(ev) => openCellMenu(ev, row.idx, ci)}
             >
               {#if editing && editing.r === row.idx && editing.c === ci}
                 <!-- CM6 单元格编辑器（冻结复用实例）的挂载宿主 -->
@@ -867,8 +902,9 @@
               style={alignStyle(cell)}
               class:md-hl-col={menuCell?.c === ci}
               class:md-cell-active={editing?.r === row.idx && editing?.c === ci}
+              data-cell-r={row.idx}
+              data-cell-c={ci}
               onclick={(ev) => startEdit(row.idx, ci, ev)}
-              oncontextmenu={(ev) => openCellMenu(ev, row.idx, ci)}
             >
               {#if editing && editing.r === row.idx && editing.c === ci}
                 <!-- CM6 单元格编辑器（冻结复用实例）的挂载宿主 -->

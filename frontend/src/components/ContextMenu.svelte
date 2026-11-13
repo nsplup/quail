@@ -23,6 +23,7 @@
     closeContextMenu,
     type ContextMenuItem,
   } from "../lib/contextmenu";
+  import { setContextMenuRootElement } from "../lib/contextmenuRegistry";
 
   /** 菜单图标边长（px）。图标槽位与 Icon 共用此值，避免两处硬编码错位。 */
   const MENU_ICON_SIZE = 14;
@@ -32,6 +33,12 @@
   let menuEl = $state<HTMLDivElement | null>(null);
   /** 收敛后的实际渲染位置（首帧用光标坐标渲染，实测后更新） */
   let pos = $state({ x: -9999, y: -9999 });
+
+  // 菜单根元素上报给全局分发器（lib/contextmenuRegistry）：菜单自身
+  // 区域内的右键只阻止默认行为，不重建、不关闭
+  $effect(() => {
+    setContextMenuRootElement(menuEl);
+  });
 
   // 打开后：先落到光标坐标，实测尺寸后向视口内收敛并聚焦首个可用项
   $effect(() => {

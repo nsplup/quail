@@ -1,5 +1,18 @@
 <script lang="ts">
-  /** 带加减按钮的数字输入组件（设置面板字号等） */
+  /**
+   * 带加减按钮的数字输入组件（设置面板字号等）。
+   *
+   * - 输入栏为自定义输入框核心（lib/input/textInput.ts，contenteditable
+   *   实现）：继承全局右键菜单（剪切/复制/粘贴/全选）与选区监听；
+   * - 数字过滤：beforeinput 拦截非数字/小数点字符（与原生 number 输入
+   *   的键入过滤同口径）；粘贴/程序化插入的非数字内容在提交时回退；
+   * - 提交口径与旧实现一致：Enter / 失焦时 Number(text) → NaN 回退显示
+   *   原值，否则 clamp + 0.1 步进取整后经 onchange 提交；
+   * - value 受控同步：prop 与内容不同才回写（相同跳过，防光标跳动）。
+   */
+  import { untrack } from "svelte";
+  import { TextInputController } from "../lib/input/textInput";
+
   let {
     value,
     min = 1,
@@ -24,6 +37,56 @@
   function bump(dir: 1 | -1): void {
     commit(clamp((value ?? min) + dir * step));
   }
+
+  let hostEl = $state<HTMLDivElement | null>(null);
+  let ctrl: TextInputController | null = null;
+
+  /* 控制器随宿主挂载创建、卸载销毁（创建时快照初值，不作为依赖） */
+  $effect(() => {
+    const host = hostEl;
+    if (!host) return;
+    const c = untrack(
+      () =>
+        new TextInputController({
+          value: String(value ?? min),
+          ariaLabel: "number",
+          onbeforeinput: (ev) => {
+            /* 数字过滤：仅放行数字与小数点的键入 */
+            if (
+              ev.inputType === "insertText" &&
+              ev.data &&
+              !/[0-9.]/.test(ev.data)
+            ) {
+              ev.preventDefault();
+              return true;
+            }
+            return false;
+          },
+          onchange: (raw) => {
+            const text = raw.trim();
+            const n = Number(text);
+            if (!text || !Number.isFinite(n)) {
+              /* 非法内容回退显示当前值（与原生 number 行为同口径） */
+              c.setValue(String(value));
+              return;
+            }
+            commit(n);
+          },
+        }),
+    );
+    host.append(c.el);
+    ctrl = c;
+    return () => {
+      c.destroy();
+      ctrl = null;
+    };
+  });
+
+  /* 外部值 → 内容同步（内容相同则跳过） */
+  $effect(() => {
+    const v = String(value);
+    if (ctrl && v !== ctrl.getValue()) ctrl.setValue(v);
+  });
 </script>
 
 <div class="num-in flex items-center rounded-lg border border-line bg-inset">
@@ -33,18 +96,13 @@
     disabled={value <= min}
     onclick={() => bump(-1)}
   >
-    −
+    -
   </button>
-  <input
-    class="h-7 w-10 border-x border-line bg-transparent text-center text-xs text-fg outline-none"
-    type="number"
-    inputmode="decimal"
-    {min}
-    {max}
-    {step}
-    {value}
-    onchange={(e) => commit(Number((e.target as HTMLInputElement).value))}
-  />
+  <div
+    class="ti-host h-7 w-10 border-x border-line bg-transparent text-center text-xs text-fg outline-none"
+    bind:this={hostEl}
+  >
+  </div>
   <button
     class="flex h-7 w-7 flex-none items-center justify-center text-sm text-muted transition-colors hover:text-fg disabled:opacity-40"
     aria-label="increase"
@@ -56,13 +114,10 @@
 </div>
 
 <style>
-  .num-in input::-webkit-outer-spin-button,
-  .num-in input::-webkit-inner-spin-button {
-    -webkit-appearance: none;
-    margin: 0;
-  }
-  .num-in input {
-    -moz-appearance: textfield;
-    appearance: textfield;
+  /* 内容元素行高与 28px 内容区对齐（垂直居中，等价原 input 视觉） */
+  .ti-host :global(.ti-core) {
+    height: 100%;
+    line-height: 28px;
+    caret-color: currentColor;
   }
 </style>

@@ -51,6 +51,7 @@ import {
   type SearchSource,
 } from "../preview/previewSearch";
 import { footnoteList$ } from "../markdown/reference-store";
+import { createTextInput, type TextInputController } from "../input/textInput";
 
 /** 面板开合状态（App 侧联动编辑区 scrollMargins 用） */
 export const searchPanelOpen$ = writable(false);
@@ -184,8 +185,10 @@ let previewCur = 0;
 let regexUnsafe: RegexSafetyIssue | null = null;
 
 /* ---- 面板内部 DOM 引用 ---- */
-let findInput!: HTMLInputElement;
-let replaceInput!: HTMLInputElement;
+/* 查找/替换栏：自定义输入框核心（contenteditable；自带选区监听与
+   全局右键菜单，替代原生 <input>，见 lib/input/textInput.ts） */
+let findInput!: TextInputController;
+let replaceInput!: TextInputController;
 let caseBtn!: HTMLButtonElement;
 let regexBtn!: HTMLButtonElement;
 let wordBtn!: HTMLButtonElement;
@@ -228,8 +231,9 @@ export function getPreviewSelectionText(): string | null {
   if (!elx || !elx.closest(".pane-preview")) return null;
   // 排除预览区内的可编辑控件，避免误取输入框选区
   if (elx.closest("input, textarea")) return null;
-  const text = sel.toString();
-  if (!text || text.includes("\n")) return null;
+  /* 查找框是单行输入：换行统一压成空格（\r\n 视为一个换行） */
+  const text = sel.toString().replace(/\r\n|\r|\n/g, " ");
+  if (!text) return null;
   return text;
 }
 
@@ -251,7 +255,7 @@ export function openSearchPanelFloating(opts?: { pull?: string | null }): void {
   }
   const pull = opts?.pull ?? null;
   if (pull) {
-    findInput.value = pull;
+    findInput.setValue(pull);
     applyQuery();
   }
   updateStatusDisplay();
@@ -328,8 +332,8 @@ function toggleSource(): void {
 
 function buildQuery(): SearchQuery {
   return new SearchQuery({
-    search: findInput.value,
-    replace: replaceInput.value,
+    search: findInput.getValue(),
+    replace: replaceInput.getValue(),
     caseSensitive: globalCaseSensitive,
     regexp: globalRegexp,
     wholeWord: globalWholeWord,
@@ -354,7 +358,7 @@ function syncQueryToEditor(): void {
 /** 重算面板正则安全校验结论（仅正则模式有意义） */
 function updateRegexSafety(): void {
   regexUnsafe = checkRegexSafety({
-    search: findInput.value,
+    search: findInput.getValue(),
     caseSensitive: globalCaseSensitive,
     regexp: globalRegexp,
     wholeWord: globalWholeWord,
@@ -408,7 +412,7 @@ function updateEditorStats(): void {
 
 function updatePreviewMatches(): void {
   const { re, bad, unsafe } = buildPreviewPattern({
-    search: findInput.value,
+    search: findInput.getValue(),
     caseSensitive: globalCaseSensitive,
     regexp: globalRegexp,
     wholeWord: globalWholeWord,
@@ -427,7 +431,7 @@ function updatePreviewMatches(): void {
 
 /** 跨行结果提示文本：无结果/异常时单行居中，有匹配项时两行 + 分隔线 */
 function updateStatusDisplay(): void {
-  const q = findInput.value;
+  const q = findInput.getValue();
   if (!q) {
     setStatusNote(ph("search.noResults"));
     return;
@@ -487,7 +491,7 @@ function pushPreviewState(): void {
     return;
   }
   const { re } = buildPreviewPattern({
-    search: findInput.value,
+    search: findInput.getValue(),
     caseSensitive: globalCaseSensitive,
     regexp: globalRegexp,
     wholeWord: globalWholeWord,
@@ -511,7 +515,7 @@ function pushPreviewState(): void {
 
 function gotoMatch(delta: number): void {
   if (source === "editor") {
-    if (!view || !findInput.value) return;
+    if (!view || !findInput.getValue()) return;
     if (delta > 0) findNext(view);
     else findPrevious(view);
     updateEditorStats();
@@ -550,11 +554,13 @@ export function notifyEditorUpdate(_u: ViewUpdate): void {
  */
 export function handleEditorModF(): boolean {
   const sel = view?.state.selection.main;
-  const text =
+  const raw =
     sel && !sel.empty && view
       ? view.state.doc.sliceString(sel.from, sel.to)
       : "";
-  openSearchPanelFloating({ pull: text && !text.includes("\n") ? text : null });
+  /* 单行化：换行压成空格（\r\n 视为一个换行），与查找框单行口径一致 */
+  const text = raw.replace(/\r\n|\r|\n/g, " ");
+  openSearchPanelFloating({ pull: text ? text : null });
   return true;
 }
 
@@ -573,9 +579,25 @@ function buildPanel(): void {
   const inputs = el("div", "sp-inputs");
 
   const findBar = el("div", "sp-bar");
-  findInput = el("input", "sp-input");
-  findInput.type = "text";
-  findInput.spellcheck = false;
+  findInput = createTextInput({
+    className: "sp-input",
+    spellcheck: false,
+    oninput: () => applyQuery(),
+    onkeydown: (e) => {
+      if (get(confirm$)) return false;
+      if (e.key === "Enter") {
+        e.preventDefault();
+        gotoMatch(e.shiftKey ? -1 : 1);
+        return true;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        closeSearchPanelFloating();
+        return true;
+      }
+      return false;
+    },
+  });
   const conds = el("div", "sp-conds");
   caseBtn = el("button", "sp-cond", "");
   caseBtn.type = "button";
@@ -587,13 +609,31 @@ function buildPanel(): void {
   wordBtn.type = "button";
   wordBtn.innerHTML = ICONS.wholeWord;
   conds.append(caseBtn, regexBtn, wordBtn);
-  findBar.append(findInput, conds);
+  findBar.append(findInput.el, conds);
 
   replaceBar = el("div", "sp-bar sp-replace-bar");
-  replaceInput = el("input", "sp-input");
-  replaceInput.type = "text";
-  replaceInput.spellcheck = false;
-  replaceBar.append(replaceInput);
+  replaceInput = createTextInput({
+    className: "sp-input",
+    spellcheck: false,
+    oninput: () => {
+      syncQueryToEditor();
+    },
+    onkeydown: (e) => {
+      if (get(confirm$)) return false;
+      if (e.key === "Enter") {
+        e.preventDefault();
+        if (source === "editor" && view) replaceNext(view);
+        return true;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        closeSearchPanelFloating();
+        return true;
+      }
+      return false;
+    },
+  });
+  replaceBar.append(replaceInput.el);
 
   inputs.append(findBar, replaceBar);
 
@@ -640,31 +680,7 @@ function buildPanel(): void {
   const app = document.querySelector('#app-root') as Element;
   app.appendChild(panelEl);
 
-  /* ---- 行为 ---- */
-  findInput.addEventListener("input", applyQuery);
-  findInput.addEventListener("keydown", (e) => {
-    if (get(confirm$)) return;
-    if (e.key === "Enter") {
-      e.preventDefault();
-      gotoMatch(e.shiftKey ? -1 : 1);
-    } else if (e.key === "Escape") {
-      e.preventDefault();
-      closeSearchPanelFloating();
-    }
-  });
-  replaceInput.addEventListener("input", () => {
-    syncQueryToEditor();
-  });
-  replaceInput.addEventListener("keydown", (e) => {
-    if (get(confirm$)) return;
-    if (e.key === "Enter") {
-      e.preventDefault();
-      if (source === "editor" && view) replaceNext(view);
-    } else if (e.key === "Escape") {
-      e.preventDefault();
-      closeSearchPanelFloating();
-    }
-  });
+  /* ---- 行为：输入框的 input / keydown 已在 createTextInput 注册 ---- */
 
   caseBtn.addEventListener("click", () => {
     globalCaseSensitive = !globalCaseSensitive;
@@ -705,8 +721,8 @@ function syncCaseBtnState(): void {
 /** 来源变化后的 UI 联动 */
 function applySourceUI(): void {
   const preview = source === "preview";
-  findInput.placeholder = preview ? ph("search.findInPreview") : ph("search.findInEditor");
-  replaceInput.disabled = preview;
+  findInput.setPlaceholder(preview ? ph("search.findInPreview") : ph("search.findInEditor"));
+  replaceInput.setDisabled(preview);
   replaceBar.classList.toggle("sp-disabled", preview);
   replaceOneBtn.disabled = preview;
   replaceAllBtn.disabled = preview;
@@ -716,14 +732,14 @@ function applySourceUI(): void {
 }
 
 function applyI18n(): void {
-  findInput.placeholder = source === "preview" ? ph("search.findInPreview") : ph("search.findInEditor");
+  findInput.setPlaceholder(source === "preview" ? ph("search.findInPreview") : ph("search.findInEditor"));
   caseBtn.title = ph("search.matchCase");
   regexBtn.title = ph("search.regexp");
   wordBtn.title = ph("search.wholeWord");
   prevBtn.title = ph("search.prev");
   nextBtn.title = ph("search.next");
   closeBtn.title = ph("search.close");
-  replaceInput.placeholder = ph("search.replace");
+  replaceInput.setPlaceholder(ph("search.replace"));
   replaceOneBtn.title = ph("search.replaceOne");
   replaceAllBtn.title = ph("search.replaceAll");
   srcBtn.title = ph("search.switchSource");

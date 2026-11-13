@@ -24,6 +24,7 @@
 }
 
 @layer base {
+
   /* 与 global.css 中 ::-webkit-scrollbar { height: 6px } 保持一致；
     用变量统一，避免两处硬编码漂移 */
   :root {
@@ -478,8 +479,28 @@
   font-size: 12.5px;
 }
 
-.sp-float .sp-input::placeholder {
+/* contenteditable 版：flex-basis:auto 按 max-content 计算，长文本时
+   把条件按钮组挤出容器；改用 0 基准 + grow 填充剩余空间 */
+.sp-float .sp-input.ti-core {
+  flex: 1 1 0;
+  width: 0;
+  /* 部分 WebKit 版本需要显式零宽才彻底压住 auto 尺寸 */
+  line-height: 26px;
+}
+
+/* 条件按钮组固定尺寸，不参与收缩 */
+.sp-float .sp-conds {
+  flex: none;
+}
+
+.sp-float .sp-input.ti-core[data-empty="true"]::before {
+  content: attr(data-placeholder);
   color: var(--ui-muted);
+  pointer-events: none;
+}
+
+.sp-float .sp-input.ti-core[data-disabled="true"] {
+  pointer-events: none;
 }
 
 /* 匹配条件按钮：去掉按钮样式集成到查找栏中，不应用成组样式；

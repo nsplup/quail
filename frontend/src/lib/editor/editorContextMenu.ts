@@ -1,10 +1,12 @@
 /**
  * 编辑器右键菜单（主编辑器与单元格编辑器共用）。
  *
- * 复用全局右键菜单体系（lib/contextmenu 状态 + App 层挂载的
- * ContextMenu.svelte 渲染，自带外点 / Esc / 滚动 / 失焦关闭与视口边缘
- * 收敛），在 EditorView.dom 上注册 contextmenu 监听并组装编辑命令菜单：
- * 剪切、复制、粘贴、粘贴为纯文本、分隔线、全选。
+ * 复用全局右键菜单体系：lib/contextmenu 状态 + App 层挂载的
+ * ContextMenu.svelte 渲染（自带外点 / Esc / 滚动 / 失焦关闭与视口边缘
+ * 收敛）。本模块不再自行监听 contextmenu 事件，改为向全局注册表
+ * （lib/contextmenuRegistry）注册 EditorView.dom——事件由文档根的统一
+ * 分发器路由（最内层注册目标优先），并组装编辑命令菜单：剪切、复制、
+ * 粘贴、粘贴为纯文本、分隔线、全选。
  *
  * 剪切 / 全选命令由调用方注入（两个编辑器差异点：主编辑器用抑制光标
  * 同步的包装版本，单元格编辑器用普通命令）；粘贴走 lib/editor/paste.ts
@@ -17,7 +19,8 @@
 import { EditorSelection, EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { get } from "svelte/store";
-import { openContextMenu, type ContextMenuItem } from "../contextmenu";
+import { registerContextMenuTarget } from "../contextmenuRegistry";
+import { type ContextMenuItem } from "../contextmenu";
 import { t } from "../i18n.svelte";
 import { pasteFromMenu } from "./paste";
 
@@ -60,9 +63,7 @@ export function registerEditorContextMenu(
   view: EditorView,
   options: EditorContextMenuOptions
 ): () => void {
-  const onContextMenu = (ev: MouseEvent): void => {
-    ev.preventDefault();
-    ev.stopPropagation(); // 不冒泡：避免外层（表格行列菜单等）重复响应
+  return registerContextMenuTarget(view.dom, () => {
     const tr = get(t);
     /* 剪切 / 粘贴需要可写视图；复制 / 全选在只读视图下依然可用 */
     const editable =
@@ -116,8 +117,7 @@ export function registerEditorContextMenu(
     // （滚动目标 view.scrollDOM 在锚点子树内）仍会关闭菜单；光标行上报
     // 触发的预览面板联动滚动（editor→preview 滚动同步）与编辑器无关，
     // 不再误关菜单。主编辑器与单元格编辑器共用本注册函数，一处覆盖。
-    openContextMenu(ev.clientX, ev.clientY, items, { anchor: view.dom });
-  };
-  view.dom.addEventListener("contextmenu", onContextMenu);
-  return () => view.dom.removeEventListener("contextmenu", onContextMenu);
+    // preventDefault / 坐标由全局分发器统一处理。
+    return { items, options: { anchor: view.dom } };
+  });
 }

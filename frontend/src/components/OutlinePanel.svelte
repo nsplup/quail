@@ -1,5 +1,6 @@
 <script lang="ts">
   import Icon from "./Icon.svelte";
+  import TextInput from "./TextInput.svelte";
   import VirtualList from "../lib/virtual/VirtualList.svelte";
   import type { VirtualListHandle } from "../lib/virtual/VirtualList.svelte";
     import { t } from "../lib/i18n.svelte";
@@ -66,12 +67,12 @@
     </button>
   </header>
   <div class="flex-none px-3 py-2">
-    <input
-      type="text"
+    <TextInput
       placeholder={$t("outline.filter")}
-      bind:value={query}
-      aria-label={$t("outline.title")}
-      class="w-full rounded-lg border border-line bg-inset px-2.5 py-1.5 text-xs text-fg outline-none transition-colors placeholder:text-muted focus:border-accent"
+      ariaLabel={$t("outline.title")}
+      oninput={(v) => (query = v)}
+      cls="w-full rounded-lg border border-line bg-inset px-2.5 py-1.5 text-xs text-fg outline-none transition-colors focus-within:border-accent"
+      lineHeight="normal"
     />
   </div>
   <div class="min-h-0 flex-1">

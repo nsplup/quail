@@ -283,6 +283,7 @@
                 <TextInput
                   value={$fontEditor}
                   placeholder={EDITOR_FONT_FALLBACK}
+                  mono
                   onchange={(v) => fontEditor.set(v)}
                 />
                 <div class="mb-2 mt-3 flex items-center justify-between">
@@ -303,6 +304,7 @@
                 <TextInput
                   value={$fontPreview}
                   placeholder={PREVIEW_FONT_FALLBACK}
+                  mono
                   onchange={(v) => fontPreview.set(v)}
                 />
                 <div class="mb-2 mt-3 flex items-center justify-between">

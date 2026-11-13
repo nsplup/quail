@@ -56,6 +56,8 @@
     type PreviewMatchInfo,
   } from "../preview/previewSearch";
   import { suppressMiddleClick } from "../../lib/middleClick";
+  import { registerContextMenuTarget } from "../../lib/contextmenuRegistry";
+  import { t } from "../../lib/i18n.svelte";
 
   let {
     segments,
@@ -91,6 +93,91 @@
   /** VirtualList 实例：PreviewApi 与可视区探测的稳定入口 */
   let vlist = $state<VirtualListHandle | null>(null);
   let raf = 0;
+
+  /* ---------- 预览区右键菜单（全局注册，分发见 lib/contextmenuRegistry） ----------
+   * 菜单项仅「复制」：选区必须来自预览区（anchor/focus 均落在
+   * .pane-preview 内），无选区时该项置灰。不限制单行——与
+   * searchPanel.getPreviewSelectionText（供 Ctrl+F 拉取、限单行）口径不同，
+   * 复制进剪切板应取完整选区。选区评估在右键分发时刻进行；
+   * 复制动作用选区快照文本（navigator.clipboard 不依赖焦点）。
+   * 预览区内的图片/表格/单元格编辑器菜单因注册目标更内层而优先。 */
+  /** 选区快照：同时准备 text/html 与 text/plain */
+  interface PreviewSelectionSnapshot {
+    html: string;
+    text: string;
+  }
+
+  function snapshotPreviewSelection(): PreviewSelectionSnapshot | null {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
+    const root = paneEl;
+    if (!root) return null;
+
+    const inside = (n: Node | null): boolean =>
+      !!n && root.contains(n.nodeType === Node.TEXT_NODE ? n.parentNode : n);
+    if (!inside(sel.anchorNode) || !inside(sel.focusNode)) return null;
+
+    const range = sel.getRangeAt(0);
+
+    /* text/plain：沿用现有口径（完整选区、不限单行） */
+    const text = sel.toString();
+
+    /* text/html：克隆选区片段并用临时容器序列化 */
+    const fragment = range.cloneContents();
+    const wrapper = document.createElement("div");
+    wrapper.appendChild(fragment);
+    const html = wrapper.innerHTML;
+
+    if (!text && !html) return null;
+    return { html, text };
+  }
+
+  async function writePreviewSelection(
+    snap: PreviewSelectionSnapshot,
+  ): Promise<void> {
+    try {
+      if (
+        typeof ClipboardItem !== "undefined" &&
+        typeof navigator.clipboard?.write === "function"
+      ) {
+        const item = new ClipboardItem({
+          "text/html": new Blob([snap.html], { type: "text/html" }),
+          "text/plain": new Blob([snap.text], { type: "text/plain" }),
+        });
+        await navigator.clipboard.write([item]);
+        return;
+      }
+    } catch {
+      /* ClipboardItem / write 不可用或被拒绝，降级到纯文本 */
+    }
+    try {
+      await navigator.clipboard.writeText(snap.text);
+    } catch {
+      /* 剪贴板权限失败静默（与现有口径一致） */
+    }
+  }
+
+  $effect(() => {
+    const el = paneEl;
+    if (!el) return;
+    return registerContextMenuTarget(el, () => {
+      const snap = snapshotPreviewSelection();
+      return {
+        items: [
+          {
+            icon: "copy",
+            label: get(t)("edit.copy"),
+            disabled: !snap,
+            action: () => {
+              if (!snap) return;
+              void writePreviewSelection(snap);
+            },
+          },
+        ],
+        options: { anchor: el },
+      };
+    });
+  });
 
   function scrollEl(): HTMLElement | null {
     return paneEl?.querySelector<HTMLElement>(".preview-scroll") ?? null;

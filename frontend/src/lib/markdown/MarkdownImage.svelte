@@ -81,7 +81,8 @@
   import { get } from "svelte/store";
   import { t } from "../i18n.svelte";
   import { docState$, toast$ } from "../stores";
-  import { openContextMenu } from "../contextmenu";
+  import { type ContextMenuItem } from "../contextmenu";
+  import { registerContextMenuTarget } from "../contextmenuRegistry";
   import {
     imageFilePath,
     openFileWithSystem,
@@ -300,45 +301,47 @@
   }
 
   /**
-   * 右键菜单入口（原生 contextmenu 监听，见 $effect）：
-   * - 仅 loaded 态拦截并弹出自定义菜单（复制 → 刷新 → 另存为 → 外部打开）；
-   * - 其余状态不拦截不阻止默认行为（加载中/失败态无自定义菜单可用）；
-   * - stopPropagation：预览面板滚动根的委托监听不受影响，且右键不触发
-   *   外层链接的任何行为。
+   * 右键菜单（向全局注册表注册，事件由文档根统一分发，见
+   * lib/contextmenuRegistry；本组件不再自行监听 contextmenu）：
+   * - 仅 loaded 态弹出自定义菜单（复制 → 刷新 → 另存为 → 外部打开），
+   *   开启条件（loaded 态 + 有 imgSrc）保留在 resolver 内、分发时刻求值；
+   * - 其余状态 resolver 返回 null：全局分发器仍会阻止默认行为，但无
+   *   自定义菜单可用（加载中/失败态）。
    */
-  function imgContextMenuHandler(ev: MouseEvent): void {
-    if (status !== "loaded" || !imgSrc) return; // 非 loaded 态交还默认行为
-    ev.stopPropagation();
-    ev.preventDefault();
-    openContextMenu(ev.clientX, ev.clientY, [
-      {
-        icon: "copy",
-        label: get(t)("preview.imageCopy"),
-        action: () => void copyImage(),
-      },
-      {
-        icon: "refresh",
-        label: get(t)("preview.imageReload"),
-        action: doReload,
-      },
-      {
-        icon: "floppy",
-        label: get(t)("preview.imageSaveAs"),
-        action: () => void saveImageAs(),
-      },
-      {
-        icon: "external",
-        label: get(t)("preview.imageOpenExternal"),
-        action: () => void openImageWithSystem(),
-      },
-    ]);
+  function imgContextMenuResolver(): {
+    items: ContextMenuItem[];
+  } | null {
+    if (status !== "loaded" || !imgSrc) return null;
+    return {
+      items: [
+        {
+          icon: "copy",
+          label: get(t)("preview.imageCopy"),
+          action: () => void copyImage(),
+        },
+        {
+          icon: "refresh",
+          label: get(t)("preview.imageReload"),
+          action: doReload,
+        },
+        {
+          icon: "floppy",
+          label: get(t)("preview.imageSaveAs"),
+          action: () => void saveImageAs(),
+        },
+        {
+          icon: "external",
+          label: get(t)("preview.imageOpenExternal"),
+          action: () => void openImageWithSystem(),
+        },
+      ],
+    };
   }
 
   $effect(() => {
     const el = imgEl;
     if (!el) return;
-    el.addEventListener("contextmenu", imgContextMenuHandler);
-    return () => el.removeEventListener("contextmenu", imgContextMenuHandler);
+    return registerContextMenuTarget(el, () => imgContextMenuResolver());
   });
 
   /**

@@ -23,12 +23,13 @@
   import type { ShortcutActions } from "../lib/shortcuts";
   import { focusTrap } from "../lib/focusTrap";
   import Overlay from "./Overlay.svelte";
+  import TextInput from "./TextInput.svelte";
 
   let { actions }: { actions: ShortcutActions } = $props();
 
   let query = $state("");
   let active = $state(0);
-  let inputEl: HTMLInputElement | undefined = $state();
+  let paletteInput: { focus(): void } | undefined = $state();
   let listEl: HTMLUListElement | undefined = $state();
 
   const commands = $derived(buildCommands());
@@ -45,7 +46,7 @@
     if ($commandPaletteOpen$) {
       query = "";
       active = 0;
-      inputEl?.focus();
+      paletteInput?.focus();
     }
   });
 
@@ -110,12 +111,13 @@
       onkeydown={onKeydown}
       {@attach trap}
     >
-      <input
-        bind:this={inputEl}
-        bind:value={query}
-        class="w-full border-b border-line bg-transparent px-3.5 py-2.5 text-sm outline-none placeholder:text-muted"
+      <TextInput
+        bind:this={paletteInput}
         placeholder={$t("palette.placeholder")}
-        aria-label={$t("palette.placeholder")}
+        ariaLabel={$t("palette.placeholder")}
+        oninput={(v) => (query = v)}
+        cls="w-full border-b border-line bg-transparent px-3.5 py-2.5 text-sm outline-none"
+        lineHeight="normal"
       />
       <ul
         bind:this={listEl}
