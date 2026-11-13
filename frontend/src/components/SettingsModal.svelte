@@ -40,6 +40,7 @@
   import { tick } from "svelte";
   import { get } from "svelte/store";
   import Overlay from "./Overlay.svelte";
+  import { suppressMiddleClick } from "../lib/middleClick"
 
   const themeList = [...THEMES].sort((a, b) => {
     if (a.dark !== b.dark) return a.dark ? 1 : -1;
@@ -384,7 +385,7 @@
               <!-- 应用信息 -->
               <!-- svelte-ignore a11y_click_events_have_key_events -->
               <!-- svelte-ignore a11y_no_static_element_interactions -->
-              <div class="app-info" onclick={hijackLinks}>
+              <div class="app-info" onclick={hijackLinks} onauxclick={suppressMiddleClick}>
                 <img class="app-info-logo" src="/bird.svg" alt="Quail" />
                 <div class="app-info-name">Quail</div>
                 <div class="app-info-version-group">
@@ -478,6 +479,7 @@
                   estimateSize={80}
                   style="padding: 0 20px 20px 20px;"
                   onclick={hijackLinks}
+                  onauxclick={suppressMiddleClick}
                 >
                   {#snippet children(dep)}
                     <div

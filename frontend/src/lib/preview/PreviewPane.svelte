@@ -55,6 +55,7 @@
     flattenHastText,
     type PreviewMatchInfo,
   } from "../preview/previewSearch";
+  import { suppressMiddleClick } from "../../lib/middleClick";
 
   let {
     segments,
@@ -144,16 +145,7 @@
     zero();
     const t = setTimeout(zero, 250);
 
-    // 预览区链接点击统一拦截 → 后端转发系统浏览器打开；
-    // 与 md-image 相同的模式：资源/动作一律交给 Go 侧处理。
-    // （事件委托到虚拟滚动根元素：透传属性不含事件，改为手动挂载）
-    const el = scrollEl();
-    el?.addEventListener("click", handlePreviewClick);
-
-    return () => {
-      clearTimeout(t);
-      el?.removeEventListener("click", handlePreviewClick);
-    };
+    return () => clearTimeout(t);
   });
 
   function handlePreviewClick(e: MouseEvent): void {
@@ -635,6 +627,8 @@
     overscan={10}
     pinned={pinnedBlock}
     onscroll={handleScroll}
+    onclick={handlePreviewClick}
+    onauxclick={suppressMiddleClick}
     role="log"
     aria-label="preview"
   >
