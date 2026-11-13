@@ -110,6 +110,7 @@ export const zhMessages = {
     indentSpace4: "4 空格",
     openSourceLicenses: "开源许可证",
     copyright: "版权所有 Luke Pan",
+    viewLicense: "查看许可证全文",
   },
   stats: {
     words: "词",
@@ -314,6 +315,7 @@ export const enMessages = {
     indentSpace4: "4 spaces",
     openSourceLicenses: "Open Source Licenses",
     copyright: "Copyright Luke Pan",
+    viewLicense: "View license text",
   },
   stats: {
     words: "words",

@@ -104,7 +104,7 @@
   const trap = focusTrap({
     allowOutsideClick: true,
     escapeDeactivates: false,
-    preventScroll: true, /** 拉回焦点时不再隐式滚动 */
+    preventScroll: true /** 拉回焦点时不再隐式滚动 */,
     /** 给虚拟滚动使用的延迟启动 */
     checkCanFocusTrap: (containers) =>
       new Promise<void>((resolve) => {
@@ -501,8 +501,32 @@
                           {#if dep.license && dep.license !== "unknown"}{dep.license}{/if}
                         </span>
                       </div>
-                      {#if dep.copyright}
-                        <div class="license-copyright">{dep.copyright}</div>
+                      {#if dep.licenseText}
+                        <details class="license-text">
+                          <summary
+                            class="license-toggle flex cursor-pointer items-center gap-1 text-[11px] text-muted"
+                          >
+                            <svg
+                              class="license-chevron"
+                              width="10"
+                              height="10"
+                              viewBox="0 0 12 12"
+                              fill="none"
+                              aria-hidden="true"
+                            >
+                              <path
+                                d="M4.5 2.5 8 6l-3.5 3.5"
+                                stroke="currentColor"
+                                stroke-width="1.6"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                              />
+                            </svg>
+                            <span>{$t("settings.viewLicense")}</span>
+                          </summary>
+                          <pre
+                            class="mt-1 max-h-40 overflow-y-auto whitespace-pre-wrap break-words text-[11px] leading-snug text-muted">{dep.licenseText}</pre>
+                        </details>
                       {/if}
                     </div>
                   {/snippet}
@@ -519,5 +543,23 @@
 <style>
   .settings-scroll {
     overflow-y: scroll;
+  }
+
+  .license-toggle {
+    list-style: none;
+    user-select: none;
+  }
+  .license-toggle::-webkit-details-marker {
+    display: none;
+  }
+
+  /* 只保留瞬时旋转，与 Accordion 的箭头行为一致 */
+  .license-chevron {
+    flex: none;
+    display: block; /* 脱离 inline 基线对齐，transform-origin 更稳 */
+    transform-origin: center; /* 显式声明，避免继承/默认值带来的偏移 */
+  }
+  .license-text[open] .license-chevron {
+    transform: rotate(90deg);
   }
 </style>

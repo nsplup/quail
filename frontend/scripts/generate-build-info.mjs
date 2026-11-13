@@ -95,19 +95,163 @@ writeFileSync(
 
 /* ---------------- 前端依赖许可收集 ---------------- */
 
-/** 在包目录中查找 LICENSE / COPYING / NOTICE 类文件 */
-function findLicenseFile(pkgDir) {
+/** 在包目录中查找全部 LICENSE / COPYING / NOTICE 类文件（首个视为主许可证） */
+function findLicenseFiles(pkgDir) {
   let names;
   try {
     names = readdirSync(pkgDir);
   } catch {
+    return [];
+  }
+  return names
+    .filter((n) =>
+      /^(licen[cs]e|copying|copyright|notice|unlicense)(\..*)?$/i.test(n),
+    )
+    .map((n) => path.join(pkgDir, n));
+}
+
+/** 合并（去重后）全部许可证文件正文，随分发附带是合规要求 */
+function readLicenseTexts(pkgDir) {
+  const texts = [];
+  const seen = new Set();
+  for (const f of findLicenseFiles(pkgDir)) {
+    try {
+      const t = readFileSync(f, "utf8").trim();
+      if (!t) continue;
+      const key = t.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      texts.push(t);
+    } catch {
+      /* 读取失败：跳过该文件 */
+    }
+  }
+  return texts.join("\n" + "-".repeat(40) + "\n");
+}
+
+/** 许可证文本无法直接给出标识时的轻量猜测 */
+function guessLicenseType(text) {
+  const t = text.slice(0, 8000);
+  const low = t.toLowerCase();
+  if (/Apache License/i.test(t)) return "Apache-2.0";
+  if (/Mozilla Public License/i.test(t))
+    return /1\.1/.test(t) ? "MPL-1.1" : "MPL-2.0";
+  if (/GNU Affero General Public License/i.test(t)) return "AGPL-3.0";
+  if (/GNU (Lesser|Library) General Public License/i.test(t))
+    return /2\.1/.test(t) ? "LGPL-2.1" : "LGPL-3.0";
+  if (/GNU General Public License/i.test(t))
+    return /Version 2\b|version 2\b/.test(t) ? "GPL-2.0" : "GPL-3.0";
+  // 0BSD 与 ISC 正文几乎一致，靠是否带 "provided that" 条款区分
+  if (/zero-clause bsd|0bsd/i.test(low)) return "0BSD";
+  if (/Permission to use, copy, modify, and\/or distribute this software/i.test(t))
+    return /provided that/i.test(t) ? "ISC" : "0BSD";
+  if (/ISC License/i.test(t)) return "ISC";
+  if (/MIT License|Permission is hereby granted, free of charge/i.test(t))
+    return "MIT";
+  if (/The Unlicense/i.test(t)) return "Unlicense";
+  if (/Boost Software License/i.test(t)) return "BSL-1.0";
+  if (/This software is provided ['"]as-is['"], without any express/i.test(t))
+    return "Zlib";
+  if (/Blue Oak/i.test(t)) return "BlueOak-1.0.0";
+  if (/Redistribution and use in source and binary forms/i.test(t))
+    return guessBSDVariant(t);
+  if (/Creative Commons/i.test(t)) {
+    const m = t.match(/CC[- ]BY[- ]?(?:SA|NC|ND)?[- ]?[0-9.]+|CC0[- ]?1\.0/i);
+    return m ? m[0].toUpperCase() : "CC";
+  }
+  return "unknown";
+}
+
+/** 按广告子句 / 非背书子句的有无区分 BSD-4/3/2-Clause */
+function guessBSDVariant(text) {
+  const t = text.toLowerCase();
+  if (/advertising materials/.test(t)) return "BSD-4-Clause";
+  if (/endorse or promote/.test(t)) return "BSD-3-Clause";
+  return "BSD-2-Clause";
+}
+
+/** 仓库地址归一化为可访问的 https URL */
+function normalizeRepoUrl(url) {
+  if (!url) return "";
+  let u = String(url).trim();
+  u = u.replace(/^git\+/, "");
+  u = u.replace(/#.*$/, ""); // repo#subdir 的子目录指针，对跳转无意义
+  // 托管平台简写：github:user/repo / gitlab:… / bitbucket:…
+  const short = u.match(/^(github|gitlab|bitbucket):([^/]+)\/(.+)$/);
+  if (short) {
+    const host = {
+      github: "github.com",
+      gitlab: "gitlab.com",
+      bitbucket: "bitbucket.org",
+    }[short[1]];
+    return `https://${host}/${short[2]}/${short[3].replace(/\.git$/i, "")}`;
+  }
+  // scp 风格：git@github.com:owner/repo.git
+  const scp = u.match(/^git@([^:]+):(.+?)(?:\.git)?$/);
+  if (scp) return `https://${scp[1]}/${scp[2]}`;
+  u = u.replace(/^(git|ssh):\/\/(.*@)?/, "https://");
+  u = u.replace(/^https?:\/\/(.*@)?/, "https://");
+  u = u.replace(/^www\./, "");
+  u = u.replace(/\.git$/i, "");
+  if (!/^https?:\/\//i.test(u)) return "";
+  return u;
+}
+
+function readPackage(pkgDir) {
+  let pkg;
+  try {
+    pkg = JSON.parse(readFileSync(path.join(pkgDir, "package.json"), "utf8"));
+  } catch {
     return null;
   }
-  const hit = names.find((n) =>
-  /^(licen[cs]e|copying|copyright|notice|unlicense)(\..*)?$/i.test(n)
-  );
-  return hit ? path.join(pkgDir, hit) : null;
+  if (!pkg.name) return null;
+
+  // license 字段三种合法形态：字符串 / { type } 对象 / 旧版 licenses 数组
+  let license = "";
+  if (typeof pkg.license === "string") license = pkg.license;
+  else if (pkg.license && typeof pkg.license.type === "string")
+    license = pkg.license.type;
+  else if (Array.isArray(pkg.licenses))
+    license = pkg.licenses
+      .map((l) => (typeof l === "string" ? l : l?.type ?? ""))
+      .filter(Boolean)
+      .join(", ");
+
+  let copyright = "";
+  let licenseText = "";
+  const licFiles = findLicenseFiles(pkgDir);
+  if (licFiles.length > 0) {
+    try {
+      const primary = readFileSync(licFiles[0], "utf8");
+      copyright = extractCopyright(primary);
+      licenseText = readLicenseTexts(pkgDir);
+      // 注意：unlicensed（未许可/私有）才需要兜底猜测；
+      // SPDX 的 "Unlicense" 是一个真实许可证，不能被覆盖
+      if (!license || /^(see license|unknown|unlicensed)$/i.test(license.trim())) {
+        const guessed = guessLicenseType(primary);
+        if (guessed !== "unknown") license = guessed;
+      }
+    } catch {
+      /* 读取失败：保留元数据里的信息 */
+    }
+  }
+
+  const repo = pkg.repository;
+  const repoUrl =
+    pkg.homepage ||
+    (typeof repo === "string" ? repo : repo?.url) ||
+    "";
+
+  return {
+    name: pkg.name,
+    version: pkg.version ?? "",
+    license: license || "unknown",
+    copyright,
+    licenseText,
+    url: normalizeRepoUrl(repoUrl),
+  };
 }
+
 
 /** 从许可证文本中提取版权声明行（最多 3 行，去重、保持出现顺序） */
 function extractCopyright(text) {
@@ -123,82 +267,6 @@ function extractCopyright(text) {
   return hits.join("\n");
 }
 
-/** 许可证文本无法直接给出标识时的轻量猜测 */
-function guessLicenseType(text) {
-  const t = text.slice(0, 8000);
-  if (/Apache License/i.test(t)) return "Apache-2.0";
-  if (/Mozilla Public License/i.test(t)) return "MPL-2.0";
-  if (
-    /ISC License|Permission to use, copy, modify, and\/or distribute this software/i.test(
-      t
-    )
-  )
-    return "ISC";
-    if (/MIT License|Permission is hereby granted, free of charge/i.test(t))
-      return "MIT";
-  if (/BSD \d-Clause|Redistribution and use in source and binary forms/i.test(t))
-    return "BSD";
-  if (/Creative Commons/i.test(t)) {
-    const m = t.match(/CC[- ]BY[- ]?[0-9.]+|CC0/i);
-    return m ? m[0].toUpperCase() : "CC";
-  }
-  return "unknown";
-}
-
-/** 仓库地址归一化为可访问的 https URL */
-function normalizeRepoUrl(url) {
-  if (!url) return "";
-  let u = String(url).trim();
-  u = u.replace(/^git\+/, "");
-  u = u.replace(/^(git|ssh):\/\/(.*@)?/, "https://");
-  u = u.replace(/^https:\/\/(.*@)?/, "https://");
-  u = u.replace(/^www\./, "");
-  u = u.replace(/\.git$/i, "");
-  if (!/^https?:\/\//i.test(u)) return "";
-    return u;
-}
-
-function readPackage(pkgDir) {
-  let pkg;
-  try {
-    pkg = JSON.parse(readFileSync(path.join(pkgDir, "package.json"), "utf8"));
-  } catch {
-    return null;
-  }
-  if (!pkg.name) return null;
-
-  let license = "";
-  if (typeof pkg.license === "string") license = pkg.license;
-  else if (Array.isArray(pkg.licenses))
-    license = pkg.licenses.map((l) => l?.type ?? String(l)).join(", ");
-
-  let copyright = "";
-  const licFile = findLicenseFile(pkgDir);
-  if (licFile) {
-    try {
-      const text = readFileSync(licFile, "utf8");
-      copyright = extractCopyright(text);
-      if (!license || /^(see license|unlicense)/i.test(license)) {
-        const guessed = guessLicenseType(text);
-        if (guessed !== "unknown") license = guessed;
-      }
-    } catch {
-      /* 读取失败：保留元数据里的信息 */
-    }
-  }
-
-  const repo = pkg.repository;
-  const repoUrl =
-  pkg.homepage || (typeof repo === "string" ? repo : repo?.url) || "";
-
-  return {
-    name: pkg.name,
-    version: pkg.version ?? "",
-    license: license || "unknown",
-    copyright,
-    url: normalizeRepoUrl(repoUrl),
-  };
-}
 
 const seen = new Set();
 const deps = [];
