@@ -66,11 +66,16 @@
             const text = raw.trim();
             const n = Number(text);
             if (!text || !Number.isFinite(n)) {
-              /* 非法内容回退显示当前值（与原生 number 行为同口径） */
               c.setValue(String(value));
               return;
             }
-            commit(n);
+            const clamped = clamp(Math.round(n * 10) / 10);
+            if (clamped !== value) {
+              onchange(clamped);
+            } else {
+              // 值不变时也必须回写：把越界/未归一化的原始文本恢复为钳制值
+              c.setValue(String(clamped));
+            }
           },
         }),
     );
@@ -101,8 +106,7 @@
   <div
     class="ti-host h-7 w-10 border-x border-line bg-transparent text-center text-xs text-fg outline-none"
     bind:this={hostEl}
-  >
-  </div>
+  ></div>
   <button
     class="flex h-7 w-7 flex-none items-center justify-center text-sm text-muted transition-colors hover:text-fg disabled:opacity-40"
     aria-label="increase"
