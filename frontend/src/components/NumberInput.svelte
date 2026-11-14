@@ -96,24 +96,44 @@
 
 <div class="num-in flex items-center rounded-lg border border-line bg-inset">
   <button
-    class="flex h-7 w-7 flex-none items-center justify-center text-sm text-muted transition-colors hover:text-fg disabled:opacity-40"
+    class="flex h-7 w-7 flex-none items-center justify-center text-muted transition-colors hover:text-fg disabled:opacity-40"
     aria-label="decrease"
     disabled={value <= min}
     onclick={() => bump(-1)}
   >
-    -
+    <svg
+      class="h-3.5 w-3.5"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1.5"
+      stroke-linecap="round"
+      aria-hidden="true"
+    >
+      <path d="M3.5 8h9" />
+    </svg>
   </button>
   <div
     class="ti-host h-7 w-10 border-x border-line bg-transparent text-center text-xs text-fg outline-none"
     bind:this={hostEl}
   ></div>
   <button
-    class="flex h-7 w-7 flex-none items-center justify-center text-sm text-muted transition-colors hover:text-fg disabled:opacity-40"
+    class="flex h-7 w-7 flex-none items-center justify-center text-muted transition-colors hover:text-fg disabled:opacity-40"
     aria-label="increase"
     disabled={value >= max}
     onclick={() => bump(1)}
   >
-    +
+    <svg
+      class="h-3.5 w-3.5"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1.5"
+      stroke-linecap="round"
+      aria-hidden="true"
+    >
+      <path d="M8 3.5v9M3.5 8h9" />
+    </svg>
   </button>
 </div>
 

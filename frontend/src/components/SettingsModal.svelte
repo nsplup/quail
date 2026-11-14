@@ -174,7 +174,7 @@
       trap 自动暂停，二级页销毁后自动恢复。
     -->
     <div
-      class="flex h-[70vh] w-[440px] max-w-[calc(100vw-48px)] flex-col overflow-hidden rounded-2xl border border-line bg-soft shadow-2xl"
+      class="settings-trap flex h-[70vh] w-[440px] max-w-[calc(100vw-48px)] flex-col overflow-hidden rounded-2xl border border-line bg-soft shadow-2xl"
       tabindex="-1"
       {@attach trap}
     >
@@ -421,7 +421,7 @@
           -->
           <div class="relative h-full w-full shrink-0">
             {#if $settingsSubPage === "theme"}
-              <div class="h-full w-full" tabindex="-1" {@attach trap}>
+              <div class="settings-trap h-full w-full" tabindex="-1" {@attach trap}>
                 <div class="settings-scroll h-full w-full overflow-y-auto">
                   <div class="grid grid-cols-2 gap-2 p-5">
                     {#each themeList as tv (tv.id)}
@@ -463,7 +463,7 @@
                 - getKey 用 name@version：重排/过滤后按 key 保留实测高度缓存。
                 外层包裹二级页根节点并挂 trap（与 theme 子页面同口径）。
               -->
-              <div class="h-full w-full" tabindex="-1" {@attach trap}>
+              <div class="settings-trap h-full w-full" tabindex="-1" {@attach trap}>
                 <VirtualList
                   data={licenseEntries}
                   getKey={(dep) => `${dep.name}@${dep.version}`}
@@ -537,6 +537,8 @@
   .settings-scroll {
     overflow-y: scroll;
   }
+
+  .settings-trap:focus { outline: none }
 
   .license-toggle {
     list-style: none;
