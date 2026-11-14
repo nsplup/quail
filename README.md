@@ -40,15 +40,25 @@
 
 - **三种布局**：`source`（纯编辑）/ `split`（双栏）/ `preview`（纯预览），可设置启动默认布局（`memory` 记住上次 / 固定指定）；
 - **Markdown 渲染**：GFM（表格、任务列表、删除线）、脚注、自动锚点标题、代码块高亮（highlight.js，独立 Worker）；
+- **数学公式**：`remark-math` 解析，`mathjax-full` 按需动态加载并输出 SVG（首次遇到公式才加载 chunk），行内 `$...$` 与独立块 `$$...$$` 均支持；
+- **Mermaid 图表**：```` ```mermaid ```` 围栏 → Mermaid 动态加载自渲染 SVG，配色按当前主题色板饱和度自动推断（支持亮暗两组变体），主题映射不变时直接复用缓存；
 - **可交互预览元素**：
-  - 可编辑表格（单元格内嵌 CodeMirror 编辑器，Ctrl+Enter / 失焦提交，回写源码）；
+  - 可编辑表格（单元格内嵌 CodeMirror 编辑器，Ctrl+Enter / 失焦提交，回写源码；工具栏支持行列增删与对齐）；
   - 可勾选任务复选框（勾选状态回写源码）；
   - 折叠面板（`<details>` → Accordion，折叠状态按内容指纹记忆）；
-  - 图片右键菜单：用系统程序打开 / 另存为；
+  - 图片右键菜单：用系统程序打开 / 另存为；远程图片失败态可点击强制刷新（跳过缓存重新下载）；
+- **命令面板**：Ctrl/Cmd+Shift+P 呼出，汇总全部全局快捷键动作并支持面板专属命令（如"归档图片文件到伴生资源目录"）；
 - **查找替换**：右上角悬浮面板，全布局可用（预览模式无需切回双栏）；
 - **大纲面板**：标题树 + 关键词过滤，点击跳转，滚动自动追踪；
 - **双向同步滚动**：编辑器 ↔ 预览按"块 + 块内像素插值"对齐，带程序化滚动抑制与光标同步待办，防回环防丢事件；
 - **字数统计**：字符 / 单词 / 字词混合三种口径（混合口径单位随界面语言）。
+
+### 图片与粘贴
+
+- **插入图片三入口**（底栏按钮多选 / 拖入图片文件 / 粘贴）：全部经后端魔数校验（仅放行真实图片，SVG 一律拒绝），落盘伴生资源目录——markdown 文档为 `<文档目录>/<文件名>.md.assets/`，非 markdown 文本文档回落 `assets/`；
+- **命名规则**：按钮/拖拽沿用原文件名（冲突追加 `-1/-2…` 后缀）；粘贴按内容短哈希命名（`img-<hash>`，已存在直接复用，重复粘贴不产生副本）；
+- **粘贴链路**：剪贴板探测与校验全部在后端完成（前端不再经 ClipboardEvent 读剪贴板）——图片校验后内存暂存、路径守卫通过再落盘；HTML 剪贴板经 `rehype-remark` 转 Markdown（无可转换标签回退纯文本）；右键菜单提供"粘贴为纯文本"，Shift+Ctrl+V 放行浏览器原生粘贴；
+- **归档图片**：命令面板一键把当前文档引用的本地/远程图片全部归档到目标文档的伴生资源目录并重写引用路径（内联式 / 引用式 / HTML `<img>` 三种引用均支持）。
 
 ### 文档管理
 
@@ -78,7 +88,9 @@
 | 前端框架 | Svelte 5（runes：`$state` / `$effect`）+ TypeScript + Vite 8 |
 | 样式 | Tailwind CSS 4 |
 | 编辑器 | CodeMirror 6（`@codemirror/*` 全家桶） |
-| Markdown | unified 11：`remark-parse` + `remark-gfm` + `rehype-slug` → `mdast-util-to-hast` + `hast-util-raw` + `hast-util-to-html`，`rehype-sanitize` 清洗 |
+| Markdown | unified 11：`remark-parse` + `remark-gfm` + `remark-math`（公式） + `rehype-slug` → `mdast-util-to-hast` + `hast-util-raw` + `hast-util-to-html`，`rehype-sanitize` 清洗 |
+| 公式与图表 | `mathjax-full`（TeX → SVG，按需动态加载）、`mermaid`（围栏图渲染） |
+| 粘贴转换 | `rehype-parse` + `rehype-remark`（HTML 剪贴板 → Markdown）；`linkedom`（Worker 内 DOM shim） |
 | 代码高亮 | highlight.js 11（Web Worker 着色） |
 | 国际化 | svelte-i18n |
 | 测试 | 前端 Vitest；后端 Go 原生 testing |
@@ -94,13 +106,17 @@ quail/
 ├── app_service.go          # AppService：Ready / 关闭请求 / 确认退出 / 新实例
 ├── file_service.go         # FileService：打开/保存/另存/监听（文档状态机）
 ├── config_service.go       # ConfigService：配置持久化与监听广播
+├── image_common.go         # 图片模块共享基础件（路径生成/清洗/资产目录/嗅探）
+├── image_import.go         # 图片插入：拖拽分流 / 按钮多选导入（含剪贴板两段落盘）
+├── image_archive.go        # 图片归档：三类引用重写到伴生资源目录
 ├── image_actions.go        # 图片右键菜单后端支撑（路径解析/下载/另存）
+├── clipboard_read.go       # 粘贴链路：后端剪贴板探测/校验/暂存（FileService 方法）
 ├── imgproxy.go             # AssetServer 中间件：/__imgproxy/* 图片代理
 ├── encoding.go             # 编码检测与磁盘字节 ↔ UTF-8 转码
 ├── write_guard.go          # 自身写入抑制（写入令牌 + 内容哈希）
 ├── window_state.go         # 窗口尺寸记忆（$XDG_STATE_HOME/quail）
 ├── events.go               # 事件名枚举 + payload 模型（生成 TS bindings）
-├── *_test.go               # Go 单测（编码/文件/代理/写守卫）
+├── *_test.go               # Go 单测（编码/文件服务/图片代理/图片插入与归档/剪贴板/写守卫）
 ├── tools/licgen/           # 许可证列表生成小工具
 ├── Taskfile.yml            # 任务入口（build/package/dev/run，按平台分发）
 ├── build/                  # 平台构建配置（windows/darwin/linux/ios/android）
@@ -109,31 +125,40 @@ quail/
     ├── src/
     │   ├── App.svelte          # 根组件：布局、快捷键分发、同步滚动、保存/打开分流
     │   ├── main.ts             # 入口
-    │   ├── themes.css          # 25 套主题 CSS 变量
+    │   ├── themes.css          # 预览排版与窗格样式（主题 CSS 变量改由 themes.ts 运行时注入）
     │   ├── app.css             # 全局样式
     │   ├── components/         # 通用 UI：BottomBar / OutlinePanel / SettingsModal /
-    │   │                       #   ConfirmDialog / ContextMenu / Toast / Banner /
-    │   │                       #   ParseStatus / TableInsertPopover 等
+    │   │                       #   CommandPalette / Dialog / Overlay / ContextMenu /
+    │   │                       #   Toast / Banner / ParseStatus / TableInsertPopover /
+    │   │                       #   Icon / NumberInput / TextInput 等
     │   ├── lib/
     │   │   ├── bridge.ts           # Wails 桥接层（bindings 封装 + 外链校验）
     │   │   ├── stores.ts           # 全局状态中心 + 解析调度器 + bootApp
     │   │   ├── settings.ts         # 设置 KV 抽象（后端配置为唯一事实源）
-    │   │   ├── confirm.ts          # 确认弹窗
+    │   │   ├── dialog.ts           # Promise 化 Dialog（confirm / progress 弹窗）
+    │   │   ├── commandPalette.ts   # 命令面板（快捷键动作汇总 + 面板专属命令）
+    │   │   ├── shortcuts.ts        # 全局快捷键声明式配置 + 依赖注入安装器
+    │   │   ├── overlay.ts          # 弹层遮罩注册表（弹层开启期间阻断全局快捷键）
+    │   │   ├── contextmenu.ts / contextmenuRegistry.ts  # 右键菜单状态与全局分发
+    │   │   ├── imageInsert.ts / imageArchive.ts         # 图片插入 / 归档前端编排
     │   │   ├── i18n.svelte.ts      # svelte-i18n 初始化（zh/en，system 探测）
     │   │   ├── i18n-messages.ts    # 中英文消息表
-    │   │   ├── themes.ts           # 主题变量注入与字体链
+    │   │   ├── themes.ts           # 25 套主题变量注入与字体链（脚本注入式）
     │   │   ├── imgproxy.ts         # 代理 URL 构造
-    │   │   ├── banner.ts / contextmenu.ts / docpath.ts / focusTrap.ts / licenses.ts
+    │   │   ├── banner.ts / docpath.ts / focusTrap.ts / middleClick.ts / licenses.ts / input/
     │   │   ├── markdown.ts         # 兼容再导出层（主线程纯函数）
     │   │   ├── editor/             # CodePane.svelte、codemirrorSetup.ts、
-    │   │   │                       #   searchPanel.ts、emphasis.ts
+    │   │   │                       #   searchPanel.ts、emphasis.ts、paste.ts（应用层
+    │   │   │                       #   粘贴编排）、pasteHandler.ts、htmlToMarkdown.ts、
+    │   │   │                       #   editorContextMenu.ts
     │   │   ├── markdown/           # 渲染组件（MarkdownNode/Segment、EditableTable、
-    │   │   │                       #   EditableCheckbox、Accordion、图片/链接/脚注）
+    │   │   │                       #   EditableCheckbox、Accordion、图片/链接/脚注、
+    │   │   │                       #   MarkdownMath、MermaidBlock）
     │   │   │                       #   + blocks.ts（块映射/统计纯函数）、table-ops 等
     │   │   ├── preview/            # PreviewPane.svelte + 预览查找
     │   │   ├── virtual/            # VirtualList.svelte（虚拟滚动）
     │   │   ├── highlight/          # highlight.js Worker（protocol / hl-client / CodeBlock）
-    │   │   └── worker/             # 解析 Worker（parse / full / protocol / client / dom-shim）
+    │   │   └── worker/             # 解析 Worker（parse / full / protocol / client / dom-shim / contentHash）
     │   └── test/setup.ts       # Vitest 配置
     └── dist/               # 构建产物（Go embed 打进二进制）
 ```
@@ -160,6 +185,7 @@ quail/
 │  Go 后端（Wails v3）                                                   │
 │  AppService / FileService / ConfigService（导出方法自动绑定前端）        │
 │  ImgProxyMiddleware（/__imgproxy/local|remote，AssetServer 中间件）     │
+│  图片模块（插入 / 归档 / 右键动作 / 剪贴板粘贴，image_*.go）             │
 │  fsnotify：文档目录监听 + 配置目录监听                                   │
 │  encoding（chardet + x/text） / writeGuard（哈希核对防回环）             │
 └────────────────────────────────────────────────────────────────────────┘
@@ -196,13 +222,15 @@ quail/
 - **`SaveAs(path, content)`**：原子写新路径并把目录监听迁移过去；
 - **`CloseDoc`**：停止监听、清空文档状态；
 - 系统对话框不再经 Go 绑定暴露：前端经运行时 `Dialogs` 模块（`@wailsio/runtime`）弹出，窗口模态；
-- 图片动作（见 `image_actions.go`）：`ImageFilePath`（把 imgproxy 代理 URL 解析为磁盘绝对路径；远程图未命中缓存先经 singleflight 下载）、`ImageSaveFile`（源文件字节在后端读取并原子写入，**不经前端往返**）、`OpenFileWithExternal`（系统默认程序打开）。
+- 图片动作（见 `image_actions.go`）：`ImageFilePath`（把 imgproxy 代理 URL 解析为磁盘绝对路径；远程图未命中缓存先经 singleflight 下载）、`ImageSaveFile`（源文件字节在后端读取并原子写入，**不经前端往返**）、`OpenFileWithExternal`（系统默认程序打开）；
+- 图片插入与归档（`image_import.go` / `image_archive.go`）：`ClassifyFiles`（拖入文件魔数分流 image / text / other）、`ImportImageFiles`（按钮多选/拖拽导入，仅放行真实图片，SVG 一律拒绝）、`ArchiveImages`（归档当前文档引用的本地/远程图片到目标伴生资源目录并重写三类引用）；
+- 粘贴链路（`clipboard_read.go`）：`ReadClipboard`（后端剪贴板探测 + 图片魔数/大小校验，图片内存暂存不落盘）+ `CommitClipboardImage`（前端路径守卫通过后回传 PendingID，落盘资产目录）——剪贴板字节不经前端往返，暂存槽位带 TTL、取消/过期/覆盖均不产生文件。
 
 ### 配置服务 ConfigService
 
 - 配置目录：`os.UserConfigDir()/quail`（Linux `~/.config/quail`、macOS `~/Library/Application Support/quail`、Windows `%AppData%/quail`），文件 `settings.json` 原子写；
 - **Config 字段**：`mode / defaultLayout / theme / locale / indent / countMode / fontEditor / fontPreview / fontSizeEditor / fontSizePreview`，出厂默认 split 布局 + ayu-dark 主题 + 混合字数统计；
-- **`Get` / `SaveFields`**：`SaveFields` 接收前端提交的脏字段，与磁盘最新配置**按字段合并**（多窗口互不覆盖）；
+- **`Get` / `SaveFields` / `Save`**：`SaveFields` 接收前端提交的脏字段，与磁盘最新配置**按字段合并**（多窗口互不覆盖）；`Save` 为整包覆盖写（保留的绑定方法，当前前端仅走 `SaveFields`）；写盘统一登记 writeGuard 令牌抑制回环广播；
 - **监听**：fsnotify 监听配置目录，`settings.json` 被外部修改（含用户手改、其他窗口保存）时 300ms 防抖后广播 `config:changed` 并携带新配置；前端以此实现多窗口设置实时同步；
 - 前端设置以后端配置文件为**唯一事实源**（历史 localStorage 只做一次性迁移，现已移除）。
 
@@ -210,8 +238,8 @@ quail/
 
 AssetServer 中间件，前端 `<md-image>` 统一指向两条代理路径：
 
-- **`/__imgproxy/local?p=<相对或绝对路径>`**（本地文档目录资源）：白名单严格限定——已打开文档时仅允许文档所在目录本身及其 `assets/` 子目录；越权、路径逃逸（`../`）、文档未保存一律 `403` JSON 错误（前端 error 态展示"访问受限"）；
-- **`/__imgproxy/remote?url=<encoded URL>`**（远程资源）：仅 http/https；15s 超时；20MB 上限；校验 `Content-Type` 为 `image/*`；缓存于系统缓存目录（key = sha256(url)），原子写入，命中直回。
+- **`/__imgproxy/local?p=<相对或绝对路径>`**（本地文档目录资源）：白名单严格限定——已打开文档时仅允许 ① 文档目录下的直接文件（`[FILE_DIR]/*`）、② `assets/` 子目录（含嵌套）、③ markdown 文档的伴生资产目录 `[FILE_NAME].assets/**`（候选 `[BASE].md.assets` / `[BASE].assets` / `[BASE].markdown.assets` 三种命名）；越权、路径逃逸（`../`）、软链接逃逸（`EvalSymlinks` 解析后复核）、文档未保存一律 `403` JSON 错误，目标不存在为 `404`；白名单之外另有**内容魔数校验**——仅放行真实图片（白名单目录可能含任意敏感资源，纯路径校验不足），非图片一律 `403`；
+- **`/__imgproxy/remote?url=<encoded URL>`**（远程资源）：仅 http/https；15s 超时；20MB 上限；校验 `Content-Type` 为 `image/*`（实际格式以内容魔数嗅探为准）；singleflight 保证并发同 URL 只下载一次；缓存于系统缓存目录（key = sha256(url)），原子写入，命中直回；`refresh=1` 跳过缓存强制重下（前端失败态刷新按钮）；上游 404 / 401/403（防盗链）按语义透传为 404/403，其余下载失败为 502，前端据状态码展示不同占位文案。
 
 ### 编码检测与转码
 
@@ -310,6 +338,7 @@ AssetServer 中间件，前端 `<md-image>` 统一指向两条代理路径：
 | Ctrl/Cmd+O | 打开（对话框 → 原地装载 / 新实例分流） |
 | Ctrl/Cmd+S | 保存（CM6 聚焦时由其 keymap 处理，全局兜底防双保存） |
 | Ctrl/Cmd+Shift+S | 另存为 |
+| Ctrl/Cmd+Shift+P | 命令面板（汇总全部快捷键动作 + 面板专属命令，如归档图片） |
 | Ctrl/Cmd+F | 查找替换悬浮面板（预览模式可用，自动拉取预览选区） |
 | Ctrl/Cmd+Q | 退出（语义等同窗口关闭，触发脏状态守卫） |
 | Ctrl/Cmd+Z / Shift+Z / Y | 全局撤销/重做（CM6 内交给自身 keymap，原生输入控件不劫持） |
@@ -354,10 +383,12 @@ wails3 generate bindings
 ## 测试
 
 ```bash
-# Go 后端单测（编码检测转码 / 文件服务 / 图片代理 / 写守卫）
+# Go 后端单测（编码检测转码 / 文件服务 / 图片代理与白名单 / 图片插入与归档 /
+# 剪贴板暂存落盘 / 写守卫）
 go test ./...
 
-# 前端单测（Vitest；解析管线 / 块映射 / 表格操作 / 组件测试）
+# 前端单测（Vitest；解析管线与核心纯函数 / 块映射 / 表格编解码与写回 /
+# 数学与 Mermaid 渲染守卫 / 预览查找 / 文档路径 / 快捷键 / HTML→MD 等）
 cd frontend && npm test
 ```
 
@@ -365,7 +396,7 @@ cd frontend && npm test
 
 ## 安全设计要点
 
-- **文件访问白名单**：imgproxy 本地资源仅限当前文档目录及其 `assets/` 子目录，路径逃逸与越权一律 403；
+- **文件访问白名单**：imgproxy 本地资源仅限文档目录直接文件、`assets/` 子目录与 markdown 文档伴生资产目录（`[BASE].assets` 三种命名），路径逃逸（含软链接逃逸复核）与越权一律 403；本地与远程统一内容魔数校验，仅放行真实图片，防白名单目录内敏感文件被代理读出；
 - **外链白名单**：仅 http/https 转发系统浏览器，其他 scheme 前端即拦；
 - **预览消毒**：hast 渲染经 `rehype-sanitize` 清洗；
 - **写盘一致性**：临时文件 + fsync + rename 原子写，保存前 sha256 冲突检测，不静默覆盖外部修改；

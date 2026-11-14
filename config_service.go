@@ -7,7 +7,8 @@ package main
 // - 持久化：settings.json 原子写；
 // - 监听：fsnotify 监听配置目录，settings.json 被外部修改（含用户手改）时
 //   防抖后 emit config:changed 并携带新配置；
-// - 前端设置以这里为唯一事实源（localStorage 只做旧版一次性迁移）。
+// - 前端设置以这里为唯一事实源（历史 localStorage 直通与一次性迁移已随
+//   浏览器模式移除，项目中不再有任何 localStorage 调用）。
 
 import (
         "context"
@@ -115,7 +116,8 @@ func (c *ConfigService) stopWatchLocked() {
         }
 }
 
-// ConfigExists 判断磁盘上是否已存在配置文件（前端一次性迁移 localStorage 用）。
+// ConfigExists 判断磁盘上是否已存在配置文件。原为前端一次性迁移
+// localStorage 而设，迁移已随浏览器模式移除，现为保留的绑定方法。
 func (c *ConfigService) ConfigExists() bool {
         _, err := os.Stat(c.path())
         return err == nil

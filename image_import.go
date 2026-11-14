@@ -19,44 +19,46 @@ package main
 //     口径）：回落 <docDir>/assets/（白名单固定放行的资产子目录）。
 //
 // 命名：有文件名（按钮 / 拖拽）沿用原文件名，冲突时追加 -1/-2… 递增
-// 后缀；无文件名（粘贴）img-<时间戳>，同时间戳冲突同样递增后缀。
+// 后缀；无文件名（粘贴）img-<内容短哈希>，文件已存在则直接复用（哈希
+// 幂等，重复粘贴同一图片不产生副本）。img-<时间戳> 仅为 uniqueAssetName
+// 对裸扩展名输入的内部兜底，正常生产链路不触达。
 //
 // 返回的 RelPath 一律为相对文档目录的正斜杠路径，可直接用于 markdown
 // 引用定义与 imgproxy 的 p= 参数。
 
 import (
-	"errors"
-	"fmt"
-	"hash/fnv"
-	"os"
-	"path/filepath"
-	"strings"
-	"time"
+        "errors"
+        "fmt"
+        "hash/fnv"
+        "os"
+        "path/filepath"
+        "strings"
+        "time"
 )
 
 // FileKindInfo 拖拽文件分类结果（ClassifyFiles 单项）。
 type FileKindInfo struct {
-	Path string `json:"path"`
-	// Kind 按文件头魔数归类的种类：
-	//   image —— imageMagic 命中（SVG 除外：SVG 按 other 归类，统一丢弃口径）；
-	//   text  —— isTextFile 判定为文本文件；
-	//   other —— 其余（含不存在/不可读文件、SVG）。
-	Kind string `json:"kind"`
+        Path string `json:"path"`
+        // Kind 按文件头魔数归类的种类：
+        //   image —— imageMagic 命中（SVG 除外：SVG 按 other 归类，统一丢弃口径）；
+        //   text  —— isTextFile 判定为文本文件；
+        //   other —— 其余（含不存在/不可读文件、SVG）。
+        Kind string `json:"kind"`
 }
 
 // ImportedImage 图片资源落盘结果。
 type ImportedImage struct {
-	// RelPath 相对当前文档目录的正斜杠路径（assets/img.png 形态）。
-	RelPath string `json:"relPath"`
-	// Name 落盘文件名（含扩展名，冲突时带 -n 后缀）。
-	Name string `json:"name"`
-	// RefDest markdown 内联 destination（markdownDest 构建结果：不安全
-	// 字符已由落盘命名阶段替换为 '-'，无需尖括号包裹或转义），前端直接
-	// 插入 `![alt](refDest)`。三插入入口与归档替换共用同一构建函数。
-	RefDest string `json:"refDest"`
-	// Alt sanitize 后的 alt 文本（sanitizeAltText：[ ] \ 换行替换为
-	// 安全字符，不再用反斜杠转义），前端直接插入。
-	Alt string `json:"alt"`
+        // RelPath 相对当前文档目录的正斜杠路径（assets/img.png 形态）。
+        RelPath string `json:"relPath"`
+        // Name 落盘文件名（含扩展名，冲突时带 -n 后缀）。
+        Name string `json:"name"`
+        // RefDest markdown 内联 destination（markdownDest 构建结果：不安全
+        // 字符已由落盘命名阶段替换为 '-'，无需尖括号包裹或转义），前端直接
+        // 插入 `![alt](refDest)`。三插入入口与归档替换共用同一构建函数。
+        RefDest string `json:"refDest"`
+        // Alt sanitize 后的 alt 文本（sanitizeAltText：[ ] \ 换行替换为
+        // 安全字符，不再用反斜杠转义），前端直接插入。
+        Alt string `json:"alt"`
 }
 
 // ClassifyFiles 拖拽分流：对文件列表逐个魔数嗅探归类。
@@ -64,68 +66,68 @@ type ImportedImage struct {
 // other，并在返回的 error 中聚合（errors.Join）；全部成功时 error 为 nil。
 // 调用方可选择忽略 error 只消费分类结果（宽松分流），也可据此提示用户。
 func (f *FileService) ClassifyFiles(paths []string) ([]*FileKindInfo, error) {
-	if len(paths) == 0 {
-		return []*FileKindInfo{}, nil
-	}
-	out := make([]*FileKindInfo, 0, len(paths))
-	var errs []error
-	for _, p := range paths {
-		info := &FileKindInfo{Path: p, Kind: "other"}
-		out = append(out, info)
-		// 先探测可读性：读不了的文件无法分类，归 other 并收集错误
-		// （原实现由 isSVGFile / isTextFileHead 静默吞掉）
-		if _, err := readFileHead(p); err != nil {
-			errs = append(errs, fmt.Errorf("classify %q: %w", p, err))
-			continue
-		}
-		switch {
-		case isSVGFile(p):
-			// SVG 本质文本，先排除；三入口统一丢弃口径 → other
-			info.Kind = "other"
-		case isImageFile(p):
-			info.Kind = "image"
-		case isTextFileHead(p):
-			info.Kind = "text"
-		}
-	}
-	return out, errors.Join(errs...)
+        if len(paths) == 0 {
+                return []*FileKindInfo{}, nil
+        }
+        out := make([]*FileKindInfo, 0, len(paths))
+        var errs []error
+        for _, p := range paths {
+                info := &FileKindInfo{Path: p, Kind: "other"}
+                out = append(out, info)
+                // 先探测可读性：读不了的文件无法分类，归 other 并收集错误
+                // （原实现由 isSVGFile / isTextFileHead 静默吞掉）
+                if _, err := readFileHead(p); err != nil {
+                        errs = append(errs, fmt.Errorf("classify %q: %w", p, err))
+                        continue
+                }
+                switch {
+                case isSVGFile(p):
+                        // SVG 本质文本，先排除；三入口统一丢弃口径 → other
+                        info.Kind = "other"
+                case isImageFile(p):
+                        info.Kind = "image"
+                case isTextFileHead(p):
+                        info.Kind = "text"
+                }
+        }
+        return out, errors.Join(errs...)
 }
 
 // ImportImageFiles 批量导入磁盘图片文件到当前文档的资产目录。
 // 校验失败的文件静默跳过（三入口统一"仅放行真实图片、SVG 拒绝"口径）；
 // 无打开文档（未保存）时返回错误（前端入口侧已先引导保存，此为兜底）。
 func (f *FileService) ImportImageFiles(paths []string) ([]*ImportedImage, error) {
-	assetsDir, err := f.assetsDirForInsert()
-	if err != nil {
-		return nil, err
-	}
-	out := make([]*ImportedImage, 0, len(paths))
-	for _, p := range paths {
-		data, err := os.ReadFile(p)
-		if err != nil {
-			continue // 不可读：静默跳过
-		}
-		img, ok := saveImageBytes(assetsDir, data, filepath.Base(p))
-		if !ok {
-			continue // 非图片 / SVG：静默跳过
-		}
-		out = append(out, img)
-	}
-	return out, nil
+        assetsDir, err := f.assetsDirForInsert()
+        if err != nil {
+                return nil, err
+        }
+        out := make([]*ImportedImage, 0, len(paths))
+        for _, p := range paths {
+                data, err := os.ReadFile(p)
+                if err != nil {
+                        continue // 不可读：静默跳过
+                }
+                img, ok := saveImageBytes(assetsDir, data, filepath.Base(p))
+                if !ok {
+                        continue // 非图片 / SVG：静默跳过
+                }
+                out = append(out, img)
+        }
+        return out, nil
 }
 
 // assetsDirForInsert 当前文档的图片落盘目录（伴生资源目录优先，非
 // markdown 文档回落 assets/），目录不存在时创建。
 func (f *FileService) assetsDirForInsert() (string, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.doc == nil || f.doc.path == "" {
-		return "", errors.New("no document open")
-	}
-	// 目录计算与创建统一走 assetsDirForPath（image_common.go，与归档/
-	// imgproxy 白名单同口径）：markdown 伴生资源目录 <BASE>.md.assets，
-	// 非 markdown 回落 assets/
-	return assetsDirForPath(f.doc.path)
+        f.mu.Lock()
+        defer f.mu.Unlock()
+        if f.doc == nil || f.doc.path == "" {
+                return "", errors.New("no document open")
+        }
+        // 目录计算与创建统一走 assetsDirForPath（image_common.go，与归档/
+        // imgproxy 白名单同口径）：markdown 伴生资源目录 <BASE>.md.assets，
+        // 非 markdown 回落 assets/
+        return assetsDirForPath(f.doc.path)
 }
 
 // saveImageBytes 魔数校验 + 命名 + 原子写入。
@@ -136,77 +138,77 @@ func (f *FileService) assetsDirForInsert() (string, error) {
 //
 // 非图片内容（含 SVG）返回 (nil, false)，调用方按丢弃/拒绝处理。
 func saveImageBytes(assetsDir string, data []byte, baseName string) (*ImportedImage, bool) {
-	ct, ok := imageMagic(data)
-	if !ok || ct == "image/svg+xml" {
-		return nil, false
-	}
-	ext := extFromImageContentType(ct)
-	if ext == "" {
-		return nil, false
-	}
+        ct, ok := imageMagic(data)
+        if !ok || ct == "image/svg+xml" {
+                return nil, false
+        }
+        ext := extFromImageContentType(ct)
+        if ext == "" {
+                return nil, false
+        }
 
-	// 粘贴入口：内容哈希命名（天然安全）+ 存在即复用
-	if baseName == "" {
-		name := "img-" + shortHash(data) + ext
-		path := filepath.Join(assetsDir, name)
-		if _, err := os.Stat(path); err == nil {
-			// 已存在同名文件：哈希相同即内容相同，直接复用
-			return newImportedImage(assetsDir, name), true
-		}
-		if err := writeFileAtomic(path, data, 0o644); err != nil {
-			return nil, false
-		}
-		return newImportedImage(assetsDir, name), true
-	}
+        // 粘贴入口：内容哈希命名（天然安全）+ 存在即复用
+        if baseName == "" {
+                name := "img-" + shortHash(data) + ext
+                path := filepath.Join(assetsDir, name)
+                if _, err := os.Stat(path); err == nil {
+                        // 已存在同名文件：哈希相同即内容相同，直接复用
+                        return newImportedImage(assetsDir, name), true
+                }
+                if err := writeFileAtomic(path, data, 0o644); err != nil {
+                        return nil, false
+                }
+                return newImportedImage(assetsDir, name), true
+        }
 
-	// 按钮 / 拖拽 / 归档入口：原名 sanitize（不安全字符替换为 '-'，
-	// 见 image_common.go 统一口径）+ 冲突递增后缀
-	name := uniqueAssetName(assetsDir, sanitizeDestSegment(baseName), ext)
-	path := filepath.Join(assetsDir, name)
-	if err := writeFileAtomic(path, data, 0o644); err != nil {
-		return nil, false
-	}
-	return newImportedImage(assetsDir, name), true
+        // 按钮 / 拖拽 / 归档入口：原名 sanitize（不安全字符替换为 '-'，
+        // 见 image_common.go 统一口径）+ 冲突递增后缀
+        name := uniqueAssetName(assetsDir, sanitizeDestSegment(baseName), ext)
+        path := filepath.Join(assetsDir, name)
+        if err := writeFileAtomic(path, data, 0o644); err != nil {
+                return nil, false
+        }
+        return newImportedImage(assetsDir, name), true
 }
 
 // newImportedImage 组装落盘结果：RelPath + 统一构建的 RefDest / Alt
 // （路径生成与 alt sanitize 的唯一出口，见 image_common.go）。
 func newImportedImage(assetsDir, name string) *ImportedImage {
-	img := &ImportedImage{RelPath: pathRelativeToDoc(assetsDir, name), Name: name}
-	img.RefDest = markdownDest(img.RelPath)
-	img.Alt = sanitizeAltText(name)
-	return img
+        img := &ImportedImage{RelPath: pathRelativeToDoc(assetsDir, name), Name: name}
+        img.RefDest = markdownDest(img.RelPath)
+        img.Alt = sanitizeAltText(name)
+        return img
 }
 
 // shortHash 图片内容短哈希（FNV-1a 32 位，8 位十六进制）。
 // 用于粘贴图片的落盘命名：性能优先，不做加密强度承诺；
 // 冲突概率足够低，uniqueAssetName 仍会在极端冲突时追加 -n 后缀。
 func shortHash(data []byte) string {
-	h := fnv.New32a()
-	_, _ = h.Write(data)
-	return fmt.Sprintf("%08x", h.Sum32())
+        h := fnv.New32a()
+        _, _ = h.Write(data)
+        return fmt.Sprintf("%08x", h.Sum32())
 }
 
 // extFromImageContentType imageMagic 命中的 Content-Type → 标准扩展名。
 func extFromImageContentType(ct string) string {
-	switch ct {
-	case "image/png":
-		return ".png"
-	case "image/jpeg":
-		return ".jpg"
-	case "image/gif":
-		return ".gif"
-	case "image/webp":
-		return ".webp"
-	case "image/bmp":
-		return ".bmp"
-	case "image/x-icon":
-		return ".ico"
-	case "image/avif":
-		return ".avif"
-	default:
-		return ""
-	}
+        switch ct {
+        case "image/png":
+                return ".png"
+        case "image/jpeg":
+                return ".jpg"
+        case "image/gif":
+                return ".gif"
+        case "image/webp":
+                return ".webp"
+        case "image/bmp":
+                return ".bmp"
+        case "image/x-icon":
+                return ".ico"
+        case "image/avif":
+                return ".avif"
+        default:
+                return ""
+        }
 }
 
 // uniqueAssetName 资产文件名唯一化：
@@ -218,23 +220,23 @@ func extFromImageContentType(ct string) string {
 // 命名竞争窗口仅限并发插入（同实例内插入操作由前端串行触发），不做
 // 文件锁，最后一步 write 失败由调用方按丢弃处理。
 func uniqueAssetName(assetsDir, baseName, ext string) string {
-	stem := ""
-	if baseName != "" {
-		stem = strings.TrimSuffix(baseName, filepath.Ext(baseName))
-		if stem == "" {
-			stem = "" // 形如 ".png" 的裸扩展名输入：回落时间戳命名
-		}
-	}
-	if stem == "" {
-		stem = "img-" + time.Now().Format("20060102-150405.000")
-	}
-	candidate := stem + ext
-	for i := 1; ; i++ {
-		if _, err := os.Stat(filepath.Join(assetsDir, candidate)); err != nil {
-			return candidate // 不存在（或不可见）：直接采用
-		}
-		candidate = fmt.Sprintf("%s-%d%s", stem, i, ext)
-	}
+        stem := ""
+        if baseName != "" {
+                stem = strings.TrimSuffix(baseName, filepath.Ext(baseName))
+                if stem == "" {
+                        stem = "" // 形如 ".png" 的裸扩展名输入：回落时间戳命名
+                }
+        }
+        if stem == "" {
+                stem = "img-" + time.Now().Format("20060102-150405.000")
+        }
+        candidate := stem + ext
+        for i := 1; ; i++ {
+                if _, err := os.Stat(filepath.Join(assetsDir, candidate)); err != nil {
+                        return candidate // 不存在（或不可见）：直接采用
+                }
+                candidate = fmt.Sprintf("%s-%d%s", stem, i, ext)
+        }
 }
 
 // pathRelativeToDoc 已并入共享模块 image_common.go（与归档统一口径）。
@@ -243,19 +245,19 @@ func uniqueAssetName(assetsDir, baseName, ext string) string {
 
 // isSVGFile 磁盘文件是否为 SVG（只读文件头嗅探，与 isSVGData 同口径）。
 func isSVGFile(path string) bool {
-	data, err := readFileHead(path)
-	if err != nil {
-		return false
-	}
-	return isSVGData(data)
+        data, err := readFileHead(path)
+        if err != nil {
+                return false
+        }
+        return isSVGData(data)
 }
 
 // isTextFileHead 磁盘文件是否为文本文件（isTextFile 的路径版包装，
 // 只读文件头，不整读大文件）。
 func isTextFileHead(path string) bool {
-	data, err := readFileHead(path)
-	if err != nil {
-		return false
-	}
-	return isTextFile(data)
+        data, err := readFileHead(path)
+        if err != nil {
+                return false
+        }
+        return isTextFile(data)
 }
