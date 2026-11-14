@@ -95,7 +95,11 @@ writeFileSync(
 
 /* ---------------- 前端依赖许可收集 ---------------- */
 
-/** 在包目录中查找全部 LICENSE / COPYING / NOTICE 类文件（首个视为主许可证） */
+/**
+ * 在包目录中查找全部 LICENSE / COPYING / NOTICE 类文件。
+ * 返回顺序：许可证类文件在前，NOTICE 类文件附在其后，
+ * 便于把附加声明紧跟许可证正文一起分发；首个文件视为主许可证。
+ */
 function findLicenseFiles(pkgDir) {
   let names;
   try {
@@ -103,14 +107,21 @@ function findLicenseFiles(pkgDir) {
   } catch {
     return [];
   }
-  return names
-    .filter((n) =>
-      /^(licen[cs]e|copying|copyright|notice|unlicense)(\..*)?$/i.test(n),
-    )
-    .map((n) => path.join(pkgDir, n));
+  const licenses = [];
+  const notices = [];
+  for (const n of names) {
+    if (!/^(licen[cs]e|copying|copyright|notice|unlicense)(\..*)?$/i.test(n)) {
+      continue;
+    }
+    const full = path.join(pkgDir, n);
+    if (/^notice(\..*)?$/i.test(n)) notices.push(full);
+    else licenses.push(full);
+  }
+  return [...licenses, ...notices];
 }
 
-/** 合并（去重后）全部许可证文件正文，随分发附带是合规要求 */
+/** 合并（去重后）全部许可证 / NOTICE 文件正文，随分发附带是合规要求；
+ *  NOTICE 正文由 findLicenseFiles 排在许可证之后 */
 function readLicenseTexts(pkgDir) {
   const texts = [];
   const seen = new Set();

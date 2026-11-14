@@ -17,6 +17,8 @@ export interface LicenseEntry {
   version: string;
   /** 许可证标识 */
   license: string;
+  /** 构建时自动提取的版权声明（多行） */
+  copyright: string;
   /** 项目主页（内部链接劫持后交由后端打开） */
   url: string;
   /** 许可证全文（构建时从 LICENSE 类文件提取；双许可包为合并文本） */
@@ -428,6 +430,7 @@ const assetEntry: LicenseEntry[] = [
     name: "Firefox OS Emoji",
     version: "1.7.9",
     license: "CC BY 4.0",
+    copyright: "Copyright 2015, Mozilla Foundation",
     licenseText: CC_BY_4_0_LEGALCODE,
     url: "https://github.com/mozilla/fxemoji",
   },
@@ -435,6 +438,7 @@ const assetEntry: LicenseEntry[] = [
     name: "VS Code Codicons",
     version: "v0.0.46-51",
     license: "CC BY 4.0",
+    copyright: "Copyright (c) Microsoft Corporation.",
     licenseText: CC_BY_4_0_LEGALCODE,
     url: "https://github.com/microsoft/vscode-codicons",
   },

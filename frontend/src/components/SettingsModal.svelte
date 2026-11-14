@@ -494,6 +494,9 @@
                           {#if dep.license && dep.license !== "unknown"}{dep.license}{/if}
                         </span>
                       </div>
+                      {#if dep.copyright}
+                        <div class="license-copyright">{dep.copyright}</div>
+                      {/if}
                       {#if dep.licenseText}
                         <details class="license-text">
                           <summary

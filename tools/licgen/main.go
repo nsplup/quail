@@ -44,6 +44,7 @@ type module struct {
 }
 
 var licFileRe = regexp.MustCompile(`^(licen[cs]e|copying|copyright|notice|unlicense)(\..*)?$`)
+var noticeFileRe = regexp.MustCompile(`^notice(\..*)?$`)
 var ccRe = regexp.MustCompile(`(?i)CC0[- ]?1\.0|CC[- ]BY[- ]?(?:SA|NC|ND)?[- ]?[0-9.]+`)
 
 func main() {
@@ -118,25 +119,33 @@ func main() {
 	fmt.Printf("[licgen] backend-deps=%d -> %s\n", len(deps), *out)
 }
 
-// findLicenseFiles 在模块目录中查找全部 LICENSE / COPYING / NOTICE 类文件
-// （按目录条目顺序返回，首个视为主许可证）。
+// findLicenseFiles 在模块目录中查找全部 LICENSE / COPYING / NOTICE 类文件。
+// 返回顺序：许可证 / 版权 / 公有领域声明类文件在前（组内保持目录条目顺序），
+// NOTICE 类文件附在其后，便于把附加声明紧跟正文一起分发。首个文件视为主许可证，
+// 用于提取标识与版权行（优先取真正的许可证文件而非 NOTICE）。
 func findLicenseFiles(dir string) []string {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil
 	}
-	var files []string
+	var licenses, notices []string
 	for _, e := range entries {
 		if e.IsDir() || !licFileRe.MatchString(strings.ToLower(e.Name())) {
 			continue
 		}
-		files = append(files, filepath.Join(dir, e.Name()))
+		p := filepath.Join(dir, e.Name())
+		if noticeFileRe.MatchString(strings.ToLower(e.Name())) {
+			notices = append(notices, p)
+		} else {
+			licenses = append(licenses, p)
+		}
 	}
-	return files
+	return append(licenses, notices...)
 }
 
-// extractLicenseText 读取并合并（去重后）全部许可证文件正文。
-// 同一包可能携带多份许可（如 MIT + BSD 双许可），合规分发要求全部附带。
+// extractLicenseText 读取并合并（去重后）全部许可证 / NOTICE 文件正文。
+// 同一包可能携带多份许可（如 MIT + BSD 双许可）与额外归属声明（NOTICE），
+// 合规分发要求全部附带；NOTICE 正文由 findLicenseFiles 排在许可证之后。
 func extractLicenseText(files []string) string {
 	var parts []string
 	seen := map[string]bool{}
