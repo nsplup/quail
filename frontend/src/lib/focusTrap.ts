@@ -20,11 +20,22 @@ export function focusTrap(
   options: FocusTrapOptions = {}
 ): Attachment<HTMLElement> {
   return (element) => {
-    const trap = createFocusTrap(element, options);
+    const trap = createFocusTrap(element, {
+      ...options,
+      // 关键：把"初始焦点"钉死为 trap 容器自身。
+      // - 点击卡片空白 / 点击二级页面容器时，focus-trap 拉回的永远是
+      //   容器，而不是内部的 contenteditable（contenteditable 在 tabbable
+      //   的候选选择器里，很容易被误选为第一个可聚焦项，导致输入框
+      //   焦点不丢）。
+      // - 函数无参，返回闭包捕获的 element —— 类型即 () => HTMLElement，
+      //   属于 FocusTargetOrFalse，编译通过。
+      initialFocus: () => element,
+      // 兜底：万一 initialFocus 因故没生效（如容器不可聚焦），
+      // fallbackFocus 仍指向容器，让 trap 报错路径也能落到容器上。
+      fallbackFocus: () => element,
+    });
     trap.activate();
     return () => {
-      // 元素即将随 Svelte 卸载而移除；trap 未激活（已因 Esc 等原因
-      // 自行 deactivate）时 deactivate 为幂等空操作。
       trap.deactivate();
     };
   };

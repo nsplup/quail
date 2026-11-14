@@ -40,7 +40,7 @@
   import { tick } from "svelte";
   import { get } from "svelte/store";
   import Overlay from "./Overlay.svelte";
-  import { suppressMiddleClick } from "../lib/middleClick"
+  import { suppressMiddleClick } from "../lib/middleClick";
 
   const themeList = [...THEMES].sort((a, b) => {
     if (a.dark !== b.dark) return a.dark ? 1 : -1;
@@ -105,23 +105,7 @@
   const trap = focusTrap({
     allowOutsideClick: true,
     escapeDeactivates: false,
-    preventScroll: true /** 拉回焦点时不再隐式滚动 */,
-    /** 给虚拟滚动使用的延迟启动 */
-    checkCanFocusTrap: (containers) =>
-      new Promise<void>((resolve) => {
-        const c = containers[0]!;
-        const tryResolve = () => {
-          // 容器里出现可聚焦内容（license 卡片的链接）就激活
-          if (
-            c.querySelector('a[href], button, [tabindex]:not([tabindex="-1"])')
-          ) {
-            resolve();
-          } else {
-            requestAnimationFrame(tryResolve);
-          }
-        };
-        tryResolve();
-      }),
+    preventScroll: true,
   });
 
   const crumbArrow =
@@ -191,6 +175,7 @@
     -->
     <div
       class="flex h-[70vh] w-[440px] max-w-[calc(100vw-48px)] flex-col overflow-hidden rounded-2xl border border-line bg-soft shadow-2xl"
+      tabindex="-1"
       {@attach trap}
     >
       <header class="flex items-center justify-between px-5 py-4">
@@ -387,7 +372,11 @@
               <!-- 应用信息 -->
               <!-- svelte-ignore a11y_click_events_have_key_events -->
               <!-- svelte-ignore a11y_no_static_element_interactions -->
-              <div class="app-info" onclick={hijackLinks} onauxclick={suppressMiddleClick}>
+              <div
+                class="app-info"
+                onclick={hijackLinks}
+                onauxclick={suppressMiddleClick}
+              >
                 <img class="app-info-logo" src="/bird.svg" alt="Quail" />
                 <div class="app-info-name">Quail</div>
                 <div class="app-info-version-group">
@@ -432,7 +421,7 @@
           -->
           <div class="relative h-full w-full shrink-0">
             {#if $settingsSubPage === "theme"}
-              <div class="h-full w-full" {@attach trap}>
+              <div class="h-full w-full" tabindex="-1" {@attach trap}>
                 <div class="settings-scroll h-full w-full overflow-y-auto">
                   <div class="grid grid-cols-2 gap-2 p-5">
                     {#each themeList as tv (tv.id)}
@@ -474,7 +463,7 @@
                 - getKey 用 name@version：重排/过滤后按 key 保留实测高度缓存。
                 外层包裹二级页根节点并挂 trap（与 theme 子页面同口径）。
               -->
-              <div class="h-full w-full" {@attach trap}>
+              <div class="h-full w-full" tabindex="-1" {@attach trap}>
                 <VirtualList
                   data={licenseEntries}
                   getKey={(dep) => `${dep.name}@${dep.version}`}
