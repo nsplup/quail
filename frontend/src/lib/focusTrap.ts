@@ -21,18 +21,10 @@ export function focusTrap(
 ): Attachment<HTMLElement> {
   return (element) => {
     const trap = createFocusTrap(element, {
-      ...options,
-      // 关键：把"初始焦点"钉死为 trap 容器自身。
-      // - 点击卡片空白 / 点击二级页面容器时，focus-trap 拉回的永远是
-      //   容器，而不是内部的 contenteditable（contenteditable 在 tabbable
-      //   的候选选择器里，很容易被误选为第一个可聚焦项，导致输入框
-      //   焦点不丢）。
-      // - 函数无参，返回闭包捕获的 element —— 类型即 () => HTMLElement，
-      //   属于 FocusTargetOrFalse，编译通过。
+      // 容器自身作为默认初始/兜底焦点
       initialFocus: () => element,
-      // 兜底：万一 initialFocus 因故没生效（如容器不可聚焦），
-      // fallbackFocus 仍指向容器，让 trap 报错路径也能落到容器上。
       fallbackFocus: () => element,
+      ...options,
     });
     trap.activate();
     return () => {

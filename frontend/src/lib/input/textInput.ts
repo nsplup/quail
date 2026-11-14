@@ -415,6 +415,11 @@ export class TextInputController {
   private onBlur = (): void => {
     this.focused = false;
     this.commit();
+    // 关键：失焦时清掉本元素内的 Selection，避免 WebView 保留插入符
+    const sel = window.getSelection();
+    if (sel && this.ownsNode(sel.anchorNode)) {
+      sel.removeAllRanges();
+    }
     this.reportSelection();
   };
 
