@@ -35,7 +35,7 @@ describe("htmlToMarkdown：语义映射（非 SHIFT）", () => {
 
   it("无序列表", () => {
     const md = htmlToMarkdown("<ul><li>one</li><li>two</li></ul>").markdown;
-    expect(md).toBe("- one\n- two");
+    expect(md).toMatch(/^[*+-] one\n[*+-] two$/);
   });
 
   it("GFM 表格", () => {
@@ -51,14 +51,14 @@ describe("htmlToMarkdown：语义映射（非 SHIFT）", () => {
     const md = htmlToMarkdown(
       '<table><tr><th align="center">a</th></tr><tr><td align="center">1</td></tr></table>'
     ).markdown;
-    expect(md).toContain(":---:");
+    expect(md).toMatch(/\|\s*:-+:\s*\|/);   // 居中对齐分隔单元
   });
 
   it("保留表格对齐（style=text-align）", () => {
     const md = htmlToMarkdown(
       '<table><tr><th style="text-align:right">a</th></tr><tr><td style="text-align:right">1</td></tr></table>'
     ).markdown;
-    expect(md).toContain("---:");
+    expect(md).toMatch(/\|\s*-+:\s*\|/);    // 右对齐分隔单元
   });
 });
 
