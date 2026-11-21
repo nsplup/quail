@@ -91,7 +91,7 @@
   const trap = focusTrap({
     allowOutsideClick: true,
     escapeDeactivates: false,
-    preventScroll: true, /** 拉回焦点时不再隐式滚动 */
+    preventScroll: true /** 拉回焦点时不再隐式滚动 */,
   });
 </script>
 
@@ -121,7 +121,7 @@
       />
       <ul
         bind:this={listEl}
-        class="qcmd-list flex h-[320px] flex-col gap-0.5 overflow-y-auto p-1.5"
+        class="qcmd-list flex h-[320px] flex-col gap-0.5 p-1.5"
       >
         {#each filtered as item, i (item.id)}
           <li class="shrink-0">
@@ -143,7 +143,7 @@
           <li
             class="flex flex-1 items-center justify-center text-sm text-muted"
           >
-            {$t("palette.empty")}
+            <span>{$t("palette.empty")}</span>
           </li>
         {/each}
       </ul>
@@ -152,9 +152,8 @@
 {/if}
 
 <style>
-  /* 列表：固定高度 + 内边距，滚动内容与边缘留出呼吸感 */
   .qcmd-list {
-    scrollbar-gutter: stable;
+    overflow-y: scroll;
   }
 
   .qcmd-item {

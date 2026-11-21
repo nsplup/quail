@@ -302,7 +302,7 @@ export class TextInputController {
     let text: string | undefined;
     try {
       const payload = await readClipboard();
-      if (payload.kind === "text") {
+      if (payload.kind === "text" || payload.kind === "html") {
         text = payload.text;
       }
     } catch {
@@ -437,7 +437,7 @@ export class TextInputController {
   private async pasteFromBackend(): Promise<void> {
     try {
       const payload = await readClipboard();
-      if (payload.kind === "text") {
+      if (payload.kind === "text" || payload.kind === "html") {
         const text = toSingleLine(payload.text!);
         if (text) this.insertText(text);
       }
