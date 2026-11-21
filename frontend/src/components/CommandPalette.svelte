@@ -56,12 +56,20 @@
     active = 0;
   });
 
-  /* 高亮项滚入可视区（键盘导航 / hover 同步） */
+  /* 高亮项滚入可视区（键盘导航 / hover 同步）；active 为 0 时直接回顶 */
   $effect(() => {
     if (!$commandPaletteOpen$) return;
-    listEl
-      ?.querySelector('[data-active="true"]')
-      ?.scrollIntoView({ block: "nearest" });
+    const index = active;
+    const items = filtered;
+    if (!listEl) return;
+    if (index < 0 || index >= items.length) return;
+    if (index === 0) {
+      listEl.scrollTop = 0;
+    } else {
+      listEl
+        .querySelector('[data-active="true"]')
+        ?.scrollIntoView({ block: "nearest" });
+    }
   });
 
   /** 执行命令：先关闭面板再 run（命令可能再弹对话框 / progress） */
