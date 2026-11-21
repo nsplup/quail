@@ -220,7 +220,7 @@
           <!-- w-full + shrink-0：各自占满一屏且不被压缩；
                打开面板时由一级 trap 聚焦卡片内首个可聚焦元素 -->
           <section
-            class="settings-scroll h-full w-full shrink-0 overflow-y-auto"
+            class="settings-scroll h-full w-full shrink-0"
           >
             <div class="flex flex-col gap-4 p-5 pt-0">
               <!-- 主题：被选择器样式包裹的当前主题卡片 -->
@@ -411,7 +411,7 @@
           <!-- ============ 二级页面（右栏） ============ -->
           <!--
             右栏是「容器」，自己不做滚动：内部由子页面决定滚动方式。
-            - theme 子页面：普通 overflow-y-auto 的 div；
+            - theme 子页面：普通滚动容器；
             - licenses 子页面：VirtualList 直接作为滚动容器（height:100%）。
             两者互斥，同一时刻只有一个滚动容器存在。
             二级页面根节点嵌套在右栏容器内（不与一级页面同级），并且只在
@@ -422,7 +422,7 @@
           <div class="relative h-full w-full shrink-0">
             {#if $settingsSubPage === "theme"}
               <div class="settings-trap h-full w-full" tabindex="-1" {@attach trap}>
-                <div class="settings-scroll h-full w-full overflow-y-auto">
+                <div class="settings-scroll h-full w-full">
                   <div class="grid grid-cols-2 gap-2 p-5">
                     {#each themeList as tv (tv.id)}
                       {@const vars = tv.vars}
@@ -521,7 +521,7 @@
                             <span>{$t("settings.viewLicense")}</span>
                           </summary>
                           <pre
-                            class="mt-1 max-h-40 overflow-y-auto whitespace-pre-wrap break-words text-[11px] leading-snug text-muted">{dep.licenseText}</pre>
+                            class="settings-scroll mt-1 max-h-40 whitespace-pre-wrap break-words text-[11px] leading-snug text-muted">{dep.licenseText}</pre>
                         </details>
                       {/if}
                     </div>
